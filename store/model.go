@@ -116,6 +116,28 @@ func (db *DB) FindByModelID(modelID string) (*Model, error) {
 	return &m, nil
 }
 
+// FindModelByName 根据显示名称查找模型（用于唯一性校验）
+func (db *DB) FindModelByName(name string) (*Model, error) {
+	var m Model
+	var enabled, enableCont int
+	err := db.conn.QueryRow(`
+		SELECT id, name, model_id, provider, base_url, api_key,
+		       endpoint, context_window, max_tokens, reasoning_effort,
+		       rate_multiplier, enable_continuation, enabled, sort_order, note, created_at, updated_at
+		FROM models WHERE name = ? LIMIT 1
+	`, name).Scan(&m.ID, &m.Name, &m.ModelID,
+		&m.Provider, &m.BaseURL, &m.APIKey, &m.Endpoint,
+		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
+		&m.RateMultiplier, &enableCont, &enabled, &m.SortOrder, &m.Note,
+		&m.CreatedAt, &m.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	m.Enabled = enabled == 1
+	m.EnableContinuation = enableCont == 1
+	return &m, nil
+}
+
 func (db *DB) CreateModel(m *Model) error {
 	if m.ID == "" {
 		m.ID = uuid.New().String()

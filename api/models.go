@@ -36,6 +36,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		if m.Provider == "" {
 			m.Provider = "openai"
 		}
+		// 校验 name 不可重复
+		if m.Name != "" {
+			if dup, _ := s.db.FindModelByName(m.Name); dup != nil {
+				writeError(w, http.StatusConflict, "模型名称 \""+m.Name+"\" 已存在，请使用不同的名称")
+				return
+			}
+		}
 		m.Enabled = true
 		if err := s.db.CreateModel(&m); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -74,6 +81,13 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.ID = id
+		// 校验 name 不可重复（排除自身）
+		if m.Name != "" {
+			if dup, _ := s.db.FindModelByName(m.Name); dup != nil && dup.ID != id {
+				writeError(w, http.StatusConflict, "模型名称 \""+m.Name+"\" 已存在，请使用不同的名称")
+				return
+			}
+		}
 		// 如果 API Key 是脱敏值，保留原来的
 		if isMasked(m.APIKey) {
 			existing, err := s.db.GetModel(id)
