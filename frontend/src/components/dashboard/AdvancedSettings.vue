@@ -3,6 +3,8 @@ import { ref, onMounted } from 'vue'
 import { getModels } from '../../api/models.js'
 import { getSettings, updateSettings } from '../../api/settings.js'
 
+const CLASSIFIER_DISABLED_VALUE = '__disabled__'
+
 const models = ref([])
 const classifierModelId = ref('')
 const upstreamProxyUrl = ref('')
@@ -42,6 +44,7 @@ onMounted(load)
           class="flex-1 min-w-[180px] text-sm bg-white border border-[#e5e7eb] rounded px-2 py-1.5 focus:outline-none focus:border-[#10b981] transition-colors"
         >
           <option value="">(跟随主模型)</option>
+          <option :value="CLASSIFIER_DISABLED_VALUE">(不使用)</option>
           <option v-for="m in models" :key="m.id" :value="m.id">
             {{ m.name }} - {{ m.model_id }}
           </option>

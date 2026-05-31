@@ -107,6 +107,12 @@ func (s *Server) setupInterceptor() {
 		s.logger.Info("interceptor", fmt.Sprintf("解析完成: model=%s, classifier=%v, convId=%s",
 			pre.SourceModel, pre.IsClassifier, pre.ConversationID), string(pre.Body))
 
+		// 用户选择不使用 Classifier 时：不调用上游/官方，直接返回 chat 分类结果
+		if pre.IsClassifier && s.isClassifierDisabled() {
+			s.logger.Info("interceptor", "用户设置不使用 classifier，返回 chat 分类结果")
+			return req, s.buildClassifierChatResponse(req, "classifier-disabled")
+		}
+
 		// 彩蛋模型 GPT-8.8：不调用上游，也不调用 classifier
 		if pre.IsClassifier && (pre.SourceModel == "GPT-8.8" || s.mainModelForConversation(pre.ConversationID) == "GPT-8.8") {
 			s.logger.Info("interceptor", "彩蛋模型跳过 classifier，返回伪造分类结果")
@@ -379,9 +385,22 @@ func (s *Server) buildEasterEggResponse(req *http.Request) *http.Response {
 	return buildKiroTextStreamResponse(req, easterEggText, "GPT-8.8", true)
 }
 
+func (s *Server) isClassifierDisabled() bool {
+	classifierID, err := s.router.GetClassifierSetting()
+	if err != nil {
+		s.logger.Error("interceptor", "读取 classifier 设置失败: "+err.Error())
+		return false
+	}
+	return router.IsClassifierDisabledSetting(classifierID)
+}
+
+func (s *Server) buildClassifierChatResponse(req *http.Request, modelID string) *http.Response {
+	return buildKiroTextStreamResponse(req, `{"chat":1,"do":0,"spec":0}`, modelID, false)
+}
+
 // buildEasterEggClassifierResponse 伪造 classifier 响应，避免彩蛋模型触发上游 classifier 调用。
 func (s *Server) buildEasterEggClassifierResponse(req *http.Request) *http.Response {
-	return buildKiroTextStreamResponse(req, `{"chat":1,"do":0,"spec":0}`, "GPT-8.8", false)
+	return s.buildClassifierChatResponse(req, "GPT-8.8")
 }
 
 func buildKiroTextStreamResponse(req *http.Request, text, modelID string, typewriter bool) *http.Response {

@@ -129,9 +129,13 @@ func (r *Router) EnabledModels() []store.Model {
 // ResolveClassifier 返回 classifier 专用模型配置
 // 从 settings 表读取 classifier_model_id，优先按内部 ID 匹配；为兼容旧配置，
 // 也允许填写 Kiro 可见的 Name 或上游 ModelID。
+func (r *Router) GetClassifierSetting() (string, error) {
+	return r.db.GetSetting("classifier_model_id")
+}
+
 func (r *Router) ResolveClassifier() *Route {
-	classifierID, _ := r.db.GetSetting("classifier_model_id")
-	if classifierID == "" {
+	classifierID, _ := r.GetClassifierSetting()
+	if classifierID == "" || IsClassifierDisabledSetting(classifierID) {
 		return nil
 	}
 
