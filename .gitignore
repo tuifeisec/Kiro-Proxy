@@ -1,0 +1,47 @@
+# IDE
+.kiro/
+.vscode/
+
+# Build output
+build/
+*.exe
+*.syso
+
+# Database
+*.db
+
+# Logs
+*.log
+log/
+
+# Certificates (private keys)
+certs/
+
+# Config with secrets
+config.yaml
+
+# Debug notes and capture logs (Chinese-named files)
+*.txt
+*.json
+!package.json
+!package-lock.json
+!vite.config.js
+
+# Frontend build artifacts and dependencies
+frontend/node_modules/
+frontend/dist/
+frontend-inspector/node_modules/
+frontend-inspector/dist/
+
+# Doc subfolder with build cache (keep doc/*.md)
+doc/ai-proxy/
+doc/openai/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Test scripts
+test_sse.ps1
+install-ca.ps1
