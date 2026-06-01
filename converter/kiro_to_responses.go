@@ -35,7 +35,15 @@ type ReqInput struct {
 	CallID    string      `json:"call_id,omitempty"`   // function_call / function_call_output 用
 	Name      string      `json:"name,omitempty"`      // function_call 用
 	Arguments string      `json:"arguments,omitempty"` // function_call 用
-	Output    string      `json:"output,omitempty"`    // function_call_output 用
+	Output    *string     `json:"output,omitempty"`    // function_call_output 用；空字符串也必须显式发送
+}
+
+func buildResponsesToolOutput(callID, output string) ReqInput {
+	return ReqInput{
+		Type:   "function_call_output",
+		CallID: callID,
+		Output: &output,
+	}
 }
 
 type ReqTool struct {
@@ -117,11 +125,7 @@ func buildResponsesInput(conv *ParsedConversation) []ReqInput {
 		}
 
 		for _, tr := range entry.ToolResults {
-			input = append(input, ReqInput{
-				Type:   "function_call_output",
-				CallID: tr.ToolUseID,
-				Output: tr.Content,
-			})
+			input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
 		}
 
 		if entry.UserContent != "" || len(entry.Images) > 0 {
@@ -148,11 +152,7 @@ func buildResponsesInput(conv *ParsedConversation) []ReqInput {
 	}
 
 	for _, tr := range conv.CurrentToolResults {
-		input = append(input, ReqInput{
-			Type:   "function_call_output",
-			CallID: tr.ToolUseID,
-			Output: tr.Content,
-		})
+		input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
 	}
 
 	if conv.CurrentContent != "" || len(conv.CurrentImages) > 0 {
@@ -224,11 +224,7 @@ func buildResponsesInputCacheOptimized(conv *ParsedConversation) []ReqInput {
 
 		// 工具结果 → function_call_output
 		for _, tr := range entry.ToolResults {
-			input = append(input, ReqInput{
-				Type:   "function_call_output",
-				CallID: tr.ToolUseID,
-				Output: tr.Content,
-			})
+			input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
 		}
 
 		// 用户消息
@@ -261,11 +257,7 @@ func buildResponsesInputCacheOptimized(conv *ParsedConversation) []ReqInput {
 
 	// 当前工具结果
 	for _, tr := range conv.CurrentToolResults {
-		input = append(input, ReqInput{
-			Type:   "function_call_output",
-			CallID: tr.ToolUseID,
-			Output: tr.Content,
-		})
+		input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
 	}
 
 	// system prompt 的动态尾部

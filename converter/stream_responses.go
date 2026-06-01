@@ -38,6 +38,8 @@ type ResponsesStreamConverter struct {
 	cacheRead    int
 	outputChars  int
 	responseID   string // 上游返回的 response ID（用于续传）
+	completed    bool
+	failed       bool
 	done         chan struct{}
 
 	// 活跃工具调用：按 item_id 与 call_id 双索引，保证不同上游事件都能回填
@@ -105,6 +107,14 @@ func (c *ResponsesStreamConverter) ResponseID() string {
 	return c.responseID
 }
 
+// Succeeded 表示 Responses 流明确完成且未收到错误/失败事件。
+func (c *ResponsesStreamConverter) Succeeded() bool {
+	<-c.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.completed && !c.failed
+}
+
 func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -137,6 +147,9 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 		if err != nil {
 			if err != io.EOF {
 				log.Printf("[stream_responses] 读取错误: %v", err)
+				c.mu.Lock()
+				c.failed = true
+				c.mu.Unlock()
 			}
 			break
 		}
@@ -266,6 +279,11 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		}
 		if json.Unmarshal([]byte(data), &ev) == nil {
 			c.mu.Lock()
+			if eventType == "response.completed" {
+				c.completed = true
+			} else {
+				c.failed = true
+			}
 			if ev.Response.Usage.InputTokens > 0 {
 				c.inputTokens = ev.Response.Usage.InputTokens
 			}
@@ -293,6 +311,9 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		}
 
 	case "error":
+		c.mu.Lock()
+		c.failed = true
+		c.mu.Unlock()
 		log.Printf("[stream_responses] 上游错误: %s", data)
 	}
 }

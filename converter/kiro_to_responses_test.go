@@ -49,6 +49,13 @@ func inputContentStr(item ReqInput) string {
 	return ""
 }
 
+func inputOutputStr(item ReqInput) string {
+	if item.Output == nil {
+		return ""
+	}
+	return *item.Output
+}
+
 // allContentsCombined 合并所有 input items 的文本内容
 func allContentsCombined(input []ReqInput) string {
 	var b strings.Builder
@@ -57,8 +64,8 @@ func allContentsCombined(input []ReqInput) string {
 			b.WriteString(s)
 			b.WriteString("\n")
 		}
-		if item.Output != "" {
-			b.WriteString(item.Output)
+		if s := inputOutputStr(item); s != "" {
+			b.WriteString(s)
 			b.WriteString("\n")
 		}
 		if item.Arguments != "" {
@@ -258,10 +265,10 @@ Here is the last user message:
 	foundHistoryResult := false
 	foundCurrentResult := false
 	for _, fco := range fcoItems {
-		if fco.CallID == "call_001" && strings.Contains(fco.Output, "package main") {
+		if fco.CallID == "call_001" && strings.Contains(inputOutputStr(fco), "package main") {
 			foundHistoryResult = true
 		}
-		if fco.CallID == "call_002" && fco.Output == "tool result content here" {
+		if fco.CallID == "call_002" && inputOutputStr(fco) == "tool result content here" {
 			foundCurrentResult = true
 		}
 	}

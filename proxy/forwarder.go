@@ -139,11 +139,9 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		bodyStr := string(body)
-		if isPreviousResponseRejected(bodyStr) {
-			logger.Warn("forwarder", fmt.Sprintf("续传被拒，回退全量: %s", truncate(bodyStr, 200)))
-			// 清理存储
+		if shouldRetryWithoutContinuation(bodyStr) {
+			logger.Warn("forwarder", fmt.Sprintf("续传请求被上游拒绝，清理状态并回退全量: %s", truncate(bodyStr, 200)))
 			f.db.DeleteResponsesSession(pre.Conv.ConversationID)
-			// 用全量 body 重试
 			upstreamBody = contResult.FallbackBody
 			contResult.UsedContinuation = false
 			resp, err = f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID)
@@ -151,7 +149,7 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 				return nil, err
 			}
 		} else {
-			// 不是续传相关的 4xx，原样返回
+			// 不是可安全归因于续传状态的 4xx，原样返回
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 		}
 	}
@@ -302,9 +300,9 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			f.stats.RecordRequestFull(in, out, cacheR, 0, statsModelID(m), false)
 			logger.Info("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
 
-			// 保存 response_id 用于下次续传
+			// 保存 response_id 用于下次续传；只有明确完成且无错误的流才能更新续传状态。
 			responseID := sc.ResponseID()
-			if responseID != "" && contResult != nil && pre.Conv != nil && pre.Conv.ConversationID != "" {
+			if responseID != "" && sc.Succeeded() && contResult != nil && pre.Conv != nil && pre.Conv.ConversationID != "" {
 				f.db.UpsertResponsesSession(&store.ResponsesSession{
 					ConversationID: pre.Conv.ConversationID,
 					InputHash:      converter.HashInput(contResult.FullInputJSON),
@@ -461,6 +459,29 @@ func isPreviousResponseRejected(body string) bool {
 		"does not exist",
 		"expired",
 		"cannot be used",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldRetryWithoutContinuation(body string) bool {
+	if isPreviousResponseRejected(body) {
+		return true
+	}
+
+	lower := strings.ToLower(body)
+	if !strings.Contains(lower, "invalid_request_error") {
+		return false
+	}
+	markers := []string{
+		"input[",
+		"function_call_output",
+		"call_id",
+		".output",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
