@@ -20,6 +20,9 @@ export function useCAStatus(intervalMs = 5000) {
       const resp = await fetch(`${API_BASE}/api/ca-status`)
       if (resp.ok) {
         caStatus.value = await resp.json()
+        if (caStatus.value.installed && installResult.value && !installResult.value.includes('✓')) {
+          installResult.value = ''
+        }
       }
     } catch (e) {
       // 忽略网络错误
@@ -33,10 +36,8 @@ export function useCAStatus(intervalMs = 5000) {
       const resp = await fetch(`${API_BASE}/api/install-ca`, { method: 'POST' })
       const data = await resp.json()
       installResult.value = data.message || ''
-      if (data.ok) {
-        // 安装成功，延迟刷新状态
-        setTimeout(fetchStatus, 2000)
-      }
+      await fetchStatus()
+      setTimeout(fetchStatus, 2000)
     } catch (e) {
       installResult.value = '请求失败: ' + e.message
     } finally {

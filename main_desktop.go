@@ -16,6 +16,10 @@ func main() {
 	noWindow := flag.Bool("no-window", false, "不启动桌面窗口，仅运行后端服务")
 	flag.Parse()
 
+	if err := useDesktopDataDir(); err != nil {
+		log.Fatalf("启动失败: %v", err)
+	}
+
 	runner, err := startApp(*configFile, *port, *dbPath)
 	if err != nil {
 		log.Fatalf("启动失败: %v", err)

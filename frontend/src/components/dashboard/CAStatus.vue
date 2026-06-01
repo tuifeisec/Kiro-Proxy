@@ -44,7 +44,7 @@ const { caStatus, installing, installResult, install } = useCAStatus()
       @click="install"
     >
       <IconShield v-if="!installing" />
-      {{ installing ? '安装中（等待 UAC 确认）...' : '安装 CA 证书到系统' }}
+      {{ installing ? '安装中（等待系统授权）...' : '安装 CA 证书到系统' }}
     </button>
 
     <div v-else-if="caStatus.installed" class="text-xs text-[#6b7280]">

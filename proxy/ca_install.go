@@ -3,14 +3,15 @@ package proxy
 import (
 	"crypto/sha1"
 	"crypto/x509"
-	json "github.com/goccy/go-json"
 	"encoding/pem"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -69,11 +70,6 @@ func (s *Server) handleInstallCA(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	if runtime.GOOS != "windows" {
-		json.NewEncoder(w).Encode(installResp{OK: false, Message: "当前仅支持 Windows"})
-		return
-	}
-
 	certPath, err := filepath.Abs("certs/ca.crt")
 	if err != nil {
 		json.NewEncoder(w).Encode(installResp{OK: false, Message: "获取证书路径失败: " + err.Error()})
@@ -83,7 +79,79 @@ func (s *Server) handleInstallCA(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(installResp{OK: false, Message: "证书文件不存在"})
 		return
 	}
+	cert, err := readCACert()
+	if err != nil {
+		json.NewEncoder(w).Encode(installResp{OK: false, Message: "读取证书失败: " + err.Error()})
+		return
+	}
+	if isCATrusted(cert) {
+		json.NewEncoder(w).Encode(installResp{
+			OK:      true,
+			Message: "✓ CA 证书已安装并验证成功，请完全重启 Kiro 后生效",
+		})
+		return
+	}
 
+	var installErr error
+	switch runtime.GOOS {
+	case "windows":
+		installErr = installCAWindows(certPath)
+	case "darwin":
+		installErr = installCADarwin(certPath)
+	default:
+		json.NewEncoder(w).Encode(installResp{OK: false, Message: "当前仅支持 Windows 和 macOS"})
+		return
+	}
+
+	// 等一下再检查，让系统证书库刷新
+	for i := 0; i < 5; i++ {
+		time.Sleep(time.Duration(i+1) * 400 * time.Millisecond)
+		if isCATrusted(cert) {
+			json.NewEncoder(w).Encode(installResp{
+				OK:      true,
+				Message: "✓ CA 证书已安装并验证成功，请完全重启 Kiro 后生效",
+			})
+			return
+		}
+	}
+
+	if installErr == nil {
+		json.NewEncoder(w).Encode(installResp{
+			OK:      true,
+			Message: "✓ 安装命令已执行（系统证书库刷新可能需要几秒），请重启 Kiro 后生效",
+		})
+	} else {
+		json.NewEncoder(w).Encode(installResp{
+			OK:      false,
+			Message: installFailureMessage(installErr),
+		})
+	}
+}
+
+func readCACert() (*x509.Certificate, error) {
+	data, err := os.ReadFile("certs/ca.crt")
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("PEM 解析失败")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+func installFailureMessage(err error) string {
+	switch runtime.GOOS {
+	case "windows":
+		return "安装失败（可能是用户取消了 UAC）: " + err.Error()
+	case "darwin":
+		return "安装失败（可能是用户取消了管理员授权）: " + err.Error()
+	default:
+		return "安装失败: " + err.Error()
+	}
+}
+
+func installCAWindows(certPath string) error {
 	// 方案：写一个临时 .ps1 脚本，用 Start-Process -Verb RunAs 提权执行
 	// 比内联字符串拼接更可靠，避免引号转义问题
 	psScript := fmt.Sprintf(`
@@ -101,8 +169,7 @@ Write-Output "OK"
 	// 写临时脚本文件
 	tmpScript := filepath.Join(os.TempDir(), "kiro_install_ca.ps1")
 	if err := os.WriteFile(tmpScript, []byte(psScript), 0600); err != nil {
-		json.NewEncoder(w).Encode(installResp{OK: false, Message: "写临时脚本失败: " + err.Error()})
-		return
+		return fmt.Errorf("写临时脚本失败: %w", err)
 	}
 	defer os.Remove(tmpScript)
 
@@ -118,11 +185,7 @@ Write-Output "OK"
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		json.NewEncoder(w).Encode(installResp{
-			OK:      false,
-			Message: "安装失败（可能是用户取消了 UAC）: " + err.Error() + "\n" + string(out),
-		})
-		return
+		return fmt.Errorf("%w\n%s", err, string(out))
 	}
 
 	// 设置 NODE_EXTRA_CA_CERTS 用户环境变量（Kiro/Electron 需要）
@@ -131,44 +194,31 @@ Write-Output "OK"
 	)
 	setEnvCmd.SysProcAttr = sysProcAttr()
 	setEnvCmd.Run() // 忽略错误，不影响主流程
+	return nil
+}
 
-	// 等一下再检查，让系统证书库刷新
-	time.Sleep(500 * time.Millisecond)
-
-	// 验证安装结果
-	data, err := os.ReadFile("certs/ca.crt")
-	if err != nil {
-		json.NewEncoder(w).Encode(installResp{OK: true, Message: "✓ 安装命令已执行，请重启 Kiro 后生效"})
-		return
-	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		json.NewEncoder(w).Encode(installResp{OK: true, Message: "✓ 安装命令已执行，请重启 Kiro 后生效"})
-		return
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		json.NewEncoder(w).Encode(installResp{OK: true, Message: "✓ 安装命令已执行，请重启 Kiro 后生效"})
-		return
+func installCADarwin(certPath string) error {
+	installCmd := fmt.Sprintf(
+		"security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s",
+		shellQuote(certPath),
+	)
+	cmd := exec.Command("osascript", "-e", fmt.Sprintf("do shell script %s with administrator privileges", strconv.Quote(installCmd)))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w\n%s", err, string(out))
 	}
 
-	if isCATrusted(cert) {
-		json.NewEncoder(w).Encode(installResp{
-			OK:      true,
-			Message: "✓ CA 证书已安装并验证成功，请完全重启 Kiro 后生效",
-		})
-	} else {
-		json.NewEncoder(w).Encode(installResp{
-			OK:      true,
-			Message: "✓ 安装命令已执行（系统证书库刷新可能需要几秒），请重启 Kiro 后生效",
-		})
-	}
+	// Kiro/Electron 进程可能还会读取 Node 的额外 CA 环境变量；对当前登录会话设置即可。
+	exec.Command("launchctl", "setenv", "NODE_EXTRA_CA_CERTS", certPath).Run()
+	return nil
 }
 
 // isCATrusted 检查证书是否已在系统根证书池中
 func isCATrusted(cert *x509.Certificate) bool {
 	if runtime.GOOS == "windows" {
 		return isCATrustedWindows(cert)
+	}
+	if runtime.GOOS == "darwin" {
+		return isCATrustedDarwin(cert)
 	}
 	// 非 Windows 平台使用 Go 标准验证
 	roots, err := x509.SystemCertPool()
@@ -216,3 +266,17 @@ func isCATrustedCertutil(thumbprint string) bool {
 	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(thumbprint))
 }
 
+func isCATrustedDarwin(cert *x509.Certificate) bool {
+	h := sha1.Sum(cert.Raw)
+	thumbprint := strings.ToUpper(fmt.Sprintf("%X", h[:]))
+
+	out, err := exec.Command("security", "find-certificate", "-a", "-Z", "-c", cert.Subject.CommonName, "/Library/Keychains/System.keychain").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToUpper(string(out)), thumbprint)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
