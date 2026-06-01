@@ -7,7 +7,7 @@ import (
 )
 
 func runOpenAIPipeline(sse string) *OpenAIStreamConverter {
-	sc := NewOpenAIStreamConverter(io.NopCloser(strings.NewReader(sse)), "gpt-5.5", 200000, 1.0)
+	sc := NewOpenAIStreamConverter(io.NopCloser(strings.NewReader(sse)), "gpt-5.5", 200000, 5, 30, 0.5, 30, 1)
 	_, _ = io.ReadAll(sc)
 	return sc
 }

@@ -73,6 +73,7 @@ const byModel = computed(() => {
       output_tokens: 0,
       cache_write_tokens: 0,
       cache_hit_tokens: 0,
+      credits: 0,
     }
     cur.requests += r.requests
     cur.errors += r.errors
@@ -80,6 +81,7 @@ const byModel = computed(() => {
     cur.output_tokens += r.output_tokens
     cur.cache_write_tokens += cacheWriteTokens(r)
     cur.cache_hit_tokens += cacheHitTokens(r)
+    cur.credits += Number(r.credits || 0)
     map.set(r.model_id, cur)
   }
   return Array.from(map.values()).sort((a, b) =>
@@ -93,6 +95,12 @@ function cacheHitRate(row) {
   const cached = Math.min(row.cache_hit_tokens ?? cacheHitTokens(row), totalIn)
   if (totalIn === 0) return '0.0'
   return ((cached / totalIn) * 100).toFixed(1)
+}
+
+function formatCredits(n) {
+  const value = Number(n || 0)
+  if (value >= 1) return value.toFixed(4)
+  return value.toFixed(6)
 }
 </script>
 
@@ -146,6 +154,7 @@ function cacheHitRate(row) {
                 <th class="py-2 pr-3 font-medium text-right">输出 Token</th>
                 <th class="py-2 pr-3 font-medium text-right">缓存命中</th>
                 <th class="py-2 pr-3 font-medium text-right">缓存写入</th>
+                <th class="py-2 pr-3 font-medium text-right">Credits</th>
                 <th class="py-2 font-medium text-right">缓存命中率</th>
               </tr>
             </thead>
@@ -158,6 +167,7 @@ function cacheHitRate(row) {
                 <td class="py-2 pr-3 text-right tabular-nums">{{ formatNum(m.output_tokens) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-[#10b981]">{{ formatNum(m.cache_hit_tokens) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-[#6b7280]">{{ formatNum(m.cache_write_tokens) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-[#f59e0b]">{{ formatCredits(m.credits) }}</td>
                 <td class="py-2 text-right tabular-nums">
                   <span :class="cacheHitRate(m) > 30 ? 'text-[#10b981]' : 'text-[#6b7280]'">
                     {{ cacheHitRate(m) }}%
@@ -193,6 +203,9 @@ function cacheHitRate(row) {
                   </td>
                   <td class="py-1.5 px-3 text-right tabular-nums text-[#6b7280]">
                     <span>cache write </span>{{ formatNum(cacheWriteTokens(r)) }}
+                  </td>
+                  <td class="py-1.5 px-3 text-right tabular-nums text-[#f59e0b]">
+                    <span>credits </span>{{ formatCredits(r.credits) }}
                   </td>
                 </tr>
               </tbody>

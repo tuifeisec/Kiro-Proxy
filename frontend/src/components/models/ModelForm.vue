@@ -21,21 +21,28 @@ const defaultForm = () => ({
   max_tokens: 0,
   reasoning_effort: '',
   rate_multiplier: 1.0,
+  input_price: 5,
+  output_price: 30,
+  cache_input_price: 0.5,
+  cache_output_price: 30,
   enable_continuation: false,
   note: ''
 })
 
 const form = ref(defaultForm())
 const showKey = ref(false)
+const loadingModel = ref(false)
 
 watch(() => props.visible, (val) => {
   if (val) {
+    loadingModel.value = true
     if (props.model) {
       form.value = { ...defaultForm(), ...props.model }
     } else {
       form.value = defaultForm()
     }
     showKey.value = false
+    loadingModel.value = false
   }
 })
 
@@ -47,6 +54,9 @@ watch(() => form.value.provider, (val) => {
       : ['/chat/completions', '/responses']
   if (!options.includes(form.value.endpoint)) {
     form.value.endpoint = options[0]
+  }
+  if (!loadingModel.value) {
+    applyDefaultPrices(val)
   }
 })
 
@@ -66,6 +76,17 @@ const reasoningOptions = [
   { value: 'medium', label: '中' },
   { value: 'high', label: '高' }
 ]
+
+const defaultPrices = {
+  openai: { input_price: 5, output_price: 30, cache_input_price: 0.5, cache_output_price: 30 },
+  anthropic: { input_price: 5, output_price: 25, cache_input_price: 0.5, cache_output_price: 6.25 },
+  gemini: { input_price: 1.5, output_price: 9, cache_input_price: 0.15, cache_output_price: 1.5 },
+}
+
+function applyDefaultPrices(provider) {
+  const prices = defaultPrices[provider] || defaultPrices.openai
+  form.value = { ...form.value, ...prices }
+}
 
 function handleSave() {
   emit('save', { ...form.value })
@@ -177,19 +198,57 @@ function handleSave() {
               placeholder="0 = 默认" />
           </div>
 
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">最大输出 Token</label>
-            <input v-model.number="form.max_tokens" type="number"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-              placeholder="0 = 默认" />
+            <div>
+              <label class="block text-xs text-[#6b7280] mb-1.5">最大输出 Token</label>
+              <input v-model.number="form.max_tokens" type="number"
+                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+                placeholder="0 = 默认" />
+            </div>
+
+            <div>
+              <label class="block text-xs text-[#6b7280] mb-1.5">倍率</label>
+              <input v-model.number="form.rate_multiplier" type="number" step="0.01" min="0"
+                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+                placeholder="1.0" />
+              <p class="text-[10px] text-[#6b7280] mt-1">最终 Credits = 按价格计算结果 × 倍率</p>
+            </div>
+
           </div>
 
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">倍率 (rateMultiplier)</label>
-            <input v-model.number="form.rate_multiplier" type="number" step="0.1" min="0"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-              placeholder="1.0" />
-            <p class="text-[10px] text-[#6b7280] mt-1">Credit 消耗倍率；Opus 类建议 2.2，Sonnet 类建议 1.3，小模型建议 0.25~0.5</p>
+        <div class="mt-4">
+          <div class="flex items-center justify-between mb-2">
+            <label class="block text-xs font-medium text-[#374151]">Credit 价格配置</label>
+            <button class="text-[10px] text-[#10b981] hover:underline" @click="applyDefaultPrices(form.provider)">恢复当前 Provider 默认价格</button>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs text-[#6b7280] mb-1.5">输入价格</label>
+              <input v-model.number="form.input_price" type="number" step="0.001" min="0"
+                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+                placeholder="5" />
+              <p class="text-[10px] text-[#6b7280] mt-1">按百万输入 Token 计算，不需要填写单位</p>
+            </div>
+            <div>
+              <label class="block text-xs text-[#6b7280] mb-1.5">输出价格</label>
+              <input v-model.number="form.output_price" type="number" step="0.001" min="0"
+                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+                placeholder="30" />
+              <p class="text-[10px] text-[#6b7280] mt-1">按百万输出 Token 计算，不需要填写单位</p>
+            </div>
+            <div>
+              <label class="block text-xs text-[#6b7280] mb-1.5">缓存输入价格</label>
+              <input v-model.number="form.cache_input_price" type="number" step="0.001" min="0"
+                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+                placeholder="0.5" />
+              <p class="text-[10px] text-[#6b7280] mt-1">缓存命中/读取输入 Token 价格</p>
+            </div>
+            <div>
+              <label class="block text-xs text-[#6b7280] mb-1.5">缓存输出价格</label>
+              <input v-model.number="form.cache_output_price" type="number" step="0.001" min="0"
+                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+                placeholder="30" />
+              <p class="text-[10px] text-[#6b7280] mt-1">缓存写入价格；通常只有 Claude 返回该统计</p>
+            </div>
           </div>
         </div>
 

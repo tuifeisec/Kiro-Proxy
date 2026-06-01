@@ -255,7 +255,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 	var streamBody io.ReadCloser
 	switch {
 	case m.Provider == "anthropic":
-		sc := converter.NewAnthropicStreamConverter(wrappedBody, modelID, cw, m.RateMultiplier)
+		sc := converter.NewAnthropicStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
 		go func() {
 			defer func() {
@@ -266,11 +266,11 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, cacheW := sc.CacheTokens()
-			f.stats.RecordRequestFull(in, out, cacheR, cacheW, statsModelID(m), false)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, store.CalculateCredits(in, out, cacheR, cacheW, m), statsModelID(m), false)
 			logger.Info("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW))
 		}()
 	case m.Provider == "gemini":
-		sc := converter.NewGeminiStreamConverter(wrappedBody, modelID, cw, m.RateMultiplier)
+		sc := converter.NewGeminiStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
 		go func() {
 			defer func() {
@@ -281,12 +281,12 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, _ := sc.CacheTokens()
-			f.stats.RecordRequestFull(in, out, cacheR, 0, statsModelID(m), false)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, store.CalculateCredits(in, out, cacheR, 0, m), statsModelID(m), false)
 			logger.Info("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
 		}()
 	case useResponsesAPI(pre, m):
 		// responses SSE → Kiro Event Stream（一段式直转）
-		sc := converter.NewResponsesStreamConverter(wrappedBody, modelID, cw, m.RateMultiplier)
+		sc := converter.NewResponsesStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
 		go func() {
 			defer func() {
@@ -297,7 +297,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, _ := sc.CacheTokens()
-			f.stats.RecordRequestFull(in, out, cacheR, 0, statsModelID(m), false)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, store.CalculateCredits(in, out, cacheR, 0, m), statsModelID(m), false)
 			logger.Info("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
 
 			// 保存 response_id 用于下次续传；只有明确完成且无错误的流才能更新续传状态。
@@ -319,7 +319,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}
 		}()
 	default: // /v1/chat/completions（含 classifier）
-		sc := converter.NewOpenAIStreamConverter(wrappedBody, modelID, cw, m.RateMultiplier)
+		sc := converter.NewOpenAIStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
 		go func() {
 			defer func() {
@@ -330,7 +330,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, cacheW := sc.CacheTokens()
-			f.stats.RecordRequestFull(in, out, cacheR, cacheW, statsModelID(m), false)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, store.CalculateCredits(in, out, cacheR, cacheW, m), statsModelID(m), false)
 			logger.Info("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW))
 		}()
 	}

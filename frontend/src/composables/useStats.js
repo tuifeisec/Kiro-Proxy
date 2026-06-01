@@ -10,6 +10,7 @@ export function useStats(intervalMs = 3000) {
     output_tokens: 0,
     cache_read_tokens: 0,
     cache_write_tokens: 0,
+    credits: 0,
     active_connections: 0,
     uptime_seconds: 0,
   })

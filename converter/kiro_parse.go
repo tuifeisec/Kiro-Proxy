@@ -96,6 +96,7 @@ func parseToolResults(trs []KiroToolResult) []ParsedToolResult {
 		for _, c := range tr.Content {
 			text += c.Text
 		}
+		text = appendProcessOutputPlaceholderHint(text)
 		result = append(result, ParsedToolResult{
 			ToolUseID: tr.ToolUseID,
 			Content:   text,
@@ -219,3 +220,25 @@ func canonicalToolJSON(raw json.RawMessage) []byte {
 }
 
 // ImageMediaType 和 ImageDataURI 在 image.go 中定义
+
+func appendProcessOutputPlaceholderHint(text string) string {
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "no background process found with id") {
+		return text
+	}
+
+	var terminalID string
+	if strings.Contains(lower, `"invalid"`) {
+		terminalID = "invalid"
+	} else if strings.Contains(lower, `"dummy"`) {
+		terminalID = "dummy"
+	} else {
+		return text
+	}
+
+	if strings.Contains(lower, "do not call get_process_output with placeholder terminalid") {
+		return text
+	}
+
+	return text + "\n\nHint: The terminalId \"" + terminalID + "\" looks like a placeholder, not a real background process id. Do not call get_process_output with placeholder terminalId values such as invalid or dummy. Use list_processes first, or use a terminalId returned by control_pwsh_process."
+}

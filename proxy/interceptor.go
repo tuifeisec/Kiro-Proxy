@@ -317,6 +317,8 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 
 // buildUsageLimitsResponse 构造 Kiro 用量限制响应（伪造无限额度）
 func (s *Server) buildUsageLimitsResponse(req *http.Request) *http.Response {
+	// Kiro 的 usage limits schema 实际要求 currentUsage 和 currentUsageWithPrecision 都是整数。
+	currentUsage := int64(s.stats.TodayCredits())
 	body, _ := json.Marshal(map[string]interface{}{
 		"daysUntilReset": nil,
 		"limits":         nil,
@@ -337,8 +339,8 @@ func (s *Server) buildUsageLimitsResponse(req *http.Request) *http.Response {
 				"currency":                     "USD",
 				"currentOverages":              0,
 				"currentOveragesWithPrecision": 0,
-				"currentUsage":                 666,
-				"currentUsageWithPrecision":    666,
+				"currentUsage":                 currentUsage,
+				"currentUsageWithPrecision":    currentUsage,
 				"displayName":                  "Credit",
 				"displayNamePlural":            "Credits",
 				"freeTrialInfo":                nil,

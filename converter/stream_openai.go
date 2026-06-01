@@ -43,9 +43,13 @@ type OpenAIStreamConverter struct {
 	activeTools map[int]*toolCallState
 
 	// 配置
-	modelID        string  // 原始 Kiro modelId，写入 assistantResponseEvent
-	maxTokens      int     // 用于计算 contextUsagePercentage
-	rateMultiplier float64 // Credit 消耗倍率
+	modelID          string // 原始 Kiro modelId，写入 assistantResponseEvent
+	maxTokens        int    // 用于计算 contextUsagePercentage
+	inputPrice       float64
+	outputPrice      float64
+	cacheInputPrice  float64
+	cacheOutputPrice float64
+	rateMultiplier   float64
 }
 
 type toolCallState struct {
@@ -54,16 +58,20 @@ type toolCallState struct {
 }
 
 // NewOpenAIStreamConverter 创建转换器并在后台启动转换 goroutine
-func NewOpenAIStreamConverter(source io.ReadCloser, modelID string, maxTokens int, rateMultiplier float64) *OpenAIStreamConverter {
+func NewOpenAIStreamConverter(source io.ReadCloser, modelID string, maxTokens int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) *OpenAIStreamConverter {
 	pr, pw := io.Pipe()
 	c := &OpenAIStreamConverter{
-		pr:             pr,
-		pw:             pw,
-		done:           make(chan struct{}),
-		activeTools:    make(map[int]*toolCallState, 4),
-		modelID:        modelID,
-		maxTokens:      maxTokens,
-		rateMultiplier: rateMultiplier,
+		pr:               pr,
+		pw:               pw,
+		done:             make(chan struct{}),
+		activeTools:      make(map[int]*toolCallState, 4),
+		modelID:          modelID,
+		maxTokens:        maxTokens,
+		inputPrice:       inputPrice,
+		outputPrice:      outputPrice,
+		cacheInputPrice:  cacheInputPrice,
+		cacheOutputPrice: cacheOutputPrice,
+		rateMultiplier:   normalizeRateMultiplier(rateMultiplier),
 	}
 	go c.process(source)
 	return c
@@ -142,7 +150,7 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 	// 始终发送 metadata 帧（Kiro 需要 token 信息，含缓存命中数据）
 	c.write(MetadataFrame(in, out, cacheR, cacheW))
 	c.write(ContextUsageFrame(in+out, c.maxTokens))
-	c.write(MeteringFrame(calcCredits(in, out, c.rateMultiplier)))
+	c.write(MeteringFrame(calcCredits(in, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
 func (c *OpenAIStreamConverter) handleLine(line string) {
@@ -300,13 +308,33 @@ type openAIPromptTokenDetail struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 
-// calcCredits 根据 token 用量和模型倍率计算 credit 消耗
-// 公式：(input * $3/M + output * $15/M) * rateMultiplier
-// 基准对应 Claude Sonnet 4 级别定价，rateMultiplier 用于调节不同模型成本
-func calcCredits(inputTokens, outputTokens int, rateMultiplier float64) float64 {
-	if rateMultiplier <= 0 {
-		rateMultiplier = 1.0
+// calcCredits 根据 token 用量和每百万 token 单价计算 credit 消耗。
+func calcCredits(inputTokens, outputTokens, cacheRead, cacheWrite int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) float64 {
+	if inputPrice <= 0 {
+		inputPrice = 5
 	}
-	base := float64(inputTokens)*0.000003 + float64(outputTokens)*0.000015
-	return base * rateMultiplier
+	if outputPrice <= 0 {
+		outputPrice = 30
+	}
+	if cacheInputPrice <= 0 {
+		cacheInputPrice = 0.5
+	}
+	if cacheOutputPrice <= 0 {
+		cacheOutputPrice = outputPrice
+	}
+	regularInput := inputTokens - cacheRead - cacheWrite
+	if regularInput < 0 {
+		regularInput = 0
+	}
+	return ((float64(regularInput)*inputPrice +
+		float64(outputTokens)*outputPrice +
+		float64(cacheRead)*cacheInputPrice +
+		float64(cacheWrite)*cacheOutputPrice) / 1000000) * normalizeRateMultiplier(rateMultiplier)
+}
+
+func normalizeRateMultiplier(rateMultiplier float64) float64 {
+	if rateMultiplier <= 0 {
+		return 1
+	}
+	return rateMultiplier
 }

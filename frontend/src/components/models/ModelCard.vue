@@ -32,7 +32,7 @@ const truncatedUrl = computed(() => {
         <p class="text-xs text-[#6b7280] mt-0.5 font-mono">{{ model.model_id }}</p>
       </div>
       <span class="shrink-0 ml-2 px-2 py-0.5 text-[10px] font-medium rounded bg-[#ecfdf5] text-[#10b981] border border-[#10b981]/20">
-        {{ model.provider === 'anthropic' ? 'Anthropic' : 'OpenAI' }}
+        {{ model.provider === 'anthropic' ? 'Anthropic' : model.provider === 'gemini' ? 'Gemini' : 'OpenAI' }}
       </span>
     </div>
 
@@ -48,6 +48,14 @@ const truncatedUrl = computed(() => {
       <div class="flex items-center gap-2">
         <span class="text-[#6b7280] w-12 shrink-0">端点</span>
         <span class="text-[#111827]">{{ model.endpoint }}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[#6b7280] w-12 shrink-0">倍率</span>
+        <span class="text-[#111827] tabular-nums">{{ model.rate_multiplier || 1 }}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[#6b7280] w-12 shrink-0">价格</span>
+        <span class="text-[#111827] tabular-nums">in {{ model.input_price }} / out {{ model.output_price }} / cache {{ model.cache_input_price }} / write {{ model.cache_output_price }}</span>
       </div>
     </div>
 

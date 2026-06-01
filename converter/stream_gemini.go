@@ -41,20 +41,25 @@ type GeminiStreamConverter struct {
 	// 工具调用计数器（用于生成确定性 ID）
 	toolCallIndex int
 
-	modelID        string
-	maxTokens      int
-	rateMultiplier float64
+	modelID                                                    string
+	maxTokens                                                  int
+	inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice float64
+	rateMultiplier                                             float64
 }
 
-func NewGeminiStreamConverter(source io.ReadCloser, modelID string, maxTokens int, rateMultiplier float64) *GeminiStreamConverter {
+func NewGeminiStreamConverter(source io.ReadCloser, modelID string, maxTokens int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) *GeminiStreamConverter {
 	pr, pw := io.Pipe()
 	c := &GeminiStreamConverter{
-		pr:             pr,
-		pw:             pw,
-		done:           make(chan struct{}),
-		modelID:        modelID,
-		maxTokens:      maxTokens,
-		rateMultiplier: rateMultiplier,
+		pr:               pr,
+		pw:               pw,
+		done:             make(chan struct{}),
+		modelID:          modelID,
+		maxTokens:        maxTokens,
+		inputPrice:       inputPrice,
+		outputPrice:      outputPrice,
+		cacheInputPrice:  cacheInputPrice,
+		cacheOutputPrice: cacheOutputPrice,
+		rateMultiplier:   normalizeRateMultiplier(rateMultiplier),
 	}
 	go c.process(source)
 	return c
@@ -128,7 +133,7 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 
 	c.write(MetadataFrame(in, out, cacheR, 0))
 	c.write(ContextUsageFrame(in+out, c.maxTokens))
-	c.write(MeteringFrame(calcCredits(in, out, c.rateMultiplier)))
+	c.write(MeteringFrame(calcCredits(in, out, cacheR, 0, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
 func (c *GeminiStreamConverter) handleLine(line string) {
@@ -209,8 +214,8 @@ func (c *GeminiStreamConverter) write(frame []byte) {
 // ── Gemini SSE 数据结构 ───────────────────────────────────────────
 
 type geminiChunk struct {
-	Candidates    []geminiCandidate  `json:"candidates"`
-	UsageMetadata *geminiUsageMeta   `json:"usageMetadata"`
+	Candidates    []geminiCandidate `json:"candidates"`
+	UsageMetadata *geminiUsageMeta  `json:"usageMetadata"`
 }
 
 type geminiCandidate struct {
@@ -224,7 +229,7 @@ type geminiContentChunk struct {
 }
 
 type geminiPartChunk struct {
-	Text         string              `json:"text"`
+	Text         string               `json:"text"`
 	FunctionCall *geminiFuncCallChunk `json:"functionCall"`
 }
 

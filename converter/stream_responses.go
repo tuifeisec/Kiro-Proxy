@@ -47,9 +47,10 @@ type ResponsesStreamConverter struct {
 	toolsByCall map[string]*respToolState
 	toolOrder   []*respToolState
 
-	modelID        string
-	maxTokens      int
-	rateMultiplier float64
+	modelID                                                    string
+	maxTokens                                                  int
+	inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice float64
+	rateMultiplier                                             float64
 }
 
 type respToolState struct {
@@ -58,17 +59,21 @@ type respToolState struct {
 	gotArgs bool
 }
 
-func NewResponsesStreamConverter(source io.ReadCloser, modelID string, maxTokens int, rateMultiplier float64) *ResponsesStreamConverter {
+func NewResponsesStreamConverter(source io.ReadCloser, modelID string, maxTokens int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) *ResponsesStreamConverter {
 	pr, pw := io.Pipe()
 	c := &ResponsesStreamConverter{
-		pr:             pr,
-		pw:             pw,
-		done:           make(chan struct{}),
-		toolsByItem:    make(map[string]*respToolState, 4),
-		toolsByCall:    make(map[string]*respToolState, 4),
-		modelID:        modelID,
-		maxTokens:      maxTokens,
-		rateMultiplier: rateMultiplier,
+		pr:               pr,
+		pw:               pw,
+		done:             make(chan struct{}),
+		toolsByItem:      make(map[string]*respToolState, 4),
+		toolsByCall:      make(map[string]*respToolState, 4),
+		modelID:          modelID,
+		maxTokens:        maxTokens,
+		inputPrice:       inputPrice,
+		outputPrice:      outputPrice,
+		cacheInputPrice:  cacheInputPrice,
+		cacheOutputPrice: cacheOutputPrice,
+		rateMultiplier:   normalizeRateMultiplier(rateMultiplier),
 	}
 	go c.process(source)
 	return c
@@ -170,7 +175,7 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 
 	c.write(MetadataFrame(in, out, cacheR, 0))
 	c.write(ContextUsageFrame(in+out, c.maxTokens))
-	c.write(MeteringFrame(calcCredits(in, out, c.rateMultiplier)))
+	c.write(MeteringFrame(calcCredits(in, out, cacheR, 0, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
 func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {

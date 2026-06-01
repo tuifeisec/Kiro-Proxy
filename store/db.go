@@ -45,7 +45,12 @@ func (db *DB) migrate() error {
 	}
 	// 增量迁移：为已有表添加新列（IF NOT EXISTS 不支持 ALTER，用 pragma 检测）
 	db.addColumnIfNotExists("models", "rate_multiplier", "REAL NOT NULL DEFAULT 1.0")
+	db.addColumnIfNotExists("models", "input_price", "REAL NOT NULL DEFAULT 5.0")
+	db.addColumnIfNotExists("models", "output_price", "REAL NOT NULL DEFAULT 30.0")
+	db.addColumnIfNotExists("models", "cache_input_price", "REAL NOT NULL DEFAULT 0.5")
+	db.addColumnIfNotExists("models", "cache_output_price", "REAL NOT NULL DEFAULT 30.0")
 	db.addColumnIfNotExists("models", "enable_continuation", "INTEGER NOT NULL DEFAULT 0")
+	db.addColumnIfNotExists("daily_stats", "credits", "REAL NOT NULL DEFAULT 0")
 
 	// 启动时清理过期 session
 	db.CleanExpiredResponsesSessions()
@@ -87,6 +92,10 @@ CREATE TABLE IF NOT EXISTS models (
     max_tokens      INTEGER NOT NULL DEFAULT 0,
     reasoning_effort TEXT NOT NULL DEFAULT '',
     rate_multiplier REAL NOT NULL DEFAULT 1.0,
+    input_price     REAL NOT NULL DEFAULT 5.0,
+    output_price    REAL NOT NULL DEFAULT 30.0,
+    cache_input_price REAL NOT NULL DEFAULT 0.5,
+    cache_output_price REAL NOT NULL DEFAULT 30.0,
     enable_continuation INTEGER NOT NULL DEFAULT 0,
     enabled         INTEGER NOT NULL DEFAULT 1,
     sort_order      INTEGER NOT NULL DEFAULT 0,
@@ -110,6 +119,7 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read    INTEGER NOT NULL DEFAULT 0,
     cache_write   INTEGER NOT NULL DEFAULT 0,
+    credits       REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (date, model_id)
 );
 

@@ -23,6 +23,13 @@ function formatTokens(n) {
   return String(n)
 }
 
+function formatCredits(n) {
+  const value = Number(n || 0)
+  if (value >= 100) return value.toFixed(2)
+  if (value >= 1) return value.toFixed(4)
+  return value.toFixed(6)
+}
+
 const cacheHitRate = computed(() => {
   const totalIn = stats.value.input_tokens || 0
   const cached = Math.min(stats.value.cache_read_tokens || 0, totalIn)
@@ -53,10 +60,10 @@ const cards = computed(() => [
     icon: IconWifi,
   },
   {
-    label: '运行时长',
-    value: formatUptime(stats.value.uptime_seconds),
-    sub: '自上次启动',
-    color: '#6b7280',
+    label: 'Credits',
+    value: formatCredits(stats.value.credits),
+    sub: '按模型价格累计',
+    color: '#f59e0b',
     icon: IconArrowRight,
   },
 ])
@@ -109,7 +116,7 @@ function formatUptime(s) {
       </button>
     </div>
 
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="grid grid-cols-4 gap-3">
       <StatsCard
         v-for="card in cards"
         :key="card.label"
@@ -117,10 +124,13 @@ function formatUptime(s) {
       />
     </div>
 
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="grid grid-cols-3 gap-4">
       <ServiceStatus />
       <CAStatus />
       <ProxyConfig />
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <AdvancedSettings />
       <UsageBreakdown :refresh-key="usageRefreshKey" />
     </div>

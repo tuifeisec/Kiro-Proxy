@@ -5,8 +5,6 @@ package main
 import (
 	"flag"
 	"log"
-
-	webview "github.com/webview/webview_go"
 )
 
 func main() {
@@ -35,11 +33,15 @@ func main() {
 }
 
 func runDesktopWindow(url string) {
-	w := webview.New(false)
-	defer w.Destroy()
-	w.SetTitle("Kiro Proxy")
-	setDesktopWindowIcon(w)
-	w.SetSize(1100, 750, webview.HintNone)
-	w.Navigate(url)
-	w.Run()
+	window := newDesktopWindowController(url)
+	window.create()
+	defer window.destroy()
+
+	tray := newDesktopTrayController(window)
+	go tray.run()
+	defer tray.quit()
+
+	window.run()
+	tray.quit()
+	tray.wait()
 }

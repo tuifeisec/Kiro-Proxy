@@ -77,7 +77,7 @@ func decodeFrames(t *testing.T, buf []byte) []decodedFrame {
 }
 
 func runResponsesPipeline(sse string) []byte {
-	sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(sse)), "gpt-5.5", 200000, 1.0)
+	sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(sse)), "gpt-5.5", 200000, 5, 30, 0.5, 30, 1)
 	out, _ := io.ReadAll(sc)
 	return out
 }
@@ -378,7 +378,7 @@ func TestResponses_ConcurrentStable(t *testing.T) {
 func BenchmarkResponses_Text(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(ssePlainText)), "gpt-5.5", 200000, 1.0)
+		sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(ssePlainText)), "gpt-5.5", 200000, 5, 30, 0.5, 30, 1)
 		_, _ = io.Copy(io.Discard, sc)
 	}
 }
@@ -386,7 +386,7 @@ func BenchmarkResponses_Text(b *testing.B) {
 func BenchmarkResponses_Tool(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(sseToolCall)), "gpt-5.5", 200000, 1.0)
+		sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(sseToolCall)), "gpt-5.5", 200000, 5, 30, 0.5, 30, 1)
 		_, _ = io.Copy(io.Discard, sc)
 	}
 }
@@ -397,7 +397,7 @@ func TestResponsesStream_DeepSeekPromptCacheUsage(t *testing.T) {
 data: {"type":"response.completed","response":{"id":"resp_ds","usage":{"prompt_cache_hit_tokens":777,"prompt_cache_miss_tokens":223,"output_tokens":9}}}
 
 `
-	sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(sse)), "gpt-5.5", 200000, 1.0)
+	sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(sse)), "gpt-5.5", 200000, 5, 30, 0.5, 30, 1)
 	_, _ = io.ReadAll(sc)
 	in, out := sc.Usage()
 	cacheRead, cacheWrite := sc.CacheTokens()

@@ -35,9 +35,10 @@ type AnthropicStreamConverter struct {
 	// 工具调用状态：key = content block index
 	toolBlocks map[int]*anthropicToolBlock
 
-	modelID        string
-	maxTokens      int
-	rateMultiplier float64
+	modelID                                                    string
+	maxTokens                                                  int
+	inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice float64
+	rateMultiplier                                             float64
 }
 
 type anthropicToolBlock struct {
@@ -46,16 +47,20 @@ type anthropicToolBlock struct {
 }
 
 // NewAnthropicStreamConverter 创建转换器并启动后台 goroutine
-func NewAnthropicStreamConverter(source io.ReadCloser, modelID string, maxTokens int, rateMultiplier float64) *AnthropicStreamConverter {
+func NewAnthropicStreamConverter(source io.ReadCloser, modelID string, maxTokens int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) *AnthropicStreamConverter {
 	pr, pw := io.Pipe()
 	c := &AnthropicStreamConverter{
-		pr:             pr,
-		pw:             pw,
-		done:           make(chan struct{}),
-		toolBlocks:     make(map[int]*anthropicToolBlock),
-		modelID:        modelID,
-		maxTokens:      maxTokens,
-		rateMultiplier: rateMultiplier,
+		pr:               pr,
+		pw:               pw,
+		done:             make(chan struct{}),
+		toolBlocks:       make(map[int]*anthropicToolBlock),
+		modelID:          modelID,
+		maxTokens:        maxTokens,
+		inputPrice:       inputPrice,
+		outputPrice:      outputPrice,
+		cacheInputPrice:  cacheInputPrice,
+		cacheOutputPrice: cacheOutputPrice,
+		rateMultiplier:   normalizeRateMultiplier(rateMultiplier),
 	}
 	go c.process(source)
 	return c
@@ -127,7 +132,7 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 
 	c.write(MetadataFrame(in, out, cacheR, cacheW))
 	c.write(ContextUsageFrame(in+out, c.maxTokens))
-	c.write(MeteringFrame(calcCredits(in, out, c.rateMultiplier)))
+	c.write(MeteringFrame(calcCredits(in, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
 func (c *AnthropicStreamConverter) handleLine(line string) {
@@ -241,7 +246,7 @@ func (c *AnthropicStreamConverter) handleContentBlockDelta(event map[string]json
 			}
 			c.write(ToolUseInputFrame(id, name, delta.PartialJSON))
 		}
-	// thinking_delta / signature_delta 忽略
+		// thinking_delta / signature_delta 忽略
 	}
 }
 
@@ -303,4 +308,3 @@ func extractIndex(event map[string]json.RawMessage) int {
 	}
 	return 0
 }
-
