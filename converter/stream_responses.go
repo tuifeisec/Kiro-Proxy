@@ -282,6 +282,10 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 					c.inputTokens = ev.Response.Usage.PromptCacheHitTokens + ev.Response.Usage.PromptCacheMissTokens
 				}
 			}
+			if c.cacheRead > c.inputTokens && c.inputTokens > 0 {
+				log.Printf("[stream_responses] cache_read(%d) > input_tokens(%d)，已按 input_tokens 限制", c.cacheRead, c.inputTokens)
+				c.cacheRead = c.inputTokens
+			}
 			if ev.Response.ID != "" {
 				c.responseID = ev.Response.ID
 			}

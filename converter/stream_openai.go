@@ -183,6 +183,10 @@ func (c *OpenAIStreamConverter) handleLine(line string) {
 				c.inputTokens = chunk.Usage.PromptCacheHitTokens + chunk.Usage.PromptCacheMissTokens
 			}
 		}
+		if c.cacheRead > c.inputTokens && c.inputTokens > 0 {
+			log.Printf("[stream_openai] cache_read(%d) > input_tokens(%d)，已按 input_tokens 限制", c.cacheRead, c.inputTokens)
+			c.cacheRead = c.inputTokens
+		}
 		c.mu.Unlock()
 	}
 

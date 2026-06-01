@@ -10,6 +10,14 @@ import (
 )
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		if err := s.stats.Clear(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeOK(w, s.stats.Snapshot())
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -29,9 +37,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 		daily := s.stats.GetDailyStats(startDate, endDate)
 		writeOK(w, map[string]interface{}{
-			"daily":    daily,
-			"start":    startDate,
-			"end":      endDate,
+			"daily": daily,
+			"start": startDate,
+			"end":   endDate,
 		})
 		return
 	}

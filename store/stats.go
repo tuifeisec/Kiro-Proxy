@@ -202,7 +202,50 @@ func cacheHitRatio(cacheRead, inputTokens int64) float64 {
 	if inputTokens <= 0 || cacheRead <= 0 {
 		return 0
 	}
+	if cacheRead > inputTokens {
+		return 1
+	}
 	return float64(cacheRead) / float64(inputTokens)
+}
+
+// Clear 清空累计统计和按日模型统计。
+func (s *Stats) Clear() error {
+	s.TotalRequests.Store(0)
+	s.TotalErrors.Store(0)
+	s.InputTokens.Store(0)
+	s.OutputTokens.Store(0)
+	s.CacheRead.Store(0)
+	s.CacheWrite.Store(0)
+
+	s.dailyMu.Lock()
+	s.dailyStats = make(map[string]*DailyModelStats)
+	s.dailyMu.Unlock()
+
+	if s.db == nil {
+		s.dirty.Store(false)
+		return nil
+	}
+
+	keys := []string{
+		"stat_total_requests",
+		"stat_total_errors",
+		"stat_input_tokens",
+		"stat_output_tokens",
+		"stat_cache_read",
+		"stat_cache_write",
+	}
+	for _, key := range keys {
+		if err := s.db.SetSetting(key, "0"); err != nil {
+			s.dirty.Store(true)
+			return err
+		}
+	}
+	if err := s.db.ClearDailyStats(); err != nil {
+		s.dirty.Store(true)
+		return err
+	}
+	s.dirty.Store(false)
+	return nil
 }
 
 // GetDailyStats 获取指定日期范围的按模型统计

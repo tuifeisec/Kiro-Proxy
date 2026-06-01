@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useStats } from '../composables/useStats.js'
 import StatsCard from '../components/dashboard/StatsCard.vue'
 import ServiceStatus from '../components/dashboard/ServiceStatus.vue'
@@ -12,7 +12,9 @@ import IconDashboard from '../components/icons/IconDashboard.vue'
 import IconWifi from '../components/icons/IconWifi.vue'
 import IconArrowRight from '../components/icons/IconArrowRight.vue'
 
-const { stats } = useStats()
+const { stats, loading, error, clearStats, refresh } = useStats()
+const usageRefreshKey = ref(0)
+const clearStatsBusy = ref(false)
 
 function formatTokens(n) {
   if (!n) return '0'
@@ -23,7 +25,7 @@ function formatTokens(n) {
 
 const cacheHitRate = computed(() => {
   const totalIn = stats.value.input_tokens || 0
-  const cached = stats.value.cache_read_tokens || 0
+  const cached = Math.min(stats.value.cache_read_tokens || 0, totalIn)
   if (totalIn === 0) return '—'
   return ((cached / totalIn) * 100).toFixed(1) + '%'
 })
@@ -59,6 +61,29 @@ const cards = computed(() => [
   },
 ])
 
+async function handleClearStats() {
+  if (clearStatsBusy.value) return
+  const prompts = [
+    '第一次确认：确定要清空所有累计统计和用量明细吗？',
+    '第二次确认：清空后历史统计无法恢复，继续吗？',
+    '第三次确认：请再次确认清空统计。',
+  ]
+  for (const message of prompts) {
+    if (!confirm(message)) return
+  }
+
+  clearStatsBusy.value = true
+  try {
+    await clearStats()
+    await refresh()
+    usageRefreshKey.value++
+  } catch (e) {
+    alert(`清空统计失败：${e.message}`)
+  } finally {
+    clearStatsBusy.value = false
+  }
+}
+
 function formatUptime(s) {
   if (!s) return '—'
   if (s < 60) return `${s}s`
@@ -69,9 +94,19 @@ function formatUptime(s) {
 
 <template>
   <div class="p-6 space-y-6 max-w-5xl">
-    <div>
-      <h1 class="text-lg font-semibold text-[#111827]">仪表盘</h1>
-      <p class="text-xs text-[#6b7280] mt-0.5">Kiro Proxy 运行状态总览</p>
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <h1 class="text-lg font-semibold text-[#111827]">仪表盘</h1>
+        <p class="text-xs text-[#6b7280] mt-0.5">Kiro Proxy 运行状态总览</p>
+        <p v-if="error" class="text-xs text-[#dc2626] mt-1">统计加载失败：{{ error }}</p>
+      </div>
+      <button
+        class="text-xs px-3 py-1.5 border border-[#fecaca] text-[#dc2626] rounded hover:bg-[#fef2f2] disabled:opacity-50 disabled:cursor-not-allowed"
+        :disabled="loading || clearStatsBusy"
+        @click="handleClearStats"
+      >
+        {{ clearStatsBusy ? '清空中…' : '清空统计' }}
+      </button>
     </div>
 
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -87,7 +122,7 @@ function formatUptime(s) {
       <CAStatus />
       <ProxyConfig />
       <AdvancedSettings />
-      <UsageBreakdown />
+      <UsageBreakdown :refresh-key="usageRefreshKey" />
     </div>
   </div>
 </template>

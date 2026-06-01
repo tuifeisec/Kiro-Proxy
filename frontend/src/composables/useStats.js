@@ -1,5 +1,5 @@
 import { ref, onUnmounted } from 'vue'
-import { getStats, getDailyStats } from '../api/stats.js'
+import { getStats, getDailyStats, clearStats as clearStatsApi } from '../api/stats.js'
 
 export function useStats(intervalMs = 3000) {
   const stats = ref({
@@ -31,6 +31,19 @@ export function useStats(intervalMs = 3000) {
     }
   }
 
+  async function clearStats() {
+    loading.value = true
+    try {
+      stats.value = await clearStatsApi()
+      error.value = null
+    } catch (e) {
+      error.value = e.message
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
   function start() {
     fetchStats()
     timer = setInterval(fetchStats, intervalMs)
@@ -44,7 +57,7 @@ export function useStats(intervalMs = 3000) {
   start()
   onUnmounted(stop)
 
-  return { stats, loading, error, refresh: fetchStats }
+  return { stats, loading, error, refresh: fetchStats, clearStats }
 }
 
 // 按日期范围拉取按模型的明细统计

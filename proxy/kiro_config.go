@@ -17,11 +17,16 @@ import (
 
 // getKiroSettingsPath 返回 Kiro settings.json 路径
 func getKiroSettingsPath() string {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		return filepath.Join(os.Getenv("APPDATA"), "Kiro", "User", "settings.json")
+	case "darwin":
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "Library", "Application Support", "Kiro", "User", "settings.json")
+	default:
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".config", "Kiro", "User", "settings.json")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "Kiro", "User", "settings.json")
 }
 
 type kiroProxyStatus struct {
@@ -212,22 +217,27 @@ func writeKiroSettings(path string, settings map[string]interface{}) error {
 }
 
 func restartKiro(logger *TrafficLogger) {
-	if runtime.GOOS != "windows" {
-		return
-	}
-
 	logger.Info("kiro-config", "正在重启 Kiro...")
 
-	// 先尝试正常结束 Kiro，让 Electron/VSCode 有机会清理窗口和终端状态；失败后再强制结束。
-	if err := hiddenCmd("taskkill", "/IM", "Kiro.exe").Run(); err != nil {
-		logger.Info("kiro-config", "正常关闭 Kiro 失败，尝试强制结束: "+err.Error())
-		_ = hiddenCmd("taskkill", "/F", "/IM", "Kiro.exe").Run()
+	switch runtime.GOOS {
+	case "windows":
+		restartKiroWindows(logger)
+	case "darwin":
+		restartKiroDarwin(logger)
+	default:
+		logger.Info("kiro-config", "当前系统暂不支持自动重启 Kiro: "+runtime.GOOS)
+	}
+}
+
+func restartKiroWindows(logger *TrafficLogger) {
+	// /T 结束完整进程树，避免只杀掉主进程后残留最新启动的子进程。
+	if err := hiddenCmd("taskkill", "/T", "/IM", "Kiro.exe").Run(); err != nil {
+		logger.Info("kiro-config", "正常关闭 Kiro 进程树失败，尝试强制结束: "+err.Error())
+		_ = hiddenCmd("taskkill", "/F", "/T", "/IM", "Kiro.exe").Run()
 	}
 
-	// 等一下让进程退出
 	time.Sleep(2 * time.Second)
 
-	// 重新启动 Kiro（从默认安装路径启动），所有子进程都使用 hiddenCmd，避免残留空白控制台窗口。
 	kiroPaths := []string{
 		filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "Kiro", "Kiro.exe"),
 		filepath.Join(os.Getenv("PROGRAMFILES"), "Kiro", "Kiro.exe"),
@@ -243,7 +253,6 @@ func restartKiro(logger *TrafficLogger) {
 		}
 	}
 
-	// 找不到安装路径，用 Start-Process 尝试。PowerShell 本身和目标窗口都隐藏，避免产生空白终端。
 	cmd := hiddenCmd(
 		"powershell",
 		"-NoProfile",
@@ -258,4 +267,24 @@ func restartKiro(logger *TrafficLogger) {
 		return
 	}
 	logger.Info("kiro-config", "尝试通过 PATH 启动 Kiro")
+}
+
+func restartKiroDarwin(logger *TrafficLogger) {
+	if err := hiddenCmd("osascript", "-e", `tell application "Kiro" to quit`).Run(); err != nil {
+		logger.Info("kiro-config", "正常退出 Kiro 失败，尝试结束所有 Kiro 进程: "+err.Error())
+	}
+	if err := hiddenCmd("pkill", "-x", "Kiro").Run(); err != nil {
+		logger.Info("kiro-config", "结束 Kiro 主进程失败或进程不存在: "+err.Error())
+	}
+	if err := hiddenCmd("pkill", "-f", "/Kiro.app/").Run(); err != nil {
+		logger.Info("kiro-config", "结束 Kiro 进程树失败或进程不存在: "+err.Error())
+	}
+
+	time.Sleep(2 * time.Second)
+
+	if err := hiddenCmd("open", "-a", "Kiro").Start(); err != nil {
+		logger.Info("kiro-config", "启动 Kiro 失败: "+err.Error())
+		return
+	}
+	logger.Info("kiro-config", "Kiro 已启动")
 }

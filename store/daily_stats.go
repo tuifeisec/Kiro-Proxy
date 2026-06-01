@@ -44,3 +44,9 @@ func (db *DB) QueryDailyStats(startDate, endDate string) ([]DailyModelStats, err
 	}
 	return results, rows.Err()
 }
+
+// ClearDailyStats 清空所有按日模型统计。
+func (db *DB) ClearDailyStats() error {
+	_, err := db.conn.Exec(`DELETE FROM daily_stats`)
+	return err
+}
