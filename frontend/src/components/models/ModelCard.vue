@@ -22,6 +22,10 @@ const truncatedUrl = computed(() => {
   const url = props.model.base_url || ''
   return url.length > 40 ? url.slice(0, 40) + '...' : url
 })
+const truncatedProxy = computed(() => {
+  const url = props.model.proxy_url || ''
+  return url.length > 40 ? url.slice(0, 40) + '...' : url
+})
 </script>
 
 <template>
@@ -48,6 +52,10 @@ const truncatedUrl = computed(() => {
       <div class="flex items-center gap-2">
         <span class="text-[#6b7280] w-12 shrink-0">端点</span>
         <span class="text-[#111827]">{{ model.endpoint }}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[#6b7280] w-12 shrink-0">代理</span>
+        <span class="text-[#111827] truncate">{{ truncatedProxy || '直连' }}</span>
       </div>
       <div class="flex items-center gap-2">
         <span class="text-[#6b7280] w-12 shrink-0">倍率</span>

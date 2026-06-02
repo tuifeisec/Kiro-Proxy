@@ -46,12 +46,12 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := runModelTest(s.db, m, req.Model)
+	result := runModelTest(m, req.Model)
 	writeOK(w, result)
 }
 
 // runModelTest 向指定模型配置发送测试请求
-func runModelTest(db *store.DB, m *store.Model, model string) testResult {
+func runModelTest(m *store.Model, model string) testResult {
 	baseURL := strings.TrimRight(m.BaseURL, "/")
 	if model == "" {
 		model = m.ModelID
@@ -103,11 +103,7 @@ func runModelTest(db *store.DB, m *store.Model, model string) testResult {
 		httpReq.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}
 
-	proxyAddr, err := db.GetSetting(upstreamproxy.SettingKey)
-	if err != nil {
-		return testResult{Error: "读取代理设置失败: " + err.Error()}
-	}
-	client, err := upstreamproxy.NewClient(proxyAddr, 30*time.Second)
+	client, err := upstreamproxy.NewClient(m.ProxyURL, 30*time.Second)
 	if err != nil {
 		return testResult{Error: err.Error()}
 	}

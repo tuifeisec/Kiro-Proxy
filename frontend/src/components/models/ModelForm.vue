@@ -16,6 +16,7 @@ const defaultForm = () => ({
   model_id: '',
   api_key: '',
   base_url: '',
+  proxy_url: '',
   endpoint: '/chat/completions',
   context_window: 0,
   max_tokens: 0,
@@ -181,6 +182,14 @@ function handleSave() {
               <option v-for="ep in endpointOptions" :key="ep" :value="ep">{{ ep }}</option>
             </select>
             <p class="text-[10px] text-[#6b7280] mt-1">仅选择端点类型，不包含版本前缀；系统不会自动拼接 /v1</p>
+          </div>
+
+          <div>
+            <label class="block text-xs text-[#6b7280] mb-1.5">代理地址</label>
+            <input v-model="form.proxy_url"
+              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+              placeholder="留空直连，如 127.0.0.1:7890" />
+            <p class="text-[10px] text-[#6b7280] mt-1">仅作用于当前模型，支持 http/https/socks5 代理</p>
           </div>
 
           <div>

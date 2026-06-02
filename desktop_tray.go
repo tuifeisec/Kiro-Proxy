@@ -38,9 +38,9 @@ func (c *desktopTrayController) requestExit() {
 }
 
 func (c *desktopTrayController) onReady() {
-	systray.SetIcon(desktopTrayIcon())
-	systray.SetTitle("Kiro Proxy")
-	systray.SetTooltip("Kiro Proxy 正在后台运行")
+	setDesktopTrayIcon()
+	systray.SetTitle(desktopTrayTitle)
+	systray.SetTooltip(desktopTrayTooltip)
 
 	mShow := systray.AddMenuItem("打开窗口", "打开 Kiro Proxy")
 	mShow.SetIcon(desktopTrayIcon())

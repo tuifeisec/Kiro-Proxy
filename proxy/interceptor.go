@@ -412,9 +412,9 @@ func buildKiroTextStreamResponse(req *http.Request, text, modelID string, typewr
 		defer pw.Close()
 		runes := []rune(text)
 		if typewriter {
-			// 逐字发送，速度约为每秒 60 个字
-			const charsPerSecond = 60
-			charDelay := time.Second / charsPerSecond
+			// 逐字发送，中文场景下近似 120 token/s
+			const tokensPerSecond = 120
+			charDelay := time.Second / tokensPerSecond
 			for _, r := range runes {
 				frame := converter.AssistantResponseFrame(string(r), modelID)
 				pw.Write(frame)

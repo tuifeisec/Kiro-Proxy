@@ -7,7 +7,6 @@ const CLASSIFIER_DISABLED_VALUE = '__disabled__'
 
 const models = ref([])
 const classifierModelId = ref('')
-const upstreamProxyUrl = ref('')
 const saving = ref(false)
 const saved = ref(false)
 
@@ -15,14 +14,12 @@ async function load() {
   const [modelsData, settings] = await Promise.all([getModels(), getSettings()])
   models.value = Array.isArray(modelsData) ? modelsData : []
   classifierModelId.value = settings?.classifier_model_id || ''
-  upstreamProxyUrl.value = settings?.upstream_proxy_url || ''
 }
 
 async function save() {
   saving.value = true
   await updateSettings({
     classifier_model_id: classifierModelId.value,
-    upstream_proxy_url: upstreamProxyUrl.value.trim(),
   })
   saving.value = false
   saved.value = true
@@ -51,16 +48,6 @@ onMounted(load)
         </select>
       </div>
 
-      <div class="flex items-center gap-3 flex-wrap">
-        <label class="text-xs text-[#6b7280] whitespace-nowrap">上游代理</label>
-        <input
-          v-model="upstreamProxyUrl"
-          type="text"
-          placeholder="可留空，例如 127.0.0.1:7890 或 http://127.0.0.1:7890"
-          class="flex-1 min-w-[260px] text-sm bg-white border border-[#e5e7eb] rounded px-2 py-1.5 focus:outline-none focus:border-[#10b981] transition-colors"
-        />
-      </div>
-
       <div class="flex items-center gap-3">
         <button
           @click="save"
@@ -74,7 +61,7 @@ onMounted(load)
     </div>
 
     <p class="text-xs text-[#9ca3af] mt-2">
-      Classifier 用于判断用户意图（Do/Spec），走轻量小模型可以节省费用。上游代理仅作用于模型 API 请求，留空则直连。
+      Classifier 用于判断用户意图（Do/Spec），走轻量小模型可以节省费用。模型 API 代理请在各模型配置中单独设置。
     </p>
   </div>
 </template>

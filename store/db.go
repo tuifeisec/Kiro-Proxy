@@ -49,6 +49,7 @@ func (db *DB) migrate() error {
 	db.addColumnIfNotExists("models", "output_price", "REAL NOT NULL DEFAULT 30.0")
 	db.addColumnIfNotExists("models", "cache_input_price", "REAL NOT NULL DEFAULT 0.5")
 	db.addColumnIfNotExists("models", "cache_output_price", "REAL NOT NULL DEFAULT 30.0")
+	db.addColumnIfNotExists("models", "proxy_url", "TEXT NOT NULL DEFAULT ''")
 	db.addColumnIfNotExists("models", "enable_continuation", "INTEGER NOT NULL DEFAULT 0")
 	db.addColumnIfNotExists("daily_stats", "credits", "REAL NOT NULL DEFAULT 0")
 
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS models (
     provider        TEXT NOT NULL DEFAULT 'openai',
     base_url        TEXT NOT NULL,
     api_key         TEXT NOT NULL,
+    proxy_url       TEXT NOT NULL DEFAULT '',
     endpoint        TEXT NOT NULL DEFAULT '',
     context_window  INTEGER NOT NULL DEFAULT 0,
     max_tokens      INTEGER NOT NULL DEFAULT 0,

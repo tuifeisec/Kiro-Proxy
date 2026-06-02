@@ -30,6 +30,7 @@ type Model struct {
 	Provider           string  `json:"provider"`            // openai | anthropic，决定格式转换
 	BaseURL            string  `json:"base_url"`            // 接口地址（如 "https://api.openai.com"，不会自动追加版本路径）
 	APIKey             string  `json:"api_key"`             // 访问密钥
+	ProxyURL           string  `json:"proxy_url"`           // 单模型上游代理地址，留空则直连
 	Endpoint           string  `json:"endpoint"`            // 接口端点路径（如 chat/completions，需完整填写）
 	ContextWindow      int     `json:"context_window"`      // 上下文窗口，0=默认
 	MaxTokens          int     `json:"max_tokens"`          // 最大输出 Token，0=默认
@@ -49,7 +50,7 @@ type Model struct {
 
 func (db *DB) GetModels() ([]Model, error) {
 	rows, err := db.conn.Query(`
-		SELECT id, name, model_id, provider, base_url, api_key,
+		SELECT id, name, model_id, provider, base_url, api_key, proxy_url,
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enabled, sort_order, note, created_at, updated_at
@@ -65,7 +66,7 @@ func (db *DB) GetModels() ([]Model, error) {
 		var m Model
 		var enabled, enableCont int
 		if err := rows.Scan(&m.ID, &m.Name, &m.ModelID,
-			&m.Provider, &m.BaseURL, &m.APIKey, &m.Endpoint,
+			&m.Provider, &m.BaseURL, &m.APIKey, &m.ProxyURL, &m.Endpoint,
 			&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 			&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 			&enableCont, &enabled, &m.SortOrder, &m.Note,
@@ -83,13 +84,13 @@ func (db *DB) GetModel(id string) (*Model, error) {
 	var m Model
 	var enabled, enableCont int
 	err := db.conn.QueryRow(`
-		SELECT id, name, model_id, provider, base_url, api_key,
+		SELECT id, name, model_id, provider, base_url, api_key, proxy_url,
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE id = ?
 	`, id).Scan(&m.ID, &m.Name, &m.ModelID,
-		&m.Provider, &m.BaseURL, &m.APIKey, &m.Endpoint,
+		&m.Provider, &m.BaseURL, &m.APIKey, &m.ProxyURL, &m.Endpoint,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &enabled, &m.SortOrder, &m.Note,
@@ -107,13 +108,13 @@ func (db *DB) FindByModelID(modelID string) (*Model, error) {
 	var m Model
 	var enabled, enableCont int
 	err := db.conn.QueryRow(`
-		SELECT id, name, model_id, provider, base_url, api_key,
+		SELECT id, name, model_id, provider, base_url, api_key, proxy_url,
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE model_id = ? AND enabled = 1 LIMIT 1
 	`, modelID).Scan(&m.ID, &m.Name, &m.ModelID,
-		&m.Provider, &m.BaseURL, &m.APIKey, &m.Endpoint,
+		&m.Provider, &m.BaseURL, &m.APIKey, &m.ProxyURL, &m.Endpoint,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &enabled, &m.SortOrder, &m.Note,
@@ -131,13 +132,13 @@ func (db *DB) FindModelByName(name string) (*Model, error) {
 	var m Model
 	var enabled, enableCont int
 	err := db.conn.QueryRow(`
-		SELECT id, name, model_id, provider, base_url, api_key,
+		SELECT id, name, model_id, provider, base_url, api_key, proxy_url,
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE name = ? LIMIT 1
 	`, name).Scan(&m.ID, &m.Name, &m.ModelID,
-		&m.Provider, &m.BaseURL, &m.APIKey, &m.Endpoint,
+		&m.Provider, &m.BaseURL, &m.APIKey, &m.ProxyURL, &m.Endpoint,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &enabled, &m.SortOrder, &m.Note,
@@ -161,6 +162,7 @@ func (db *DB) CreateModel(m *Model) error {
 		return fmt.Errorf("endpoint is required")
 	}
 	m.Endpoint = strings.TrimSpace(m.Endpoint)
+	m.ProxyURL = strings.TrimSpace(m.ProxyURL)
 	normalizeModelPrices(m)
 	enabled := 0
 	if m.Enabled {
@@ -171,12 +173,12 @@ func (db *DB) CreateModel(m *Model) error {
 		enableCont = 1
 	}
 	_, err := db.conn.Exec(`
-		INSERT INTO models (id, name, model_id, provider, base_url, api_key,
+		INSERT INTO models (id, name, model_id, provider, base_url, api_key, proxy_url,
 		  endpoint, context_window, max_tokens, reasoning_effort, rate_multiplier,
 		  input_price, output_price, cache_input_price, cache_output_price,
 		  enable_continuation, enabled, sort_order, note, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, m.ID, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, m.ID, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.ProxyURL,
 		m.Endpoint, m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, enabled, m.SortOrder, m.Note, m.CreatedAt, m.UpdatedAt)
@@ -197,14 +199,15 @@ func (db *DB) UpdateModel(m *Model) error {
 		return fmt.Errorf("endpoint is required")
 	}
 	m.Endpoint = strings.TrimSpace(m.Endpoint)
+	m.ProxyURL = strings.TrimSpace(m.ProxyURL)
 	normalizeModelPrices(m)
 	res, err := db.conn.Exec(`
-		UPDATE models SET name=?, model_id=?, provider=?, base_url=?, api_key=?,
+		UPDATE models SET name=?, model_id=?, provider=?, base_url=?, api_key=?, proxy_url=?,
 		  endpoint=?, context_window=?, max_tokens=?, reasoning_effort=?,
 		  rate_multiplier=?, input_price=?, output_price=?, cache_input_price=?, cache_output_price=?,
 		  enable_continuation=?, enabled=?, sort_order=?, note=?, updated_at=?
 		WHERE id=?
-	`, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey,
+	`, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.ProxyURL,
 		m.Endpoint, m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, enabled, m.SortOrder, m.Note, m.UpdatedAt, m.ID)
