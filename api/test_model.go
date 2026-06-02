@@ -5,9 +5,11 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	json "github.com/goccy/go-json"
 	"io"
+	"kiro-proxy/codex"
 	"kiro-proxy/store"
 	"kiro-proxy/ua"
 	"kiro-proxy/upstreamproxy"
@@ -72,6 +74,17 @@ func runModelTest(m *store.Model, model string) testResult {
 			"stream":     true,
 			"messages":   []map[string]string{{"role": "user", "content": "Hi"}},
 		})
+	case m.Provider == "codex":
+		if err := codex.EnsureAccessToken(context.Background(), m); err != nil {
+			return testResult{Error: err.Error()}
+		}
+		reqBody, _ = json.Marshal(map[string]interface{}{
+			"model":        model,
+			"instructions": "",
+			"stream":       true,
+			"store":        false,
+			"input":        []map[string]string{{"type": "message", "role": "user", "content": "Hi"}},
+		})
 	case strings.Contains(endpoint, "/responses"):
 		reqBody, _ = json.Marshal(map[string]interface{}{
 			"model":  model,
@@ -99,6 +112,13 @@ func runModelTest(m *store.Model, model string) testResult {
 	case "anthropic":
 		httpReq.Header.Set("x-api-key", m.APIKey)
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
+	case "codex":
+		codex.ApplyHeaders(httpReq, m.APIKey, m.CodexAccountID, true)
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
+		httpReq.Header.Set("x-openai-internal-codex-residency", "us")
+		httpReq.Header.Set("x-client-request-id", "kiro-proxy-test")
+		httpReq.Header.Set("x-codex-installation-id", "kiro-proxy")
 	default:
 		httpReq.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}

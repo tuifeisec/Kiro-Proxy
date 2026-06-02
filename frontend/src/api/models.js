@@ -1,8 +1,16 @@
 const BASE = ''
 
+async function parseJSONResponse(r) {
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok || data?.error) {
+    throw new Error(data?.error || `HTTP ${r.status}`)
+  }
+  return data
+}
+
 export async function getModels() {
   const r = await fetch(`${BASE}/api/models`)
-  return r.json()
+  return parseJSONResponse(r)
 }
 
 export async function createModel(data) {
@@ -11,7 +19,7 @@ export async function createModel(data) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   })
-  return r.json()
+  return parseJSONResponse(r)
 }
 
 export async function updateModel(id, data) {
@@ -20,12 +28,12 @@ export async function updateModel(id, data) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   })
-  return r.json()
+  return parseJSONResponse(r)
 }
 
 export async function deleteModel(id) {
   const r = await fetch(`${BASE}/api/models/${id}`, { method: 'DELETE' })
-  return r.json()
+  return parseJSONResponse(r)
 }
 
 export async function testModel(modelId, model) {
@@ -34,5 +42,14 @@ export async function testModel(modelId, model) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model_id: modelId, model })
   })
-  return r.json()
+  return parseJSONResponse(r)
+}
+
+export async function refreshCodexModel(id) {
+  const r = await fetch(`${BASE}/api/refresh-codex-model`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_id: id })
+  })
+  return parseJSONResponse(r)
 }

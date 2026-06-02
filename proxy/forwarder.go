@@ -9,6 +9,7 @@ import (
 	"fmt"
 	json "github.com/goccy/go-json"
 	"io"
+	"kiro-proxy/codex"
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
@@ -168,7 +169,7 @@ func useResponsesAPI(pre *Preflight, m *store.Model) bool {
 	if pre.Protocol != "kiro" || pre.Conv == nil {
 		return false
 	}
-	if m.Provider == "anthropic" || m.Provider == "gemini" {
+	if m.Provider == "anthropic" || m.Provider == "gemini" || m.Provider == "codex" {
 		return false
 	}
 	if pre.Conv.IsClassifier {
@@ -208,6 +209,11 @@ func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 			} else {
 				upstreamURL += "?alt=sse"
 			}
+		}
+	case m.Provider == "codex":
+		body, err = converter.KiroToResponses(pre.Conv, m.ModelID, reasoningEffort)
+		if err == nil {
+			body = codex.NewRequestBodyFromResponses(body)
 		}
 	case useResponsesAPI(pre, m):
 		body, err = converter.KiroToResponses(pre.Conv, m.ModelID, reasoningEffort)
@@ -280,7 +286,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, store.CalculateCredits(in, out, cacheR, 0, m), statsModelID(m), false)
 			logger.Info("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
 		}()
-	case useResponsesAPI(pre, m):
+	case useResponsesAPI(pre, m) || m.Provider == "codex":
 		// responses SSE → Kiro Event Stream（一段式直转）
 		sc := converter.NewResponsesStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
@@ -400,6 +406,21 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 				req.URL.RawQuery = "key=" + m.APIKey
 			}
 		}
+	case "codex":
+		beforeToken := m.APIKey
+		beforeRefresh := m.RefreshToken
+		if err := codex.EnsureAccessToken(ctx, m); err != nil {
+			return nil, err
+		}
+		if (m.APIKey != beforeToken || m.RefreshToken != beforeRefresh) && f.db != nil {
+			_ = f.db.UpdateCodexTokenAndUsage(m)
+		}
+		codex.ApplyHeaders(req, m.APIKey, m.CodexAccountID, true)
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
+		req.Header.Set("x-openai-internal-codex-residency", "us")
+		req.Header.Set("x-client-request-id", sessionIDOrRandom(sessionID))
+		req.Header.Set("x-codex-installation-id", "kiro-proxy")
 	default:
 		req.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}
@@ -694,4 +715,11 @@ func findErrorReason(v interface{}, depth int) string {
 		}
 	}
 	return ""
+}
+
+func sessionIDOrRandom(sessionID string) string {
+	if strings.TrimSpace(sessionID) != "" {
+		return sessionID
+	}
+	return fmt.Sprintf("kiro-proxy-%d", time.Now().UnixNano())
 }

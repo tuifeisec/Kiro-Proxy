@@ -5,7 +5,9 @@ import IconEyeOff from '../icons/IconEyeOff.vue'
 
 const props = defineProps({
   model: { type: Object, default: null },
-  visible: { type: Boolean, default: false }
+  visible: { type: Boolean, default: false },
+  saving: { type: Boolean, default: false },
+  error: { type: String, default: '' }
 })
 
 const emit = defineEmits(['save', 'cancel'])
@@ -15,6 +17,7 @@ const defaultForm = () => ({
   name: '',
   model_id: '',
   api_key: '',
+  refresh_token: '',
   base_url: '',
   proxy_url: '',
   endpoint: '/chat/completions',
@@ -52,7 +55,9 @@ watch(() => form.value.provider, (val) => {
     ? ['/messages']
     : val === 'gemini'
       ? ['/v1beta/models/{model}:streamGenerateContent']
-      : ['/chat/completions', '/responses']
+      : val === 'codex'
+        ? ['/codex/responses']
+        : ['/chat/completions', '/responses']
   if (!options.includes(form.value.endpoint)) {
     form.value.endpoint = options[0]
   }
@@ -68,6 +73,9 @@ const endpointOptions = computed(() => {
   if (form.value.provider === 'gemini') {
     return ['/v1beta/models/{model}:streamGenerateContent']
   }
+  if (form.value.provider === 'codex') {
+    return ['/codex/responses']
+  }
   return ['/chat/completions', '/responses']
 })
 
@@ -82,6 +90,7 @@ const defaultPrices = {
   openai: { input_price: 5, output_price: 30, cache_input_price: 0.5, cache_output_price: 30 },
   anthropic: { input_price: 5, output_price: 25, cache_input_price: 0.5, cache_output_price: 6.25 },
   gemini: { input_price: 1.5, output_price: 9, cache_input_price: 0.15, cache_output_price: 1.5 },
+  codex: { input_price: 5, output_price: 30, cache_input_price: 0.5, cache_output_price: 30 },
 }
 
 function applyDefaultPrices(provider) {
@@ -90,6 +99,7 @@ function applyDefaultPrices(provider) {
 }
 
 function handleSave() {
+  if (props.saving) return
   emit('save', { ...form.value })
 }
 </script>
@@ -103,6 +113,10 @@ function handleSave() {
         <h2 class="text-base font-semibold text-[#111827] mb-5">
           {{ model ? '编辑模型' : '新增模型' }}
         </h2>
+
+        <div v-if="error" class="mb-4 px-3 py-2 text-sm text-[#ef4444] bg-[#fef2f2] border border-[#ef4444]/20 rounded-md whitespace-pre-wrap">
+          {{ error }}
+        </div>
 
         <!-- Provider 切换 -->
         <div class="mb-5">
@@ -129,6 +143,13 @@ function handleSave() {
                 : 'border-[#e5e7eb] text-[#6b7280] hover:text-[#111827]'"
               @click="form.provider = 'gemini'"
             >Gemini</button>
+            <button
+              class="px-4 py-1.5 text-xs rounded-md border transition-colors"
+              :class="form.provider === 'codex'
+                ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
+                : 'border-[#e5e7eb] text-[#6b7280] hover:text-[#111827]'"
+              @click="form.provider = 'codex'"
+            >Codex</button>
           </div>
         </div>
 
@@ -150,7 +171,7 @@ function handleSave() {
             <p class="text-[10px] text-[#6b7280] mt-1">Kiro 下拉列表里看到的名字，也是发给上游的 model 值</p>
           </div>
 
-          <div>
+          <div v-if="form.provider !== 'codex'">
             <label class="block text-xs text-[#6b7280] mb-1.5">接口地址</label>
             <input v-model="form.base_url"
               class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
@@ -159,9 +180,13 @@ function handleSave() {
           </div>
 
           <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">访问密钥</label>
+            <label class="block text-xs text-[#6b7280] mb-1.5">{{ form.provider === 'codex' ? 'Refresh Token' : '访问密钥' }}</label>
             <div class="relative">
-              <input v-model="form.api_key"
+              <input v-if="form.provider === 'codex'" v-model="form.refresh_token"
+                :type="showKey ? 'text' : 'password'"
+                class="w-full px-3 py-2 pr-10 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
+                placeholder="粘贴 Codex refresh_token" />
+              <input v-else v-model="form.api_key"
                 :type="showKey ? 'text' : 'password'"
                 class="w-full px-3 py-2 pr-10 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
                 placeholder="sk-..." />
@@ -173,9 +198,10 @@ function handleSave() {
                 <IconEye v-else />
               </button>
             </div>
+            <p v-if="form.provider === 'codex'" class="text-[10px] text-[#6b7280] mt-1">保存时会先使用代理刷新 access token 并检测账号有效性</p>
           </div>
 
-          <div>
+          <div v-if="form.provider !== 'codex'">
             <label class="block text-xs text-[#6b7280] mb-1.5">接口端点</label>
             <select v-model="form.endpoint"
               class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none">
@@ -280,10 +306,10 @@ function handleSave() {
         </div>
 
         <div class="flex justify-end gap-3 mt-6">
-          <button class="px-4 py-2 text-sm text-[#6b7280] hover:text-[#111827] border border-[#e5e7eb] rounded-md"
-            @click="emit('cancel')">取消</button>
-          <button class="px-4 py-2 text-sm text-white bg-[#10b981] hover:bg-[#059669] rounded-md font-medium"
-            @click="handleSave">保存</button>
+          <button class="px-4 py-2 text-sm text-[#6b7280] hover:text-[#111827] border border-[#e5e7eb] rounded-md disabled:opacity-50"
+            :disabled="saving" @click="emit('cancel')">取消</button>
+          <button class="px-4 py-2 text-sm text-white bg-[#10b981] hover:bg-[#059669] rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</button>
         </div>
       </div>
     </div>
