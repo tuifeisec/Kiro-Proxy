@@ -44,23 +44,41 @@ func (db *DB) migrate() error {
 		return err
 	}
 	// 增量迁移：为已有表添加新列（IF NOT EXISTS 不支持 ALTER，用 pragma 检测）
-	db.addColumnIfNotExists("models", "rate_multiplier", "REAL NOT NULL DEFAULT 1.0")
-	db.addColumnIfNotExists("models", "input_price", "REAL NOT NULL DEFAULT 5.0")
-	db.addColumnIfNotExists("models", "output_price", "REAL NOT NULL DEFAULT 30.0")
-	db.addColumnIfNotExists("models", "cache_input_price", "REAL NOT NULL DEFAULT 0.5")
-	db.addColumnIfNotExists("models", "cache_output_price", "REAL NOT NULL DEFAULT 30.0")
-	db.addColumnIfNotExists("models", "enable_continuation", "INTEGER NOT NULL DEFAULT 0")
-	db.addColumnIfNotExists("daily_stats", "credits", "REAL NOT NULL DEFAULT 0")
+	columns := []struct {
+		table string
+		name  string
+		def   string
+	}{
+		{"models", "rate_multiplier", "REAL NOT NULL DEFAULT 1.0"},
+		{"models", "input_price", "REAL NOT NULL DEFAULT 5.0"},
+		{"models", "output_price", "REAL NOT NULL DEFAULT 30.0"},
+		{"models", "cache_input_price", "REAL NOT NULL DEFAULT 0.5"},
+		{"models", "cache_output_price", "REAL NOT NULL DEFAULT 30.0"},
+		{"models", "proxy_url", "TEXT NOT NULL DEFAULT ''"},
+		{"models", "enable_continuation", "INTEGER NOT NULL DEFAULT 0"},
+		{"models", "refresh_token", "TEXT NOT NULL DEFAULT ''"},
+		{"models", "codex_email", "TEXT NOT NULL DEFAULT ''"},
+		{"models", "codex_plan_type", "TEXT NOT NULL DEFAULT ''"},
+		{"models", "codex_account_id", "TEXT NOT NULL DEFAULT ''"},
+		{"models", "access_token_expires_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"models", "codex_usage_json", "TEXT NOT NULL DEFAULT ''"},
+		{"daily_stats", "credits", "REAL NOT NULL DEFAULT 0"},
+	}
+	for _, col := range columns {
+		if err := db.addColumnIfNotExists(col.table, col.name, col.def); err != nil {
+			return err
+		}
+	}
 
 	// 启动时清理过期 session
 	db.CleanExpiredResponsesSessions()
 	return nil
 }
 
-func (db *DB) addColumnIfNotExists(table, column, colDef string) {
+func (db *DB) addColumnIfNotExists(table, column, colDef string) error {
 	rows, err := db.conn.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
-		return
+		return fmt.Errorf("读取表结构失败 %s.%s: %w", table, column, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -70,13 +88,19 @@ func (db *DB) addColumnIfNotExists(table, column, colDef string) {
 		var dflt interface{}
 		var pk int
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return
+			return fmt.Errorf("解析表结构失败 %s.%s: %w", table, column, err)
 		}
 		if name == column {
-			return // 列已存在
+			return nil // 列已存在
 		}
 	}
-	db.conn.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + colDef)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("遍历表结构失败 %s.%s: %w", table, column, err)
+	}
+	if _, err := db.conn.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + colDef); err != nil {
+		return fmt.Errorf("添加列失败 %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 const schema = `
@@ -87,6 +111,8 @@ CREATE TABLE IF NOT EXISTS models (
     provider        TEXT NOT NULL DEFAULT 'openai',
     base_url        TEXT NOT NULL,
     api_key         TEXT NOT NULL,
+    refresh_token   TEXT NOT NULL DEFAULT '',
+    proxy_url       TEXT NOT NULL DEFAULT '',
     endpoint        TEXT NOT NULL DEFAULT '',
     context_window  INTEGER NOT NULL DEFAULT 0,
     max_tokens      INTEGER NOT NULL DEFAULT 0,
@@ -97,6 +123,11 @@ CREATE TABLE IF NOT EXISTS models (
     cache_input_price REAL NOT NULL DEFAULT 0.5,
     cache_output_price REAL NOT NULL DEFAULT 30.0,
     enable_continuation INTEGER NOT NULL DEFAULT 0,
+    codex_email     TEXT NOT NULL DEFAULT '',
+    codex_plan_type TEXT NOT NULL DEFAULT '',
+    codex_account_id TEXT NOT NULL DEFAULT '',
+    access_token_expires_at INTEGER NOT NULL DEFAULT 0,
+    codex_usage_json TEXT NOT NULL DEFAULT '',
     enabled         INTEGER NOT NULL DEFAULT 1,
     sort_order      INTEGER NOT NULL DEFAULT 0,
     note            TEXT NOT NULL DEFAULT '',

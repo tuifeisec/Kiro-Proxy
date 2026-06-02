@@ -34,12 +34,12 @@ func main() {
 
 func runDesktopWindow(url string) {
 	window := newDesktopWindowController(url)
+	tray := newDesktopTrayController(window)
+	startDesktopTray(tray)
+	defer tray.quit()
+
 	window.create()
 	defer window.destroy()
-
-	tray := newDesktopTrayController(window)
-	go tray.run()
-	defer tray.quit()
 
 	window.run()
 	tray.quit()

@@ -15,6 +15,8 @@ import IconArrowRight from '../components/icons/IconArrowRight.vue'
 const { stats, loading, error, clearStats, refresh } = useStats()
 const usageRefreshKey = ref(0)
 const clearStatsBusy = ref(false)
+const showClearStatsModal = ref(false)
+const clearStatsError = ref('')
 
 function formatTokens(n) {
   if (!n) return '0'
@@ -68,24 +70,29 @@ const cards = computed(() => [
   },
 ])
 
-async function handleClearStats() {
-  if (clearStatsBusy.value) return
-  const prompts = [
-    '第一次确认：确定要清空所有累计统计和用量明细吗？',
-    '第二次确认：清空后历史统计无法恢复，继续吗？',
-    '第三次确认：请再次确认清空统计。',
-  ]
-  for (const message of prompts) {
-    if (!confirm(message)) return
-  }
+function handleClearStats() {
+  if (loading.value || clearStatsBusy.value) return
+  clearStatsError.value = ''
+  showClearStatsModal.value = true
+}
 
+function closeClearStatsModal() {
+  if (clearStatsBusy.value) return
+  showClearStatsModal.value = false
+  clearStatsError.value = ''
+}
+
+async function confirmClearStats() {
+  if (clearStatsBusy.value) return
   clearStatsBusy.value = true
+  clearStatsError.value = ''
   try {
     await clearStats()
     await refresh()
     usageRefreshKey.value++
+    showClearStatsModal.value = false
   } catch (e) {
-    alert(`清空统计失败：${e.message}`)
+    clearStatsError.value = e?.message || '清空统计失败，请稍后重试'
   } finally {
     clearStatsBusy.value = false
   }
@@ -135,4 +142,52 @@ function formatUptime(s) {
       <UsageBreakdown :refresh-key="usageRefreshKey" />
     </div>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="showClearStatsModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm"
+      @click.self="closeClearStatsModal"
+    >
+      <div class="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5">
+        <div class="flex items-start gap-3 border-b border-[#fee2e2] bg-gradient-to-br from-[#fff7ed] to-white p-5">
+          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#fee2e2] text-[#dc2626]">
+            <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M10 6v4.5m0 3h.01M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-base font-semibold text-[#111827]">确认清空统计？</h2>
+            <p class="mt-1 text-xs leading-5 text-[#6b7280]">该操作会清空累计请求、Token、Credits 和用量明细。清空后历史统计无法恢复。</p>
+          </div>
+        </div>
+
+        <div class="space-y-3 p-5">
+          <div class="rounded-xl border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-xs leading-5 text-[#92400e]">
+            代理服务不会停止，只会重置仪表盘统计数据。
+          </div>
+          <p v-if="clearStatsError" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-xs text-[#dc2626]">
+            {{ clearStatsError }}
+          </p>
+        </div>
+
+        <div class="flex justify-end gap-2 border-t border-[#f3f4f6] bg-[#fafafa] px-5 py-4">
+          <button
+            class="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-xs font-medium text-[#374151] transition-colors hover:bg-[#f9fafb] disabled:opacity-50"
+            :disabled="clearStatsBusy"
+            @click="closeClearStatsModal"
+          >
+            取消
+          </button>
+          <button
+            class="rounded-lg bg-[#dc2626] px-4 py-2 text-xs font-medium text-white shadow-sm transition-colors hover:bg-[#b91c1c] disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="clearStatsBusy"
+            @click="confirmClearStats"
+          >
+            {{ clearStatsBusy ? '正在清空…' : '确认清空' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>

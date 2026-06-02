@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { getModels, createModel, updateModel, deleteModel, testModel } from '../api/models.js'
+import { getModels, createModel, updateModel, deleteModel, testModel, refreshCodexModel } from '../api/models.js'
 import ModelCard from '../components/models/ModelCard.vue'
 import ModelForm from '../components/models/ModelForm.vue'
 import IconPlus from '../components/icons/IconPlus.vue'
@@ -11,6 +11,9 @@ const showForm = ref(false)
 const editingModel = ref(null)
 const testResults = ref({})
 const testingIds = ref({})
+const refreshingCodexIds = ref({})
+const saving = ref(false)
+const errorMessage = ref('')
 
 async function loadModels() {
   try {
@@ -23,28 +26,43 @@ async function loadModels() {
 
 function openAdd() {
   editingModel.value = null
+  errorMessage.value = ''
   showForm.value = true
 }
 
 function openEdit(m) {
   editingModel.value = m
+  errorMessage.value = ''
   showForm.value = true
 }
 
 async function handleSave(form) {
-  if (editingModel.value?.id) {
-    await updateModel(editingModel.value.id, form)
-  } else {
-    await createModel(form)
+  saving.value = true
+  errorMessage.value = ''
+  try {
+    if (editingModel.value?.id) {
+      await updateModel(editingModel.value.id, form)
+    } else {
+      await createModel(form)
+    }
+    showForm.value = false
+    await loadModels()
+  } catch (e) {
+    errorMessage.value = e?.message || '保存失败'
+  } finally {
+    saving.value = false
   }
-  showForm.value = false
-  await loadModels()
 }
 
 async function handleDelete(m) {
   if (!confirm(`确定删除模型「${m.name || m.model_id}」？`)) return
-  await deleteModel(m.id)
-  await loadModels()
+  errorMessage.value = ''
+  try {
+    await deleteModel(m.id)
+    await loadModels()
+  } catch (e) {
+    errorMessage.value = e?.message || '删除失败'
+  }
 }
 
 async function handleTest(m) {
@@ -56,6 +74,19 @@ async function handleTest(m) {
     testResults.value[m.id] = { ok: false, error: e.message }
   } finally {
     testingIds.value[m.id] = false
+  }
+}
+
+async function handleRefreshCodex(m) {
+  refreshingCodexIds.value[m.id] = true
+  errorMessage.value = ''
+  try {
+    await refreshCodexModel(m.id)
+    await loadModels()
+  } catch (e) {
+    errorMessage.value = e?.message || '刷新 Codex 信息失败'
+  } finally {
+    refreshingCodexIds.value[m.id] = false
   }
 }
 
@@ -78,6 +109,10 @@ onMounted(loadModels)
       </button>
     </div>
 
+    <div v-if="errorMessage" class="mb-4 px-3 py-2 text-sm text-[#ef4444] bg-[#fef2f2] border border-[#ef4444]/20 rounded-md">
+      {{ errorMessage }}
+    </div>
+
     <div v-if="models.length > 0" class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <ModelCard
         v-for="m in models"
@@ -85,9 +120,11 @@ onMounted(loadModels)
         :model="m"
         :test-result="testResults[m.id]"
         :testing="!!testingIds[m.id]"
+        :refreshing-codex="!!refreshingCodexIds[m.id]"
         @edit="openEdit(m)"
         @delete="handleDelete(m)"
         @test="handleTest(m)"
+        @refresh-codex="handleRefreshCodex(m)"
       />
     </div>
 
@@ -99,6 +136,8 @@ onMounted(loadModels)
     <ModelForm
       :visible="showForm"
       :model="editingModel"
+      :saving="saving"
+      :error="errorMessage"
       @save="handleSave"
       @cancel="showForm = false"
     />

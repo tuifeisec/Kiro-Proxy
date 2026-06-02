@@ -9,6 +9,7 @@ import (
 	"fmt"
 	json "github.com/goccy/go-json"
 	"io"
+	"kiro-proxy/codex"
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
@@ -30,33 +31,31 @@ const (
 
 // Forwarder 负责转发请求到上游
 type Forwarder struct {
-	stats     *store.Stats
-	db        *store.DB
-	clientMu  sync.RWMutex
-	proxyAddr string
-	client    *http.Client
+	stats    *store.Stats
+	db       *store.DB
+	clientMu sync.RWMutex
+	clients  map[string]*http.Client
 }
 
 // NewForwarder 创建转发器
 func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
 	client, _ := upstreamproxy.NewClient("", 10*time.Minute)
+	clients := make(map[string]*http.Client)
+	if client != nil {
+		clients[""] = client
+	}
 	return &Forwarder{
-		stats:  stats,
-		db:     db,
-		client: client,
+		stats:   stats,
+		db:      db,
+		clients: clients,
 	}
 }
 
-func (f *Forwarder) clientForRequest() (*http.Client, error) {
-	proxyAddr, err := f.db.GetSetting(upstreamproxy.SettingKey)
-	if err != nil {
-		return nil, err
-	}
+func (f *Forwarder) clientForProxy(proxyAddr string) (*http.Client, error) {
 	proxyAddr = strings.TrimSpace(proxyAddr)
 
 	f.clientMu.RLock()
-	if f.client != nil && f.proxyAddr == proxyAddr {
-		client := f.client
+	if client := f.clients[proxyAddr]; client != nil {
 		f.clientMu.RUnlock()
 		return client, nil
 	}
@@ -64,16 +63,15 @@ func (f *Forwarder) clientForRequest() (*http.Client, error) {
 
 	f.clientMu.Lock()
 	defer f.clientMu.Unlock()
-	if f.client != nil && f.proxyAddr == proxyAddr {
-		return f.client, nil
+	if client := f.clients[proxyAddr]; client != nil {
+		return client, nil
 	}
 
 	client, err := upstreamproxy.NewClient(proxyAddr, 10*time.Minute)
 	if err != nil {
 		return nil, err
 	}
-	f.proxyAddr = proxyAddr
-	f.client = client
+	f.clients[proxyAddr] = client
 	return client, nil
 }
 
@@ -171,7 +169,7 @@ func useResponsesAPI(pre *Preflight, m *store.Model) bool {
 	if pre.Protocol != "kiro" || pre.Conv == nil {
 		return false
 	}
-	if m.Provider == "anthropic" || m.Provider == "gemini" {
+	if m.Provider == "anthropic" || m.Provider == "gemini" || m.Provider == "codex" {
 		return false
 	}
 	if pre.Conv.IsClassifier {
@@ -212,6 +210,11 @@ func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 				upstreamURL += "?alt=sse"
 			}
 		}
+	case m.Provider == "codex":
+		body, err = converter.KiroToResponses(pre.Conv, m.ModelID, reasoningEffort)
+		if err == nil {
+			body = codex.NewRequestBodyFromResponses(body)
+		}
 	case useResponsesAPI(pre, m):
 		body, err = converter.KiroToResponses(pre.Conv, m.ModelID, reasoningEffort)
 	default: // chat/completions，或 classifier 请求
@@ -233,8 +236,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 		logger.Error("forwarder", fmt.Sprintf("上游错误 %d", resp.StatusCode), truncate(string(body), 500))
 		// 4xx/5xx 上游错误也需要计入统计（总请求数 + 错误数）
 		f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		return resp, nil
+		return buildKiroTextStreamResponse(reqFromResponse(resp), buildUpstreamErrorMessage(resp.StatusCode, resp.Status, body), kiroModelID(pre, m), true), nil
 	}
 
 	cw := m.ContextWindow
@@ -284,7 +286,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, store.CalculateCredits(in, out, cacheR, 0, m), statsModelID(m), false)
 			logger.Info("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
 		}()
-	case useResponsesAPI(pre, m):
+	case useResponsesAPI(pre, m) || m.Provider == "codex":
 		// responses SSE → Kiro Event Stream（一段式直转）
 		sc := converter.NewResponsesStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
@@ -404,6 +406,21 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 				req.URL.RawQuery = "key=" + m.APIKey
 			}
 		}
+	case "codex":
+		beforeToken := m.APIKey
+		beforeRefresh := m.RefreshToken
+		if err := codex.EnsureAccessToken(ctx, m); err != nil {
+			return nil, err
+		}
+		if (m.APIKey != beforeToken || m.RefreshToken != beforeRefresh) && f.db != nil {
+			_ = f.db.UpdateCodexTokenAndUsage(m)
+		}
+		codex.ApplyHeaders(req, m.APIKey, m.CodexAccountID, true)
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
+		req.Header.Set("x-openai-internal-codex-residency", "us")
+		req.Header.Set("x-client-request-id", sessionIDOrRandom(sessionID))
+		req.Header.Set("x-codex-installation-id", "kiro-proxy")
 	default:
 		req.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}
@@ -417,7 +434,7 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 		req.Header.Set("session-id", sessionID)
 	}
 
-	client, err := f.clientForRequest()
+	client, err := f.clientForProxy(m.ProxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -626,4 +643,83 @@ func sanitizedHeaders(headers http.Header) map[string][]string {
 func isSensitiveHeader(key string) bool {
 	key = strings.ToLower(key)
 	return key == "authorization" || key == "proxy-authorization" || key == "x-api-key" || key == "api-key" || key == "cookie" || key == "set-cookie"
+}
+
+func reqFromResponse(resp *http.Response) *http.Request {
+	if resp == nil {
+		return nil
+	}
+	return resp.Request
+}
+
+func kiroModelID(pre *Preflight, m *store.Model) string {
+	if pre != nil && pre.Conv != nil && pre.Conv.ModelID != "" {
+		return pre.Conv.ModelID
+	}
+	if m != nil {
+		if m.Name != "" {
+			return m.Name
+		}
+		return m.ModelID
+	}
+	return ""
+}
+
+func buildUpstreamErrorMessage(statusCode int, status string, body []byte) string {
+	reason := extractUpstreamErrorReason(body)
+	if reason == "" {
+		reason = strings.TrimSpace(status)
+	}
+	if reason == "" {
+		reason = "上游服务没有返回具体原因"
+	}
+
+	return fmt.Sprintf("上游模型服务返回错误，HTTP 状态码：%d。\n\n错误原因：%s\n\n请检查当前模型的 API Key、额度、接口地址、模型名称和请求参数是否正确；如果这是 5xx 错误，通常表示上游服务临时异常，稍后重试即可。", statusCode, reason)
+}
+
+func extractUpstreamErrorReason(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return ""
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		if reason := findErrorReason(parsed, 0); reason != "" {
+			return truncate(reason, 800)
+		}
+	}
+	return truncate(text, 800)
+}
+
+func findErrorReason(v interface{}, depth int) string {
+	if depth > 4 || v == nil {
+		return ""
+	}
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case map[string]interface{}:
+		for _, key := range []string{"message", "reason", "detail", "error", "type", "code"} {
+			if val, ok := x[key]; ok {
+				if reason := findErrorReason(val, depth+1); reason != "" {
+					return reason
+				}
+			}
+		}
+	case []interface{}:
+		for _, item := range x {
+			if reason := findErrorReason(item, depth+1); reason != "" {
+				return reason
+			}
+		}
+	}
+	return ""
+}
+
+func sessionIDOrRandom(sessionID string) string {
+	if strings.TrimSpace(sessionID) != "" {
+		return sessionID
+	}
+	return fmt.Sprintf("kiro-proxy-%d", time.Now().UnixNano())
 }

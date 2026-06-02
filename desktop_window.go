@@ -39,7 +39,8 @@ func (c *desktopWindowController) create() {
 }
 
 func (c *desktopWindowController) run() {
-	// webview/cocoa 要求 GUI 事件循环在主线程；systray 在后台 goroutine 中运行。
+	// webview/cocoa 要求 GUI 事件循环在主线程；macOS 托盘通过 systray.Register
+	// 复用该事件循环，其他平台的托盘事件循环仍在后台 goroutine 中运行。
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	c.w.Run()
