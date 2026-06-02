@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type caStatusResp struct {
@@ -237,12 +238,19 @@ func isCATrustedWindows(cert *x509.Certificate) bool {
 	h := sha1.Sum(cert.Raw)
 	thumbprint := fmt.Sprintf("%X", h[:])
 
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
-		fmt.Sprintf(
-			`Get-ChildItem -Path Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq '%s' } | Select-Object -First 1 | ForEach-Object { Write-Output $_.Thumbprint }`,
-			thumbprint,
-		),
-	)
+	psScript := fmt.Sprintf(`
+$thumbprint = '%s'
+$cert = Get-ChildItem -Path Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq $thumbprint } | Select-Object -First 1
+if ($cert) { Write-Output $cert.Thumbprint }
+`, thumbprint)
+
+	tmpScript := filepath.Join(os.TempDir(), "kiro_check_ca.ps1")
+	if err := os.WriteFile(tmpScript, []byte(psScript), 0600); err != nil {
+		return isCATrustedCertutil(thumbprint)
+	}
+	defer os.Remove(tmpScript)
+
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmpScript)
 	cmd.SysProcAttr = sysProcAttr()
 	out, err := cmd.Output()
 	if err != nil {
@@ -251,7 +259,7 @@ func isCATrustedWindows(cert *x509.Certificate) bool {
 	}
 
 	result := strings.TrimSpace(string(out))
-	return len(result) > 0
+	return normalizeCertThumbprint(result) == thumbprint
 }
 
 // isCATrustedCertutil 使用 certutil 作为后备方案查询证书
@@ -262,8 +270,17 @@ func isCATrustedCertutil(thumbprint string) bool {
 	if err != nil {
 		return false
 	}
-	// certutil 输出中搜索指纹（不区分大小写）
-	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(thumbprint))
+	// certutil 在部分 Windows 版本/语言环境下会把指纹按字节用空格分隔，需归一化后再比对。
+	return strings.Contains(normalizeCertThumbprint(string(out)), normalizeCertThumbprint(thumbprint))
+}
+
+func normalizeCertThumbprint(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == ':' || r == '\u200e' || r == '\u200f' {
+			return -1
+		}
+		return unicode.ToUpper(r)
+	}, value)
 }
 
 func isCATrustedDarwin(cert *x509.Certificate) bool {
