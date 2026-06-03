@@ -241,7 +241,8 @@ func refreshAndFetchCodexUsage(ctx context.Context, m *store.Model) error {
 	}
 	usage, err := codex.FetchUsage(ctx, m)
 	if err != nil {
-		return err
+		log.Printf("[codex] fetch usage failed, continue without usage: %v", err)
+		return nil
 	}
 	if len(usage.Raw) > 0 {
 		m.CodexUsageJSON = string(usage.Raw)

@@ -196,27 +196,37 @@ func FetchUsage(ctx context.Context, m *store.Model) (*UsageResponse, error) {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/codex/usage", nil)
-	if err != nil {
-		return nil, err
-	}
-	ApplyHeaders(req, m.APIKey, m.CodexAccountID, false)
-	req.Header.Set("Accept", "application/json")
+	paths := []string{"/codex/usage", "/wham/usage"}
+	var lastErr error
+	for _, path := range paths {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
+		if err != nil {
+			return nil, err
+		}
+		ApplyHeaders(req, m.APIKey, m.CodexAccountID, false)
+		req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		_ = resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("获取 Codex 用量失败，%s HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+			continue
+		}
+		var parsed UsageResponse
+		_ = json.Unmarshal(body, &parsed)
+		parsed.Raw = body
+		applyUsageInfo(m, body)
+		return &parsed, nil
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("获取 Codex 用量失败，HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	var parsed UsageResponse
-	_ = json.Unmarshal(body, &parsed)
-	parsed.Raw = body
-	applyUsageInfo(m, body)
-	return &parsed, nil
+	return nil, fmt.Errorf("获取 Codex 用量失败")
 }
 
 func applyUsageInfo(m *store.Model, body []byte) {
@@ -269,10 +279,10 @@ func DecodeTokenProfile(token string) TokenProfile {
 		return TokenProfile{}
 	}
 	profile := TokenProfile{
-		Email:     firstString(data, "email"),
-		PlanType:  firstString(data, "chatgpt_plan_type", "plan_type"),
-		AccountID: firstString(data, "https://api.openai.com/auth", "account_id", "chatgpt_account_id"),
-		UserID:    firstString(data, "chatgpt_user_id", "sub"),
+		Email:     firstNestedString(data, []string{"https://api.openai.com/profile", "email"}, []string{"email"}),
+		PlanType:  firstNestedString(data, []string{"https://api.openai.com/auth", "chatgpt_plan_type"}, []string{"https://api.openai.com/profile", "chatgpt_plan_type"}, []string{"chatgpt_plan_type"}, []string{"plan_type"}),
+		AccountID: firstNestedString(data, []string{"https://api.openai.com/auth", "chatgpt_account_id"}, []string{"https://api.openai.com/auth", "account_id"}, []string{"account_id"}, []string{"chatgpt_account_id"}),
+		UserID:    firstNestedString(data, []string{"https://api.openai.com/auth", "chatgpt_user_id"}, []string{"https://api.openai.com/profile", "chatgpt_user_id"}, []string{"chatgpt_user_id"}, []string{"sub"}),
 	}
 	if exp, ok := data["exp"].(float64); ok {
 		profile.ExpiresAt = int64(exp)
@@ -287,6 +297,24 @@ func firstString(data map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		if v, ok := data[key].(string); ok && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func firstNestedString(data map[string]interface{}, paths ...[]string) string {
+	for _, path := range paths {
+		var current interface{} = data
+		for _, key := range path {
+			m, ok := current.(map[string]interface{})
+			if !ok {
+				current = nil
+				break
+			}
+			current = m[key]
+		}
+		if s := stringFromAny(current); s != "" {
+			return s
 		}
 	}
 	return ""
