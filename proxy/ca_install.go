@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 type caStatusResp struct {
@@ -118,8 +117,8 @@ func (s *Server) handleInstallCA(w http.ResponseWriter, r *http.Request) {
 
 	if installErr == nil {
 		json.NewEncoder(w).Encode(installResp{
-			OK:      true,
-			Message: "✓ 安装命令已执行（系统证书库刷新可能需要几秒），请重启 Kiro 后生效",
+			OK:      false,
+			Message: "安装命令已执行，但未在 Windows 受信任根证书库中检测到该证书。请确认已允许 UAC 管理员授权，或手动安装 CA 证书。",
 		})
 	} else {
 		json.NewEncoder(w).Encode(installResp{
@@ -156,7 +155,7 @@ func installCAWindows(certPath string) error {
 	// 方案：写一个临时 .ps1 脚本，用 Start-Process -Verb RunAs 提权执行
 	// 比内联字符串拼接更可靠，避免引号转义问题
 	psScript := fmt.Sprintf(`
-$certPath = '%s'
+$certPath = %s
 $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath)
 $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
 $store.Open('ReadWrite')
@@ -165,7 +164,7 @@ foreach ($c in $existing) { $store.Remove($c) }
 $store.Add($cert)
 $store.Close()
 Write-Output "OK"
-`, certPath)
+`, powerShellString(certPath))
 
 	// 写临时脚本文件
 	tmpScript := filepath.Join(os.TempDir(), "kiro_install_ca.ps1")
@@ -235,52 +234,84 @@ func isCATrusted(cert *x509.Certificate) bool {
 // 安装证书后当前进程可能一直拿到旧的缓存结果，导致永远检测不到新装的证书。
 func isCATrustedWindows(cert *x509.Certificate) bool {
 	// Windows 证书存储用 SHA1 指纹作为标准索引
-	h := sha1.Sum(cert.Raw)
-	thumbprint := fmt.Sprintf("%X", h[:])
+	thumbprint := certThumbprint(cert)
 
-	psScript := fmt.Sprintf(`
-$thumbprint = '%s'
-$cert = Get-ChildItem -Path Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq $thumbprint } | Select-Object -First 1
-if ($cert) { Write-Output $cert.Thumbprint }
-`, thumbprint)
-
-	tmpScript := filepath.Join(os.TempDir(), "kiro_check_ca.ps1")
-	if err := os.WriteFile(tmpScript, []byte(psScript), 0600); err != nil {
-		return isCATrustedCertutil(thumbprint)
+	if isCATrustedWindowsPowerShell(thumbprint) {
+		return true
 	}
-	defer os.Remove(tmpScript)
 
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tmpScript)
+	// PowerShell 未查到或失败时回退到 certutil。
+	return isCATrustedCertutil(thumbprint)
+}
+
+func certThumbprint(cert *x509.Certificate) string {
+	h := sha1.Sum(cert.Raw)
+	return normalizeThumbprint(fmt.Sprintf("%X", h[:]))
+}
+
+func isCATrustedWindowsPowerShell(thumbprint string) bool {
+	psScript := fmt.Sprintf(`
+$target = %s
+$stores = @(
+  @('Root', 'LocalMachine'),
+  @('Root', 'CurrentUser'),
+  @('AuthRoot', 'LocalMachine'),
+  @('AuthRoot', 'CurrentUser')
+)
+
+foreach ($entry in $stores) {
+  $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($entry[0], $entry[1])
+  try {
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+    foreach ($cert in $store.Certificates) {
+      $certThumbprint = ($cert.Thumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+      if ($certThumbprint -eq $target) {
+        Write-Output 'FOUND'
+        exit 0
+      }
+    }
+  } finally {
+    $store.Close()
+  }
+}
+exit 1
+`, powerShellString(thumbprint))
+
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	cmd.SysProcAttr = sysProcAttr()
 	out, err := cmd.Output()
-	if err != nil {
-		// PowerShell 失败时回退到 certutil
-		return isCATrustedCertutil(thumbprint)
-	}
-
-	result := strings.TrimSpace(string(out))
-	return normalizeCertThumbprint(result) == thumbprint
+	return err == nil && strings.TrimSpace(string(out)) == "FOUND"
 }
 
 // isCATrustedCertutil 使用 certutil 作为后备方案查询证书
 func isCATrustedCertutil(thumbprint string) bool {
-	cmd := exec.Command("certutil", "-store", "Root")
-	cmd.SysProcAttr = sysProcAttr()
-	out, err := cmd.Output()
-	if err != nil {
-		return false
+	for _, args := range [][]string{
+		{"-store", "Root"},
+		{"-user", "-store", "Root"},
+		{"-store", "AuthRoot"},
+		{"-user", "-store", "AuthRoot"},
+	} {
+		cmd := exec.Command("certutil", args...)
+		cmd.SysProcAttr = sysProcAttr()
+		out, err := cmd.Output()
+		if err == nil && strings.Contains(normalizeThumbprint(string(out)), thumbprint) {
+			return true
+		}
 	}
-	// certutil 在部分 Windows 版本/语言环境下会把指纹按字节用空格分隔，需归一化后再比对。
-	return strings.Contains(normalizeCertThumbprint(string(out)), normalizeCertThumbprint(thumbprint))
+	return false
 }
 
-func normalizeCertThumbprint(value string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || r == ':' || r == '\u200e' || r == '\u200f' {
-			return -1
+func normalizeThumbprint(s string) string {
+	s = strings.ToUpper(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') {
+			b.WriteByte(c)
 		}
-		return unicode.ToUpper(r)
-	}, value)
+	}
+	return b.String()
 }
 
 func isCATrustedDarwin(cert *x509.Certificate) bool {
@@ -296,4 +327,8 @@ func isCATrustedDarwin(cert *x509.Certificate) bool {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func powerShellString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
