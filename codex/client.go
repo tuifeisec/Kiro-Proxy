@@ -3,6 +3,8 @@ package codex
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	json "github.com/goccy/go-json"
@@ -17,7 +19,9 @@ import (
 
 const (
 	OAuthClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
+	OAuthAuthURL     = "https://auth.openai.com/oauth/authorize"
 	OAuthTokenURL    = "https://auth.openai.com/oauth/token"
+	OAuthRedirectURI = "http://localhost:1455/auth/callback"
 	DefaultBaseURL   = "https://chatgpt.com/backend-api"
 	DefaultEndpoint  = "/codex/responses"
 	RefreshMarginSec = 300
@@ -36,6 +40,18 @@ type TokenProfile struct {
 	AccountID string
 	UserID    string
 	ExpiresAt int64
+}
+
+type OAuthSession struct {
+	State        string
+	CodeVerifier string
+	RedirectURI  string
+	CreatedAt    time.Time
+}
+
+type OAuthStart struct {
+	State   string `json:"state"`
+	AuthURL string `json:"auth_url"`
 }
 
 type UsageResponse struct {
@@ -137,6 +153,22 @@ func applyTokenResponse(m *store.Model, tokens *TokenResponse) {
 	m.CodexPlanType = profile.PlanType
 	m.CodexAccountID = profile.AccountID
 }
+func ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyAddr string) (*TokenResponse, error) {
+	code = strings.TrimSpace(code)
+	codeVerifier = strings.TrimSpace(codeVerifier)
+	redirectURI = strings.TrimSpace(redirectURI)
+	if code == "" || codeVerifier == "" || redirectURI == "" {
+		return nil, fmt.Errorf("code, code_verifier, redirect_uri 不能为空")
+	}
+	body := url.Values{}
+	body.Set("grant_type", "authorization_code")
+	body.Set("client_id", OAuthClientID)
+	body.Set("code", code)
+	body.Set("redirect_uri", redirectURI)
+	body.Set("code_verifier", codeVerifier)
+	return requestToken(ctx, body, proxyAddr, "交换 Codex OAuth code")
+}
+
 func RefreshAccessToken(ctx context.Context, refreshToken, proxyAddr string) (*TokenResponse, error) {
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
@@ -146,7 +178,10 @@ func RefreshAccessToken(ctx context.Context, refreshToken, proxyAddr string) (*T
 	body.Set("grant_type", "refresh_token")
 	body.Set("client_id", OAuthClientID)
 	body.Set("refresh_token", refreshToken)
+	return requestToken(ctx, body, proxyAddr, "刷新 Codex token")
+}
 
+func requestToken(ctx context.Context, body url.Values, proxyAddr, action string) (*TokenResponse, error) {
 	client, err := upstreamproxy.NewClient(proxyAddr, 60*time.Second)
 	if err != nil {
 		return nil, err
@@ -171,7 +206,7 @@ func RefreshAccessToken(ctx context.Context, refreshToken, proxyAddr string) (*T
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("刷新 Codex token 失败，HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil, fmt.Errorf("%s 失败，HTTP %d: %s", action, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	var out TokenResponse
 	if err := json.Unmarshal(respBody, &out); err != nil {
@@ -181,6 +216,70 @@ func RefreshAccessToken(ctx context.Context, refreshToken, proxyAddr string) (*T
 		return nil, fmt.Errorf("Codex token 响应缺少 access_token")
 	}
 	return &out, nil
+}
+
+func NewOAuthSession() (*OAuthSession, string, error) {
+	verifier, challenge, err := generatePKCE()
+	if err != nil {
+		return nil, "", err
+	}
+	state, err := randomURLString(16)
+	if err != nil {
+		return nil, "", err
+	}
+	session := &OAuthSession{
+		State:        state,
+		CodeVerifier: verifier,
+		RedirectURI:  OAuthRedirectURI,
+		CreatedAt:    time.Now(),
+	}
+	return session, BuildAuthURL(session.RedirectURI, state, challenge), nil
+}
+
+func BuildAuthURL(redirectURI, state, codeChallenge string) string {
+	params := [][2]string{
+		{"response_type", "code"},
+		{"client_id", OAuthClientID},
+		{"redirect_uri", redirectURI},
+		{"scope", "openid profile email offline_access"},
+		{"code_challenge", codeChallenge},
+		{"code_challenge_method", "S256"},
+		{"id_token_add_organizations", "true"},
+		{"codex_cli_simplified_flow", "true"},
+		{"state", state},
+		{"originator", "codex_cli_rs"},
+	}
+	parts := make([]string, 0, len(params))
+	for _, param := range params {
+		parts = append(parts, queryEscapeSpace(param[0])+"="+queryEscapeSpace(param[1]))
+	}
+	return OAuthAuthURL + "?" + strings.Join(parts, "&")
+}
+
+func queryEscapeSpace(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+func generatePKCE() (verifier, challenge string, err error) {
+	verifier, err = randomURLString(32)
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	challenge = base64.RawURLEncoding.EncodeToString(sum[:])
+	return verifier, challenge, nil
+}
+
+func randomURLString(n int) (string, error) {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func ApplyTokenResponse(m *store.Model, tokens *TokenResponse) {
+	applyTokenResponse(m, tokens)
 }
 
 func FetchUsage(ctx context.Context, m *store.Model) (*UsageResponse, error) {

@@ -50,13 +50,14 @@ func (s *Server) setupInterceptor() {
 
 		// 抓包模式：只记录不转发，放行到原始服务器
 		if IsCaptureMode() {
-			// 读取 body 记录到日志（不截断）
+			// 始终记录请求详情；有 body 时读取后恢复，避免影响后续放行。
+			var body []byte
 			if req.Body != nil {
-				body, _ := io.ReadAll(req.Body)
+				body, _ = io.ReadAll(req.Body)
 				req.Body.Close()
 				req.Body = io.NopCloser(bytes.NewReader(body))
-				s.logger.Debug("capture", fmt.Sprintf("[请求] %s %s%s", req.Method, host, path), formatCaptureRequestDetail(req, protocol, body))
 			}
+			s.logger.Debug("capture", fmt.Sprintf("[请求] %s %s%s", req.Method, host, path), formatCaptureRequestDetail(req, protocol, body))
 			return req, nil // 放行
 		}
 
@@ -462,15 +463,20 @@ func (s *Server) setupCaptureResponse() {
 			return resp
 		}
 
-		// 读取响应 body 记录
+		// 读取响应 body 后恢复，确保详细日志能展示返回数据且不影响客户端读取。
+		var body []byte
 		if resp.Body != nil {
-			body, err := io.ReadAll(resp.Body)
+			var err error
+			body, err = io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if err == nil {
-				resp.Body = io.NopCloser(bytes.NewReader(body))
-				s.logger.Debug("capture", fmt.Sprintf("[响应] status=%d %s%s", resp.StatusCode, host, ctx.Req.URL.Path), formatCaptureResponseDetail(ctx.Req, resp, protocol, body))
+			if err != nil {
+				resp.Body = io.NopCloser(bytes.NewReader(nil))
+				s.logger.Warn("capture", fmt.Sprintf("[响应] 读取失败 status=%d %s%s", resp.StatusCode, host, ctx.Req.URL.Path), err.Error())
+				return resp
 			}
+			resp.Body = io.NopCloser(bytes.NewReader(body))
 		}
+		s.logger.Debug("capture", fmt.Sprintf("[响应] status=%d %s%s", resp.StatusCode, host, ctx.Req.URL.Path), formatCaptureResponseDetail(ctx.Req, resp, protocol, body))
 		return resp
 	})
 }

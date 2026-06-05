@@ -11,8 +11,10 @@ import (
 	"kiro-proxy/store"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -168,6 +170,92 @@ func maskKey(key string) string {
 
 func isMasked(key string) bool {
 	return strings.Contains(key, "****")
+}
+
+var codexOAuthSessions sync.Map
+
+func (s *Server) handleStartCodexOAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	session, authURL, err := codex.NewOAuthSession()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "创建 Codex OAuth 会话失败: "+err.Error())
+		return
+	}
+	codexOAuthSessions.Store(session.State, session)
+	writeOK(w, codex.OAuthStart{State: session.State, AuthURL: authURL})
+}
+
+func (s *Server) handleExchangeCodexOAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		CallbackURL string `json:"callback_url"`
+		ProxyURL    string `json:"proxy_url"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	callbackURL := strings.TrimSpace(body.CallbackURL)
+	if callbackURL == "" {
+		writeError(w, http.StatusBadRequest, "callback_url 不能为空")
+		return
+	}
+	u, err := url.Parse(callbackURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		writeError(w, http.StatusBadRequest, "无效的回调 URL")
+		return
+	}
+	q := u.Query()
+	if oauthErr := q.Get("error"); oauthErr != "" {
+		desc := q.Get("error_description")
+		if desc == "" {
+			desc = oauthErr
+		}
+		writeError(w, http.StatusBadRequest, "Codex OAuth 授权失败: "+desc)
+		return
+	}
+	code := strings.TrimSpace(q.Get("code"))
+	state := strings.TrimSpace(q.Get("state"))
+	if code == "" || state == "" {
+		writeError(w, http.StatusBadRequest, "回调 URL 必须包含 code 和 state")
+		return
+	}
+	rawSession, ok := codexOAuthSessions.Load(state)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "Codex OAuth 会话不存在或已过期，请重新生成授权链接")
+		return
+	}
+	session, ok := rawSession.(*codex.OAuthSession)
+	if !ok || time.Since(session.CreatedAt) > 10*time.Minute {
+		codexOAuthSessions.Delete(state)
+		writeError(w, http.StatusBadRequest, "Codex OAuth 会话已过期，请重新生成授权链接")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	tokens, err := codex.ExchangeCode(ctx, code, session.CodeVerifier, session.RedirectURI, body.ProxyURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Codex OAuth 换取 token 失败: "+err.Error())
+		return
+	}
+	codexOAuthSessions.Delete(state)
+	m := &store.Model{Provider: "codex"}
+	codex.ApplyTokenResponse(m, tokens)
+	writeOK(w, map[string]interface{}{
+		"access_token":            m.APIKey,
+		"refresh_token":           m.RefreshToken,
+		"expires_at":              m.AccessTokenExpiresAt,
+		"codex_email":             m.CodexEmail,
+		"codex_plan_type":         m.CodexPlanType,
+		"codex_account_id":        m.CodexAccountID,
+		"access_token_expires_at": m.AccessTokenExpiresAt,
+	})
 }
 
 func (s *Server) handleRefreshCodexModel(w http.ResponseWriter, r *http.Request) {

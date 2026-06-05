@@ -53,3 +53,17 @@ export async function refreshCodexModel(id) {
   })
   return parseJSONResponse(r)
 }
+
+export async function startCodexOAuth() {
+  const r = await fetch(`${BASE}/api/codex-oauth/start`, { method: 'POST' })
+  return parseJSONResponse(r)
+}
+
+export async function exchangeCodexOAuth(callbackUrl, proxyUrl) {
+  const r = await fetch(`${BASE}/api/codex-oauth/exchange`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_url: callbackUrl, proxy_url: proxyUrl || '' })
+  })
+  return parseJSONResponse(r)
+}

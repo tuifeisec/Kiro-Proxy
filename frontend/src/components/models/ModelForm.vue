@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
+import { startCodexOAuth, exchangeCodexOAuth } from '../../api/models.js'
 import IconEye from '../icons/IconEye.vue'
 import IconEyeOff from '../icons/IconEyeOff.vue'
 
@@ -36,6 +37,10 @@ const defaultForm = () => ({
 const form = ref(defaultForm())
 const showKey = ref(false)
 const loadingModel = ref(false)
+const oauthLoading = ref(false)
+const oauthAuthUrl = ref('')
+const oauthCallbackUrl = ref('')
+const oauthError = ref('')
 
 watch(() => props.visible, (val) => {
   if (val) {
@@ -46,6 +51,9 @@ watch(() => props.visible, (val) => {
       form.value = defaultForm()
     }
     showKey.value = false
+    oauthAuthUrl.value = ''
+    oauthCallbackUrl.value = ''
+    oauthError.value = ''
     loadingModel.value = false
   }
 })
@@ -102,6 +110,43 @@ function handleSave() {
   if (props.saving) return
   emit('save', { ...form.value })
 }
+
+async function handleStartOAuth() {
+  if (oauthLoading.value) return
+  oauthLoading.value = true
+  oauthError.value = ''
+  try {
+    const data = await startCodexOAuth()
+    oauthAuthUrl.value = data.auth_url || ''
+    if (oauthAuthUrl.value) {
+      window.open(oauthAuthUrl.value, '_blank', 'noopener,noreferrer')
+    }
+  } catch (e) {
+    oauthError.value = e?.message || '创建 Codex 授权链接失败'
+  } finally {
+    oauthLoading.value = false
+  }
+}
+
+async function handleExchangeOAuth() {
+  if (oauthLoading.value) return
+  oauthLoading.value = true
+  oauthError.value = ''
+  try {
+    const data = await exchangeCodexOAuth(oauthCallbackUrl.value, form.value.proxy_url)
+    const payload = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at || data.access_token_expires_at
+    }
+    form.value.refresh_token = JSON.stringify(payload, null, 2)
+    oauthCallbackUrl.value = ''
+  } catch (e) {
+    oauthError.value = e?.message || 'Codex 授权回调处理失败'
+  } finally {
+    oauthLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -110,9 +155,17 @@ function handleSave() {
       <div class="absolute inset-0 bg-black/30" @click="emit('cancel')"></div>
 
       <div class="relative bg-white border border-[#e5e7eb] rounded-xl w-full max-w-2xl mx-4 p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-        <h2 class="text-base font-semibold text-[#111827] mb-5">
-          {{ model ? '编辑模型' : '新增模型' }}
-        </h2>
+        <div class="flex items-start justify-between gap-4 mb-5">
+          <h2 class="text-base font-semibold text-[#111827]">
+            {{ model ? '编辑模型' : '新增模型' }}
+          </h2>
+          <div class="flex justify-end gap-3">
+            <button type="button" class="px-4 py-2 text-sm text-[#6b7280] hover:text-[#111827] border border-[#e5e7eb] rounded-md disabled:opacity-50"
+              :disabled="saving" @click="emit('cancel')">取消</button>
+            <button type="button" class="px-4 py-2 text-sm text-white bg-[#10b981] hover:bg-[#059669] rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</button>
+          </div>
+        </div>
 
         <div v-if="error" class="mb-4 px-3 py-2 text-sm text-[#ef4444] bg-[#fef2f2] border border-[#ef4444]/20 rounded-md whitespace-pre-wrap">
           {{ error }}
@@ -123,6 +176,7 @@ function handleSave() {
           <label class="block text-xs text-[#6b7280] mb-1.5">Provider</label>
           <div class="flex gap-2">
             <button
+              type="button"
               class="px-4 py-1.5 text-xs rounded-md border transition-colors"
               :class="form.provider === 'openai'
                 ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
@@ -130,6 +184,7 @@ function handleSave() {
               @click="form.provider = 'openai'"
             >OpenAI</button>
             <button
+              type="button"
               class="px-4 py-1.5 text-xs rounded-md border transition-colors"
               :class="form.provider === 'anthropic'
                 ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
@@ -137,6 +192,7 @@ function handleSave() {
               @click="form.provider = 'anthropic'"
             >Anthropic</button>
             <button
+              type="button"
               class="px-4 py-1.5 text-xs rounded-md border transition-colors"
               :class="form.provider === 'gemini'
                 ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
@@ -144,6 +200,7 @@ function handleSave() {
               @click="form.provider = 'gemini'"
             >Gemini</button>
             <button
+              type="button"
               class="px-4 py-1.5 text-xs rounded-md border transition-colors"
               :class="form.provider === 'codex'
                 ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
@@ -151,9 +208,10 @@ function handleSave() {
               @click="form.provider = 'codex'"
             >Codex</button>
           </div>
+          <div v-if="form.provider === 'codex'" class="mt-3 px-3 py-2 text-xs text-[#92400e] bg-[#fffbeb] border border-[#f59e0b]/30 rounded-md">
+            Codex OAuth 反向代理：使用 ChatGPT 订阅的 Codex OAuth 反代可能违反 OpenAI 服务条款
+          </div>
         </div>
-
-        <!-- 两列表单 -->
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-xs text-[#6b7280] mb-1.5">下拉显示名称</label>
@@ -179,26 +237,64 @@ function handleSave() {
             <p class="text-[10px] text-[#6b7280] mt-1">只填写上游域名或基础地址，系统不会自动拼接版本路径</p>
           </div>
 
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">{{ form.provider === 'codex' ? 'Refresh Token' : '访问密钥' }}</label>
+          <div :class="form.provider === 'codex' ? 'col-span-2' : ''">
+            <label class="block text-xs text-[#6b7280] mb-1.5">{{ form.provider === 'codex' ? 'Refresh Token / Codex Auth JSON' : '访问密钥' }}</label>
             <div class="relative">
-              <input v-if="form.provider === 'codex'" v-model="form.refresh_token"
-                :type="showKey ? 'text' : 'password'"
-                class="w-full px-3 py-2 pr-10 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="粘贴 Codex refresh_token" />
+              <textarea v-if="form.provider === 'codex'" v-model="form.refresh_token"
+                :rows="showKey ? 5 : 2"
+                :class="showKey ? '' : 'blur-sm'"
+                class="w-full px-3 py-2 pr-10 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none resize-y"
+                placeholder="粘贴 Codex refresh_token，或通过下方授权链接生成 auth JSON"></textarea>
               <input v-else v-model="form.api_key"
                 :type="showKey ? 'text' : 'password'"
                 class="w-full px-3 py-2 pr-10 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
                 placeholder="sk-..." />
               <button
-                class="absolute right-2 top-1/2 -translate-y-1/2 text-[#6b7280] hover:text-[#111827]"
+                type="button"
+                class="absolute right-2 top-2 text-[#6b7280] hover:text-[#111827]"
                 @click="showKey = !showKey"
               >
                 <IconEyeOff v-if="showKey" />
                 <IconEye v-else />
               </button>
             </div>
-            <p v-if="form.provider === 'codex'" class="text-[10px] text-[#6b7280] mt-1">保存时会先使用代理刷新 access token 并检测账号有效性</p>
+            <p v-if="form.provider === 'codex'" class="text-[10px] text-[#6b7280] mt-1">可手动粘贴 refresh_token；也可生成授权链接登录，处理回调后会自动填入完整 auth JSON。</p>
+
+            <div v-if="form.provider === 'codex'" class="mt-3 p-3 border border-[#e5e7eb] rounded-md bg-[#f9fafb] space-y-3">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-xs font-medium text-[#374151]">Codex OAuth 授权登录</div>
+                  <p class="text-[10px] text-[#6b7280] mt-1">授权后浏览器会跳转到 localhost 回调地址；如果页面无法打开，复制地址栏完整 URL 到下方处理。</p>
+                </div>
+                <button type="button"
+                  class="shrink-0 px-3 py-1.5 text-xs text-white bg-[#10b981] hover:bg-[#059669] rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="oauthLoading"
+                  @click="handleStartOAuth">{{ oauthLoading ? '处理中...' : '生成授权链接' }}</button>
+              </div>
+
+              <div v-if="oauthAuthUrl" class="space-y-2">
+                <a :href="oauthAuthUrl" target="_blank" rel="noopener noreferrer" class="inline-flex text-xs text-[#10b981] hover:underline">打开授权链接</a>
+                <input :value="oauthAuthUrl" readonly
+                  class="w-full px-3 py-2 text-xs bg-white border border-[#e5e7eb] rounded-md text-[#6b7280] focus:outline-none" />
+              </div>
+
+              <div class="space-y-2">
+                <textarea v-model="oauthCallbackUrl" rows="2"
+                  class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none resize-none"
+                  placeholder="粘贴 http://localhost:1455/auth/callback?... 回调 URL"></textarea>
+                <div class="flex items-center justify-between gap-3">
+                  <p class="text-[10px] text-[#6b7280]">处理成功后会自动填入上方 Refresh Token / Auth JSON。</p>
+                  <button type="button"
+                    class="px-3 py-1.5 text-xs text-[#10b981] border border-[#10b981]/40 rounded-md hover:bg-[#ecfdf5] disabled:opacity-50 disabled:cursor-not-allowed"
+                    :disabled="oauthLoading || !oauthCallbackUrl.trim()"
+                    @click="handleExchangeOAuth">处理回调</button>
+                </div>
+              </div>
+
+              <div v-if="oauthError" class="px-3 py-2 text-xs text-[#ef4444] bg-[#fef2f2] border border-[#ef4444]/20 rounded-md whitespace-pre-wrap">
+                {{ oauthError }}
+              </div>
+            </div>
           </div>
 
           <div v-if="form.provider !== 'codex'">
@@ -253,7 +349,7 @@ function handleSave() {
         <div class="mt-4">
           <div class="flex items-center justify-between mb-2">
             <label class="block text-xs font-medium text-[#374151]">Credit 价格配置</label>
-            <button class="text-[10px] text-[#10b981] hover:underline" @click="applyDefaultPrices(form.provider)">恢复当前 Provider 默认价格</button>
+            <button type="button" class="text-[10px] text-[#10b981] hover:underline" @click="applyDefaultPrices(form.provider)">恢复当前 Provider 默认价格</button>
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
@@ -305,12 +401,6 @@ function handleSave() {
             placeholder="Kiro 模型下拉框里的描述文字（可选）"></textarea>
         </div>
 
-        <div class="flex justify-end gap-3 mt-6">
-          <button class="px-4 py-2 text-sm text-[#6b7280] hover:text-[#111827] border border-[#e5e7eb] rounded-md disabled:opacity-50"
-            :disabled="saving" @click="emit('cancel')">取消</button>
-          <button class="px-4 py-2 text-sm text-white bg-[#10b981] hover:bg-[#059669] rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</button>
-        </div>
       </div>
     </div>
   </Teleport>
