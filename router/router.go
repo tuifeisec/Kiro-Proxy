@@ -176,7 +176,7 @@ func (r *Router) ResolveClassifier() *Route {
 
 // DetectProtocol 根据 host 和 path 判断请求协议类型
 func DetectProtocol(host, path string) string {
-	if isAWSHost(host) {
+	if isAWSHost(host) || isKiroDevHost(host) {
 		switch {
 		case hasSuffix(path, "/generateAssistantResponse"):
 			return "kiro"
@@ -194,6 +194,11 @@ func DetectProtocol(host, path string) string {
 func isAWSHost(host string) bool {
 	h := strings.Split(host, ":")[0]
 	return strings.HasSuffix(h, ".amazonaws.com")
+}
+
+func isKiroDevHost(host string) bool {
+	h := strings.Split(host, ":")[0]
+	return h == "kiro.dev" || strings.HasSuffix(h, ".kiro.dev")
 }
 
 func hasSuffix(s, suffix string) bool {
