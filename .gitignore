@@ -45,3 +45,5 @@ Desktop.ini
 # Test scripts
 test_sse.ps1
 install-ca.ps1
+
+.codegraph
