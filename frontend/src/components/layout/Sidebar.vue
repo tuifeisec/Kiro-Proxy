@@ -35,6 +35,6 @@ const navItems = [
     </nav>
 
     <!-- Bottom spacer -->
-    <div class="text-[#9ca3af] text-xs select-none">v1</div>
+    <div class="text-[#9ca3af] text-xs select-none">v2</div>
   </aside>
 </template>
