@@ -176,7 +176,10 @@ func (r *Router) ResolveClassifier() *Route {
 
 // DetectProtocol 根据 host 和 path 判断请求协议类型
 func DetectProtocol(host, path string) string {
-	if isAWSHost(host) || isKiroDevHost(host) {
+	hostname := normalizeHost(host)
+
+	// 旧版本：Kiro 通过 AWS CodeWhisperer 域名访问。
+	if isAWSHostName(hostname) {
 		switch {
 		case hasSuffix(path, "/generateAssistantResponse"):
 			return "kiro"
@@ -185,20 +188,48 @@ func DetectProtocol(host, path string) string {
 		case contains(path, "/getUsageLimits"):
 			return "kiro-usage-limits"
 		default:
-			return "kiro-passthrough" // 其他 Kiro 官方请求放行到原始服务器
+			return "kiro-passthrough"
 		}
 	}
+
+	// 新版本：Kiro 按职责拆分为 runtime / management 子域名。
+	if isKiroRuntimeHostName(hostname) {
+		switch {
+		case hasSuffix(path, "/generateAssistantResponse"):
+			return "kiro"
+		default:
+			return "kiro-passthrough"
+		}
+	}
+
+	if isKiroManagementHostName(hostname) {
+		switch {
+		case path == "/":
+			return "kiro-models"
+		case contains(path, "/getUsageLimits"):
+			return "kiro-usage-limits"
+		default:
+			return "kiro-passthrough"
+		}
+	}
+
 	return ""
 }
 
-func isAWSHost(host string) bool {
-	h := strings.Split(host, ":")[0]
-	return strings.HasSuffix(h, ".amazonaws.com")
+func normalizeHost(host string) string {
+	return strings.Split(host, ":")[0]
 }
 
-func isKiroDevHost(host string) bool {
-	h := strings.Split(host, ":")[0]
-	return h == "kiro.dev" || strings.HasSuffix(h, ".kiro.dev")
+func isAWSHostName(host string) bool {
+	return strings.HasSuffix(host, ".amazonaws.com")
+}
+
+func isKiroRuntimeHostName(host string) bool {
+	return host == "runtime.kiro.dev" || strings.HasPrefix(host, "runtime.") && strings.HasSuffix(host, ".kiro.dev")
+}
+
+func isKiroManagementHostName(host string) bool {
+	return host == "management.kiro.dev" || strings.HasPrefix(host, "management.") && strings.HasSuffix(host, ".kiro.dev")
 }
 
 func hasSuffix(s, suffix string) bool {
