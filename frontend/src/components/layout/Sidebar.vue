@@ -2,6 +2,7 @@
 import { useRoute } from 'vue-router'
 import IconDashboard from '../icons/IconDashboard.vue'
 import IconModels from '../icons/IconModels.vue'
+import IconUsage from '../icons/IconUsage.vue'
 import IconLogs from '../icons/IconLogs.vue'
 
 const route = useRoute()
@@ -9,6 +10,7 @@ const route = useRoute()
 const navItems = [
   { path: '/', label: '仪表盘', icon: IconDashboard },
   { path: '/models', label: '模型配置', icon: IconModels },
+  { path: '/usage', label: '用量明细', icon: IconUsage },
   { path: '/inspector', label: '流量抓包', icon: IconLogs },
 ]
 </script>
@@ -16,7 +18,7 @@ const navItems = [
 <template>
   <aside class="w-14 flex flex-col items-center py-4 bg-[#f9fafb] border-r border-[#e5e7eb] shrink-0">
     <!-- Logo -->
-    <div class="mb-6 w-8 h-8 rounded-lg bg-[#10b981] flex items-center justify-center text-white font-bold text-sm select-none">
+    <div class="mb-6 w-8 h-8 rounded-lg bg-[#10b981] flex items-center justify-center text-white font-bold text-sm shadow-sm ring-1 ring-black/5 select-none">
       K
     </div>
 

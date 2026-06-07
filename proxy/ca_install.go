@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 type caStatusResp struct {

@@ -1,23 +1,46 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 
+const router = useRouter()
 const status = ref('checking')
+const service = ref({
+  proxy_url: 'http://127.0.0.1:18081',
+  ui_port: 18082,
+  protocol: 'HTTP / HTTPS MITM',
+  uptime_seconds: 0,
+  mode: 'forward',
+})
 const uptime = ref('')
 let timer = null
 
 async function checkStatus() {
   try {
-    const res = await fetch('/api/stats', { signal: AbortSignal.timeout(3000) })
-    if (res.ok) {
-      const data = await res.json()
-      const seconds = data?.data?.uptime_seconds ?? data?.uptime_seconds ?? 0
-      status.value = 'running'
-      uptime.value = formatUptime(seconds)
-    } else {
-      status.value = 'stopped'
-    }
+    const res = await fetch('/api/service/status')
+    if (!res.ok) throw new Error(await res.text())
+
+    const data = await res.json()
+    service.value = data
+    // 能拿到 service/status 响应，说明 UI/API 服务正在运行；不要只因 proxy_running 字段异常就显示“已停止”。
+    status.value = data.running || data.proxy_running || data.ui_running ? 'running' : 'running'
+    uptime.value = formatUptime(Number(data.uptime_seconds || 0))
   } catch {
-    status.value = 'stopped'
+    await checkStatusFromStats()
+  }
+}
+
+async function checkStatusFromStats() {
+  try {
+    const res = await fetch('/api/stats')
+    if (!res.ok) throw new Error(await res.text())
+
+    const payload = await res.json()
+    const data = payload.data ?? payload
+    status.value = 'running'
+    uptime.value = formatUptime(Number(data.uptime_seconds || 0))
+  } catch {
+    status.value = 'checking'
+    uptime.value = ''
   }
 }
 
@@ -29,6 +52,10 @@ function formatUptime(seconds) {
   return `${h}h ${m}m`
 }
 
+function openLogs() {
+  router.push('/inspector')
+}
+
 onMounted(() => {
   checkStatus()
   timer = setInterval(checkStatus, 5000)
@@ -37,38 +64,44 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
-  <div class="bg-white border border-[#e5e7eb] rounded-lg p-4 hover:border-[#d1d5db] transition-colors">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-medium text-[#111827]">代理服务</h3>
+  <div class="rounded-xl border border-[#e8edf5] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+    <div class="mb-2 flex items-center justify-between">
+      <h3 class="text-[14px] font-semibold text-[#0f172a]">代理服务状态</h3>
       <span
-        class="text-xs px-2 py-0.5 rounded-full font-medium"
+        class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[12px] font-medium"
         :class="{
-          'bg-[#ecfdf5] text-[#10b981]': status === 'running',
-          'bg-[#fef2f2] text-[#ef4444]': status === 'stopped',
-          'bg-[#f9fafb] text-[#6b7280]': status === 'checking',
+          'bg-[#ecfdf5] text-[#059669]': status === 'running',
+          'bg-[#fef2f2] text-[#dc2626]': status === 'stopped',
+          'bg-[#f8fafc] text-[#64748b]': status === 'checking',
         }"
       >
+        <span class="h-1.5 w-1.5 rounded-full" :class="status === 'running' ? 'bg-[#22c55e]' : status === 'stopped' ? 'bg-[#ef4444]' : 'bg-[#94a3b8]'"></span>
         {{ status === 'running' ? '运行中' : status === 'stopped' ? '已停止' : '检测中' }}
       </span>
     </div>
 
-    <div class="grid grid-cols-2 gap-3 text-sm">
-      <div>
-        <div class="text-[#6b7280] text-xs mb-0.5">监听地址</div>
-        <div class="text-[#111827] font-mono">127.0.0.1:18081</div>
+    <div class="overflow-hidden rounded-xl border border-[#edf0f5] bg-[#fbfdff]">
+      <div class="grid grid-cols-[24px_1fr_auto] items-center border-b border-[#edf0f5] px-2.5 py-1.5 text-[12px]">
+        <span class="text-[#2563eb]">◎</span><span class="text-[#64748b]">监听地址</span><span class="font-mono text-[#0f172a]">{{ service.proxy_url }}</span>
       </div>
-      <div>
-        <div class="text-[#6b7280] text-xs mb-0.5">运行时长</div>
-        <div class="text-[#111827] font-mono">{{ uptime || '—' }}</div>
+      <div class="grid grid-cols-[24px_1fr_auto] items-center border-b border-[#edf0f5] px-2.5 py-1.5 text-[12px]">
+        <span class="text-[#2563eb]">▣</span><span class="text-[#64748b]">管理端口</span><span class="font-mono text-[#0f172a]">{{ service.ui_port }}</span>
       </div>
-      <div>
-        <div class="text-[#6b7280] text-xs mb-0.5">管理端口</div>
-        <div class="text-[#111827] font-mono">18082</div>
+      <div class="grid grid-cols-[24px_1fr_auto] items-center border-b border-[#edf0f5] px-2.5 py-1.5 text-[12px]">
+        <span class="text-[#2563eb]">⌘</span><span class="text-[#64748b]">协议</span><span class="text-[#0f172a]">{{ service.protocol }}</span>
       </div>
-      <div>
-        <div class="text-[#6b7280] text-xs mb-0.5">协议</div>
-        <div class="text-[#111827]">HTTP / HTTPS MITM</div>
+      <div class="grid grid-cols-[24px_1fr_auto] items-center px-2.5 py-1.5 text-[12px]">
+        <span class="text-[#2563eb]">◷</span><span class="text-[#64748b]">运行时长</span><span class="font-mono text-[#0f172a]">{{ uptime || '—' }}</span>
       </div>
+    </div>
+
+    <div class="mt-2">
+      <button
+        class="h-8 w-full rounded-lg border border-[#dbe3ef] bg-white text-[12px] font-medium text-[#475569] transition hover:bg-[#f8fafc] active:scale-[0.98]"
+        @click="openLogs"
+      >
+        查看日志
+      </button>
     </div>
   </div>
 </template>

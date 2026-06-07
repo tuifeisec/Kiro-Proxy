@@ -18,9 +18,7 @@ async function load() {
 
 async function save() {
   saving.value = true
-  await updateSettings({
-    classifier_model_id: classifierModelId.value,
-  })
+  await updateSettings({ classifier_model_id: classifierModelId.value })
   saving.value = false
   saved.value = true
   setTimeout(() => { saved.value = false }, 2000)
@@ -30,38 +28,42 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="bg-white border border-[#e5e7eb] rounded-lg p-4 lg:col-span-3">
-    <h3 class="text-sm font-medium text-[#111827] mb-3">高级设置</h3>
+  <div class="rounded-xl border border-[#e8edf5] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+    <div class="mb-3 flex items-center justify-between">
+      <h3 class="text-[14px] font-semibold text-[#0f172a]">高级设置</h3>
+      <span v-if="saved" class="inline-flex items-center gap-1.5 rounded-full bg-[#ecfdf5] px-2 py-0.5 text-[12px] font-medium text-[#059669]">✓ 已保存</span>
+    </div>
 
-    <div class="space-y-3">
-      <div class="flex items-center gap-3 flex-wrap">
-        <label class="text-xs text-[#6b7280] whitespace-nowrap">Classifier 模型</label>
+    <div class="space-y-2.5">
+      <div>
+        <div class="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-[#475569]">
+          Classifier 模型
+          <span class="text-[#94a3b8]" title="用于判断用户意图">ⓘ</span>
+        </div>
         <select
           v-model="classifierModelId"
-          class="flex-1 min-w-[180px] text-sm bg-white border border-[#e5e7eb] rounded px-2 py-1.5 focus:outline-none focus:border-[#10b981] transition-colors"
+          class="h-9 w-full rounded-lg border border-[#e2e8f0] bg-white px-3 text-[12px] text-[#0f172a] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#dbeafe]"
         >
-          <option value="">(跟随主模型)</option>
-          <option :value="CLASSIFIER_DISABLED_VALUE">(不使用)</option>
+          <option value="">跟随主模型</option>
+          <option :value="CLASSIFIER_DISABLED_VALUE">不使用 Classifier</option>
           <option v-for="m in models" :key="m.id" :value="m.id">
-            {{ m.name }} - {{ m.model_id }}
+            {{ m.name || m.model_id }} - {{ m.model_id }}
           </option>
         </select>
       </div>
 
-      <div class="flex items-center gap-3">
+      <p class="text-[12px] leading-4 text-[#94a3b8]">Classifier 用于判断用户意图，可使用轻量小模型节省费用。</p>
+
+      <div class="flex items-center gap-3 pt-1">
         <button
-          @click="save"
+          class="h-8 rounded-lg bg-[#1677ff] px-3 text-[12px] font-semibold text-white shadow-sm hover:bg-[#0958d9] disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="saving"
-          class="px-3 py-1.5 text-xs text-white bg-[#10b981] rounded hover:bg-[#059669] transition-colors disabled:opacity-50"
+          @click="save"
         >
-          {{ saving ? '保存中...' : '保存' }}
+          {{ saving ? '保存中...' : '保存设置' }}
         </button>
-        <span v-if="saved" class="text-xs text-[#10b981]">✓ 已保存</span>
+        <span v-if="saved" class="text-[12px] text-[#059669]">✓ 设置已同步</span>
       </div>
     </div>
-
-    <p class="text-xs text-[#9ca3af] mt-2">
-      Classifier 用于判断用户意图（Do/Spec），走轻量小模型可以节省费用。模型 API 代理请在各模型配置中单独设置。
-    </p>
   </div>
 </template>

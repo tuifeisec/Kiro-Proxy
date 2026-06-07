@@ -8,6 +8,7 @@ package store
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -227,18 +228,28 @@ func (s *Stats) flushDailyStats() {
 // Snapshot 返回当前统计快照
 func (s *Stats) Snapshot() StatsSnapshot {
 	inputTokens := s.InputTokens.Load()
+	outputTokens := s.OutputTokens.Load()
 	cacheRead := s.CacheRead.Load()
+	today := s.TodayStats()
 	return StatsSnapshot{
-		TotalRequests: s.TotalRequests.Load(),
-		TotalErrors:   s.TotalErrors.Load(),
-		InputTokens:   inputTokens,
-		OutputTokens:  s.OutputTokens.Load(),
-		CacheRead:     cacheRead,
-		CacheWrite:    s.CacheWrite.Load(),
-		Credits:       s.loadCredits(),
-		CacheHitRatio: cacheHitRatio(cacheRead, inputTokens),
-		TotalTokens:   inputTokens + s.OutputTokens.Load(),
-		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
+		TotalRequests:     s.TotalRequests.Load(),
+		TotalErrors:       s.TotalErrors.Load(),
+		InputTokens:       inputTokens,
+		OutputTokens:      outputTokens,
+		CacheRead:         cacheRead,
+		CacheWrite:        s.CacheWrite.Load(),
+		Credits:           s.loadCredits(),
+		CacheHitRatio:     cacheHitRatio(cacheRead, inputTokens),
+		TotalTokens:       inputTokens + outputTokens,
+		UptimeSeconds:     int64(time.Since(s.startTime).Seconds()),
+		TodayRequests:     today.Requests,
+		TodayErrors:       today.Errors,
+		TodayInputTokens:  today.InputTokens,
+		TodayOutputTokens: today.OutputTokens,
+		TodayCacheRead:    today.CacheRead,
+		TodayCacheWrite:   today.CacheWrite,
+		TodayCredits:      today.Credits,
+		TodayTotalTokens:  today.InputTokens + today.OutputTokens,
 	}
 }
 
@@ -294,46 +305,96 @@ func (s *Stats) Clear() error {
 	return nil
 }
 
-// GetDailyStats 获取指定日期范围的按模型统计
+// GetDailyStats 获取指定日期范围的按模型统计，合并数据库与尚未刷盘的内存增量。
 func (s *Stats) GetDailyStats(startDate, endDate string) []DailyModelStats {
-	if s.db == nil {
-		return nil
+	merged := make(map[string]*DailyModelStats)
+	if s.db != nil {
+		results, _ := s.db.QueryDailyStats(startDate, endDate)
+		for _, row := range results {
+			cp := row
+			merged[row.Date+"|"+row.ModelID] = &cp
+		}
 	}
-	results, _ := s.db.QueryDailyStats(startDate, endDate)
+
+	s.dailyMu.Lock()
+	for _, row := range s.dailyStats {
+		if row.Date < startDate || row.Date > endDate {
+			continue
+		}
+		key := row.Date + "|" + row.ModelID
+		cur, ok := merged[key]
+		if !ok {
+			cp := DailyModelStats{Date: row.Date, ModelID: row.ModelID}
+			cur = &cp
+			merged[key] = cur
+		}
+		cur.Requests += row.Requests
+		cur.Errors += row.Errors
+		cur.InputTokens += row.InputTokens
+		cur.OutputTokens += row.OutputTokens
+		cur.CacheRead += row.CacheRead
+		cur.CacheWrite += row.CacheWrite
+		cur.Credits += row.Credits
+	}
+	s.dailyMu.Unlock()
+
+	results := make([]DailyModelStats, 0, len(merged))
+	for _, row := range merged {
+		if row.Requests == 0 && row.Errors == 0 && row.InputTokens == 0 && row.OutputTokens == 0 && row.CacheRead == 0 && row.CacheWrite == 0 && row.Credits == 0 {
+			continue
+		}
+		results = append(results, *row)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Date == results[j].Date {
+			return results[i].ModelID < results[j].ModelID
+		}
+		return results[i].Date > results[j].Date
+	})
 	return results
 }
 
-// TodayCredits 返回按本地时间每日 6:00 分界的当日 Credit 用量。
-func (s *Stats) TodayCredits() float64 {
+// TodayStats 返回按本地时间每日 6:00 分界的当日聚合统计。
+func (s *Stats) TodayStats() DailyModelStats {
 	today := statsDay(time.Now())
-	var total float64
-	if s.db != nil {
-		rows, _ := s.db.QueryDailyStats(today, today)
-		for _, row := range rows {
-			total += row.Credits
-		}
-	}
-	s.dailyMu.Lock()
-	defer s.dailyMu.Unlock()
-	for _, row := range s.dailyStats {
-		if row.Date == today {
-			total += row.Credits
-		}
+	var total DailyModelStats
+	total.Date = today
+	for _, row := range s.GetDailyStats(today, today) {
+		total.Requests += row.Requests
+		total.Errors += row.Errors
+		total.InputTokens += row.InputTokens
+		total.OutputTokens += row.OutputTokens
+		total.CacheRead += row.CacheRead
+		total.CacheWrite += row.CacheWrite
+		total.Credits += row.Credits
 	}
 	return total
 }
 
+// TodayCredits 返回按本地时间每日 6:00 分界的当日 Credit 用量。
+func (s *Stats) TodayCredits() float64 {
+	return s.TodayStats().Credits
+}
+
 type StatsSnapshot struct {
-	TotalRequests int64   `json:"total_requests"`
-	TotalErrors   int64   `json:"total_errors"`
-	InputTokens   int64   `json:"input_tokens"`
-	OutputTokens  int64   `json:"output_tokens"`
-	CacheRead     int64   `json:"cache_read_tokens"`
-	CacheWrite    int64   `json:"cache_write_tokens"`
-	Credits       float64 `json:"credits"`
-	CacheHitRatio float64 `json:"cache_hit_ratio"`
-	TotalTokens   int64   `json:"total_tokens"`
-	UptimeSeconds int64   `json:"uptime_seconds"`
+	TotalRequests     int64   `json:"total_requests"`
+	TotalErrors       int64   `json:"total_errors"`
+	InputTokens       int64   `json:"input_tokens"`
+	OutputTokens      int64   `json:"output_tokens"`
+	CacheRead         int64   `json:"cache_read_tokens"`
+	CacheWrite        int64   `json:"cache_write_tokens"`
+	Credits           float64 `json:"credits"`
+	CacheHitRatio     float64 `json:"cache_hit_ratio"`
+	TotalTokens       int64   `json:"total_tokens"`
+	UptimeSeconds     int64   `json:"uptime_seconds"`
+	TodayRequests     int64   `json:"today_requests"`
+	TodayErrors       int64   `json:"today_errors"`
+	TodayInputTokens  int64   `json:"today_input_tokens"`
+	TodayOutputTokens int64   `json:"today_output_tokens"`
+	TodayCacheRead    int64   `json:"today_cache_read_tokens"`
+	TodayCacheWrite   int64   `json:"today_cache_write_tokens"`
+	TodayCredits      float64 `json:"today_credits"`
+	TodayTotalTokens  int64   `json:"today_total_tokens"`
 }
 
 func statsDay(t time.Time) string {

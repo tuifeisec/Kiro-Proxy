@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"io"
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	json "github.com/goccy/go-json"
 
 	"github.com/elazarl/goproxy"
 )
@@ -138,18 +139,46 @@ func (s *Server) setupInterceptor() {
 			return req, errorResponse(req, http.StatusServiceUnavailable, "no route for model: "+pre.SourceModel)
 		}
 
-		s.logger.Info("router", fmt.Sprintf("路由命中: %s → %s (%s)", pre.SourceModel, route.Model.ModelID, route.Model.BaseURL))
+		s.logger.InfoWithMeta("router", fmt.Sprintf("路由命中: %s → %s (%s)", pre.SourceModel, route.Model.ModelID, route.Model.BaseURL), LogMeta{
+			Model: statsModelID(route.Model),
+			Metadata: map[string]interface{}{
+				"source_model":    pre.SourceModel,
+				"provider":        route.Model.Provider,
+				"base_url":        route.Model.BaseURL,
+				"endpoint":        route.Model.Endpoint,
+				"protocol":        pre.Protocol,
+				"classifier":      pre.IsClassifier,
+				"conversation_id": pre.ConversationID,
+			},
+		})
 		s.rememberMainModel(pre, route)
 
 		// 转发
 		resp, err := s.forwarder.Forward(req, pre, route, s.logger)
 		if err != nil {
-			s.logger.Error("forwarder", "转发失败: "+err.Error())
+			s.logger.ErrorWithMeta("forwarder", "转发失败: "+err.Error(), LogMeta{
+				Model:     statsModelID(route.Model),
+				LatencyMS: time.Since(pre.StartTime).Milliseconds(),
+				Metadata: map[string]interface{}{
+					"protocol":        pre.Protocol,
+					"classifier":      pre.IsClassifier,
+					"conversation_id": pre.ConversationID,
+				},
+			})
 			s.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(route.Model), true)
 			return req, errorResponse(req, http.StatusBadGateway, "upstream error: "+err.Error())
 		}
 
-		s.logger.Info("forwarder", fmt.Sprintf("上游响应: status=%d", resp.StatusCode), formatUpstreamResponseDetail(resp))
+		s.logger.InfoWithMeta("forwarder", fmt.Sprintf("上游响应: status=%d", resp.StatusCode), LogMeta{
+			Model:     statsModelID(route.Model),
+			Status:    resp.StatusCode,
+			LatencyMS: time.Since(pre.StartTime).Milliseconds(),
+			Metadata: map[string]interface{}{
+				"protocol":        pre.Protocol,
+				"classifier":      pre.IsClassifier,
+				"conversation_id": pre.ConversationID,
+			},
+		}, formatUpstreamResponseDetail(resp))
 		return req, resp
 	})
 }

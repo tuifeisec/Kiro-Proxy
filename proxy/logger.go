@@ -5,21 +5,46 @@ package proxy
 
 import (
 	"fmt"
-	json "github.com/goccy/go-json"
 	"log"
 	"os"
 	"sync"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
-// LogEntry 单条日志，推送给前端
+// LogEntry 单条日志，推送给前端并写入 JSONL 文件。
 type LogEntry struct {
-	ID       string `json:"id"`
-	Time     string `json:"time"`
-	Level    string `json:"level"`    // info | warn | error | debug
-	Category string `json:"category"` // proxy | interceptor | forwarder | converter | router
-	Message  string `json:"message"`
-	Detail   string `json:"detail,omitempty"` // 详细数据（body、headers 等）
+	ID               string                 `json:"id"`
+	Date             string                 `json:"date"`
+	Time             string                 `json:"time"`
+	FullTime         string                 `json:"full_time"`
+	Level            string                 `json:"level"`    // info | warn | error | debug
+	Category         string                 `json:"category"` // proxy | interceptor | forwarder | converter | router
+	Message          string                 `json:"message"`
+	Detail           string                 `json:"detail,omitempty"` // 详细数据（body、headers 等）
+	Model            string                 `json:"model,omitempty"`
+	Status           int                    `json:"status,omitempty"`
+	InputTokens      int64                  `json:"input_tokens,omitempty"`
+	OutputTokens     int64                  `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64                  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64                  `json:"cache_write_tokens,omitempty"`
+	Credits          float64                `json:"credits,omitempty"`
+	LatencyMS        int64                  `json:"latency_ms,omitempty"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// LogMeta 是日志结构化字段，常用字段会提升到 LogEntry 顶层，其他字段放入 metadata。
+type LogMeta struct {
+	Model            string
+	Status           int
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	Credits          float64
+	LatencyMS        int64
+	Metadata         map[string]interface{}
 }
 
 // TrafficLogger 日志记录器
@@ -63,22 +88,44 @@ func (tl *TrafficLogger) Log(level, category, message string, detail ...string) 
 	if len(detail) > 0 {
 		det = tl.prepareDetailString(detail[0])
 	}
-	tl.logPrepared(level, category, message, det)
+	tl.logPrepared(level, category, message, det, nil)
 }
 
-func (tl *TrafficLogger) logPrepared(level, category, message, det string) {
+func (tl *TrafficLogger) LogWithMeta(level, category, message string, meta LogMeta, detail ...string) {
+	det := ""
+	if len(detail) > 0 {
+		det = tl.prepareDetailString(detail[0])
+	}
+	tl.logPrepared(level, category, message, det, &meta)
+}
+
+func (tl *TrafficLogger) logPrepared(level, category, message, det string, meta *LogMeta) {
 	tl.mu.Lock()
 	tl.seq++
 	id := fmt.Sprintf("%06d", tl.seq)
 	tl.mu.Unlock()
 
+	now := time.Now()
 	entry := &LogEntry{
 		ID:       id,
-		Time:     time.Now().Format("15:04:05.000"),
+		Date:     logStatsDay(now),
+		Time:     now.Format("15:04:05.000"),
+		FullTime: now.Format(time.RFC3339Nano),
 		Level:    level,
 		Category: category,
 		Message:  message,
 		Detail:   det,
+	}
+	if meta != nil {
+		entry.Model = meta.Model
+		entry.Status = meta.Status
+		entry.InputTokens = meta.InputTokens
+		entry.OutputTokens = meta.OutputTokens
+		entry.CacheReadTokens = meta.CacheReadTokens
+		entry.CacheWriteTokens = meta.CacheWriteTokens
+		entry.Credits = meta.Credits
+		entry.LatencyMS = meta.LatencyMS
+		entry.Metadata = meta.Metadata
 	}
 
 	// 控制台
@@ -111,24 +158,48 @@ func (tl *TrafficLogger) Info(category, msg string, detail ...string) {
 	tl.Log("info", category, msg, detail...)
 }
 
+func (tl *TrafficLogger) InfoWithMeta(category, msg string, meta LogMeta, detail ...string) {
+	tl.LogWithMeta("info", category, msg, meta, detail...)
+}
+
 func (tl *TrafficLogger) Warn(category, msg string, detail ...string) {
 	tl.Log("warn", category, msg, detail...)
+}
+
+func (tl *TrafficLogger) WarnWithMeta(category, msg string, meta LogMeta, detail ...string) {
+	tl.LogWithMeta("warn", category, msg, meta, detail...)
 }
 
 func (tl *TrafficLogger) Error(category, msg string, detail ...string) {
 	tl.Log("error", category, msg, detail...)
 }
 
+func (tl *TrafficLogger) ErrorWithMeta(category, msg string, meta LogMeta, detail ...string) {
+	tl.LogWithMeta("error", category, msg, meta, detail...)
+}
+
 func (tl *TrafficLogger) Debug(category, msg string, detail ...string) {
 	tl.Log("debug", category, msg, detail...)
+}
+
+func (tl *TrafficLogger) DebugWithMeta(category, msg string, meta LogMeta, detail ...string) {
+	tl.LogWithMeta("debug", category, msg, meta, detail...)
 }
 
 func (tl *TrafficLogger) InfoBytes(category, msg string, detail []byte) {
 	tl.LogBytes("info", category, msg, detail)
 }
 
+func (tl *TrafficLogger) InfoBytesWithMeta(category, msg string, detail []byte, meta LogMeta) {
+	tl.LogBytesWithMeta("info", category, msg, detail, meta)
+}
+
 func (tl *TrafficLogger) LogBytes(level, category, message string, detail []byte) {
-	tl.logPrepared(level, category, message, tl.prepareDetailBytes(detail))
+	tl.logPrepared(level, category, message, tl.prepareDetailBytes(detail), nil)
+}
+
+func (tl *TrafficLogger) LogBytesWithMeta(level, category, message string, detail []byte, meta LogMeta) {
+	tl.logPrepared(level, category, message, tl.prepareDetailBytes(detail), &meta)
 }
 
 func (tl *TrafficLogger) SetOptions(opts LogOptions) {
@@ -185,4 +256,11 @@ func truncateLogDetail(detail string, maxBytes int) string {
 		return detail
 	}
 	return detail[:maxBytes] + fmt.Sprintf("\n... [truncated log detail: %d -> %d bytes]", len(detail), maxBytes)
+}
+
+func logStatsDay(t time.Time) string {
+	if t.Hour() < 6 {
+		t = t.AddDate(0, 0, -1)
+	}
+	return t.Format("2006-01-02")
 }

@@ -13,17 +13,18 @@ const emit = defineEmits(['select'])
 const listEl = ref(null)
 const checkedSet = ref(new Set())
 const allChecked = ref(false)
+const visibleLimit = ref(800)
 
 const filtered = computed(() => {
   let list = props.messages
-  const { search, level } = props.filter
+  const { search, level, includeDetail } = props.filter
 
   if (search) {
     const q = search.toLowerCase()
     list = list.filter(m =>
       (m.message || '').toLowerCase().includes(q) ||
       (m.category || '').toLowerCase().includes(q) ||
-      (m.detail || '').toLowerCase().includes(q)
+      (includeDetail && (m.detail || '').toLowerCase().includes(q))
     )
   }
   if (level) {
@@ -31,6 +32,9 @@ const filtered = computed(() => {
   }
   return list
 })
+
+const visible = computed(() => filtered.value.slice(Math.max(0, filtered.value.length - visibleLimit.value)))
+const hiddenCount = computed(() => Math.max(0, filtered.value.length - visible.value.length))
 
 watch(() => props.messages.length, () => {
   nextTick(() => {
@@ -40,12 +44,17 @@ watch(() => props.messages.length, () => {
   })
 })
 
+watch(() => visible.value.length, () => {
+  checkedSet.value = new Set()
+  allChecked.value = false
+})
+
 function toggleAll() {
   if (allChecked.value) {
     checkedSet.value = new Set()
     allChecked.value = false
   } else {
-    checkedSet.value = new Set(filtered.value.map((_, i) => i))
+    checkedSet.value = new Set(visible.value.map((_, i) => i))
     allChecked.value = true
   }
 }
@@ -58,7 +67,7 @@ function toggleItem(idx) {
     s.add(idx)
   }
   checkedSet.value = s
-  allChecked.value = s.size === filtered.value.length
+  allChecked.value = s.size === visible.value.length
 }
 
 function cancelSelection() {
@@ -67,12 +76,12 @@ function cancelSelection() {
 }
 
 async function copySelected() {
-  const items = filtered.value.filter((_, i) => checkedSet.value.has(i))
+  const items = visible.value.filter((_, i) => checkedSet.value.has(i))
   await navigator.clipboard.writeText(JSON.stringify(items, null, 2))
 }
 
 function exportSelected() {
-  const items = filtered.value.filter((_, i) => checkedSet.value.has(i))
+  const items = visible.value.filter((_, i) => checkedSet.value.has(i))
   const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -113,44 +122,56 @@ function categoryColor(cat) {
 </script>
 
 <template>
-  <div class="flex flex-col h-full overflow-hidden">
-    <!-- Select all -->
-    <div class="flex items-center gap-2 px-3 py-1 border-b border-[#e5e7eb] bg-[#f9fafb] shrink-0">
+  <div class="flex h-full flex-col overflow-hidden">
+    <div class="grid shrink-0 grid-cols-[28px_78px_64px_86px_1fr] items-center gap-2 border-b border-[#e5e7eb] bg-[#f9fafb] px-3 py-2 text-[11px] font-medium text-[#6b7280]">
       <input type="checkbox" :checked="allChecked" @change="toggleAll"
-        class="w-3 h-3 accent-[#10b981]" />
-      <span class="text-[10px] text-[#6b7280]">全选</span>
+        class="h-3.5 w-3.5 accent-[#2563eb]" />
+      <span>时间</span>
+      <span>级别</span>
+      <span>分类</span>
+      <span>消息摘要</span>
     </div>
 
-    <div v-if="filtered.length === 0" class="flex-1 flex items-center justify-center text-[#6b7280] text-sm">
+    <div v-if="filtered.length === 0" class="flex flex-1 items-center justify-center text-sm text-[#6b7280]">
       等待日志...
     </div>
 
-    <div v-else ref="listEl" class="flex-1 overflow-y-auto font-mono text-[11px] leading-5">
+    <div v-else ref="listEl" class="flex-1 overflow-y-auto text-[11px] leading-5">
+      <div v-if="hiddenCount" class="border-b border-[#e5e7eb] bg-[#fffbeb] px-3 py-1.5 text-center text-[11px] text-[#92400e]">
+        已隐藏较早的 {{ hiddenCount.toLocaleString() }} 条记录，仅渲染最近 {{ visible.length.toLocaleString() }} 条以保持流畅
+      </div>
       <div
-        v-for="(msg, i) in filtered"
+        v-for="(msg, i) in visible"
         :key="i"
-        class="flex items-start gap-1.5 px-3 py-1 border-b border-[#f3f4f6] cursor-pointer hover:bg-[#f9fafb] transition-colors"
-        :class="{ 'bg-[#ecfdf5]': selected === msg }"
+        class="grid grid-cols-[28px_78px_64px_86px_1fr] items-center gap-2 border-b border-[#f3f4f6] px-3 py-2 cursor-pointer transition-colors hover:bg-[#f8fafc]"
+        :class="selected === msg ? 'bg-[#eff6ff] ring-1 ring-inset ring-[#bfdbfe]' : ''"
         @click="emit('select', msg)"
       >
         <input type="checkbox" :checked="checkedSet.has(i)" @click.stop @change="toggleItem(i)"
-          class="w-3 h-3 mt-0.5 accent-[#10b981] shrink-0" />
-        <span class="shrink-0 text-[#9ca3af] w-[72px]">{{ msg.time }}</span>
-        <span class="shrink-0 w-3" :class="levelColor(msg.level)">{{ levelIcon(msg.level) }}</span>
-        <span class="shrink-0 w-[80px] truncate" :class="categoryColor(msg.category)">{{ msg.category }}</span>
-        <span class="flex-1 text-[#111827] break-all">{{ msg.message }}</span>
+          class="h-3.5 w-3.5 accent-[#2563eb]" />
+        <span class="font-mono text-[#6b7280]">{{ msg.time }}</span>
+        <span class="inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[10px] font-medium"
+          :class="{
+            'bg-[#fef2f2] text-[#ef4444]': msg.level === 'error',
+            'bg-[#fffbeb] text-[#d97706]': msg.level === 'warn',
+            'bg-[#eff6ff] text-[#2563eb]': msg.level === 'info',
+            'bg-[#f3f4f6] text-[#6b7280]': msg.level === 'debug',
+          }">
+          {{ msg.level || 'log' }}
+        </span>
+        <span class="truncate font-medium" :class="categoryColor(msg.category)">{{ msg.category || '-' }}</span>
+        <span class="truncate text-[#111827]" :title="msg.message">{{ msg.message }}</span>
       </div>
     </div>
 
-    <!-- Selection action bar -->
     <div v-if="checkedSet.size > 0"
-      class="shrink-0 flex items-center gap-3 px-3 py-2 border-t border-[#e5e7eb] bg-[#f9fafb] text-xs">
+      class="shrink-0 flex items-center gap-3 border-t border-[#e5e7eb] bg-[#f9fafb] px-3 py-2 text-xs">
       <span class="text-[#6b7280]">已选 {{ checkedSet.size }} 条</span>
-      <button class="flex items-center gap-1 text-[#10b981] hover:text-[#059669]" @click="copySelected">
-        <IconCopy class="w-3 h-3" /> 复制
+      <button class="inline-flex items-center gap-1 text-[#2563eb] hover:text-[#1d4ed8]" @click="copySelected">
+        <IconCopy class="h-3.5 w-3.5" /> 复制
       </button>
-      <button class="flex items-center gap-1 text-[#10b981] hover:text-[#059669]" @click="exportSelected">
-        <IconExport class="w-3 h-3" /> 导出 JSON
+      <button class="inline-flex items-center gap-1 text-[#2563eb] hover:text-[#1d4ed8]" @click="exportSelected">
+        <IconExport class="h-3.5 w-3.5" /> 导出 JSON
       </button>
       <button class="text-[#6b7280] hover:text-[#111827]" @click="cancelSelection">取消选择</button>
     </div>

@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"io"
 	"kiro-proxy/codex"
 	"kiro-proxy/converter"
@@ -21,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 const (
@@ -233,7 +234,11 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		logger.Error("forwarder", fmt.Sprintf("上游错误 %d", resp.StatusCode), truncate(string(body), 500))
+		logger.ErrorWithMeta("forwarder", fmt.Sprintf("上游错误 %d", resp.StatusCode), LogMeta{
+			Model:     statsModelID(m),
+			Status:    resp.StatusCode,
+			LatencyMS: time.Since(pre.StartTime).Milliseconds(),
+		}, truncate(string(body), 500))
 		// 4xx/5xx 上游错误也需要计入统计（总请求数 + 错误数）
 		f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
 		return buildKiroTextStreamResponse(reqFromResponse(resp), buildUpstreamErrorMessage(resp.StatusCode, resp.Status, body), kiroModelID(pre, m), true), nil
@@ -268,8 +273,9 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, cacheW := sc.CacheTokens()
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, store.CalculateCredits(in, out, cacheR, cacheW, m), statsModelID(m), false)
-			logger.Info("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW))
+			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
+			logger.InfoWithMeta("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW))
 		}()
 	case m.Provider == "gemini":
 		sc := converter.NewGeminiStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
@@ -283,8 +289,9 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, _ := sc.CacheTokens()
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, store.CalculateCredits(in, out, cacheR, 0, m), statsModelID(m), false)
-			logger.Info("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
+			credits := store.CalculateCredits(in, out, cacheR, 0, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
+			logger.InfoWithMeta("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
 		}()
 	case useResponsesAPI(pre, m) || m.Provider == "codex":
 		// responses SSE → Kiro Event Stream（一段式直转）
@@ -299,8 +306,9 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, _ := sc.CacheTokens()
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, store.CalculateCredits(in, out, cacheR, 0, m), statsModelID(m), false)
-			logger.Info("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
+			credits := store.CalculateCredits(in, out, cacheR, 0, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
+			logger.InfoWithMeta("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0))
 
 			// 保存 response_id 用于下次续传；只有明确完成且无错误的流才能更新续传状态。
 			responseID := sc.ResponseID()
@@ -332,8 +340,9 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			}()
 			in, out := sc.Usage()
 			cacheR, cacheW := sc.CacheTokens()
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, store.CalculateCredits(in, out, cacheR, cacheW, m), statsModelID(m), false)
-			logger.Info("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW))
+			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
+			logger.InfoWithMeta("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW))
 		}()
 	}
 
@@ -722,4 +731,30 @@ func sessionIDOrRandom(sessionID string) string {
 		return sessionID
 	}
 	return fmt.Sprintf("kiro-proxy-%d", time.Now().UnixNano())
+}
+
+func streamLogMeta(pre *Preflight, m *store.Model, resp *http.Response, in, out, cacheRead, cacheWrite int, credits float64) LogMeta {
+	meta := LogMeta{
+		Model:            statsModelID(m),
+		InputTokens:      int64(in),
+		OutputTokens:     int64(out),
+		CacheReadTokens:  int64(cacheRead),
+		CacheWriteTokens: int64(cacheWrite),
+		Credits:          credits,
+		Metadata:         map[string]interface{}{},
+	}
+	if resp != nil {
+		meta.Status = resp.StatusCode
+	}
+	if pre != nil {
+		meta.LatencyMS = time.Since(pre.StartTime).Milliseconds()
+		meta.Metadata["protocol"] = pre.Protocol
+		meta.Metadata["classifier"] = pre.IsClassifier
+		meta.Metadata["conversation_id"] = pre.ConversationID
+	}
+	if m != nil {
+		meta.Metadata["provider"] = m.Provider
+		meta.Metadata["endpoint"] = m.Endpoint
+	}
+	return meta
 }

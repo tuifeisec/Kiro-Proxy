@@ -74,6 +74,45 @@ watch(() => form.value.provider, (val) => {
   }
 })
 
+const providerOptions = [
+  { value: 'openai', label: 'OpenAI', icon: '◎' },
+  { value: 'anthropic', label: 'Anthropic', icon: 'AI' },
+  { value: 'gemini', label: 'Gemini', icon: '✦' },
+  { value: 'codex', label: 'Codex', icon: '⬡' },
+]
+
+const providerPlaceholders = computed(() => {
+  switch (form.value.provider) {
+    case 'anthropic':
+      return {
+        name: 'Anthropic - claude-3-5-sonnet',
+        modelId: 'claude-3-5-sonnet-20241022',
+        baseUrl: 'https://api.anthropic.com/v1',
+        apiKey: 'sk-ant-...'
+      }
+    case 'gemini':
+      return {
+        name: 'Gemini - gemini-2.5-pro',
+        modelId: 'gemini-2.5-pro',
+        baseUrl: 'https://generativelanguage.googleapis.com',
+        apiKey: 'AIza...'
+      }
+    case 'codex':
+      return {
+        name: 'Codex - gpt-5-codex',
+        modelId: 'gpt-5-codex',
+        token: '粘贴 Codex refresh_token，或通过下方授权链接生成 auth JSON'
+      }
+    default:
+      return {
+        name: 'OpenAI - gpt-4.1',
+        modelId: 'gpt-4.1',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-...'
+      }
+  }
+})
+
 const endpointOptions = computed(() => {
   if (form.value.provider === 'anthropic') {
     return ['/messages']
@@ -151,256 +190,297 @@ async function handleExchangeOAuth() {
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="fixed inset-0 z-50 flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/30" @click="emit('cancel')"></div>
+    <div v-if="visible" class="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4 py-6">
+      <div class="absolute inset-0" @click="emit('cancel')"></div>
 
-      <div class="relative bg-white border border-[#e5e7eb] rounded-xl w-full max-w-2xl mx-4 p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-        <div class="flex items-start justify-between gap-4 mb-5">
-          <h2 class="text-base font-semibold text-[#111827]">
-            {{ model ? '编辑模型' : '新增模型' }}
-          </h2>
-          <div class="flex justify-end gap-3">
-            <button type="button" class="px-4 py-2 text-sm text-[#6b7280] hover:text-[#111827] border border-[#e5e7eb] rounded-md disabled:opacity-50"
-              :disabled="saving" @click="emit('cancel')">取消</button>
-            <button type="button" class="px-4 py-2 text-sm text-white bg-[#10b981] hover:bg-[#059669] rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</button>
+      <div class="relative flex max-h-[86vh] w-full max-w-[900px] flex-col overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-xl">
+        <div class="flex shrink-0 items-center justify-between px-4 py-3">
+          <div class="flex items-center gap-3">
+            <h2 class="text-lg font-semibold text-[#111827]">
+              {{ model ? '编辑模型' : '新增模型' }}
+            </h2>
+            <span class="rounded-md bg-[#eef2ff] px-2 py-0.5 text-[11px] font-medium text-[#64748b]">配置上游通道</span>
           </div>
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded-full text-xl leading-none text-[#111827] hover:bg-[#f3f4f6] disabled:opacity-50"
+            :disabled="saving"
+            aria-label="关闭"
+            @click="emit('cancel')"
+          >×</button>
         </div>
 
-        <div v-if="error" class="mb-4 px-3 py-2 text-sm text-[#ef4444] bg-[#fef2f2] border border-[#ef4444]/20 rounded-md whitespace-pre-wrap">
-          {{ error }}
-        </div>
-
-        <!-- Provider 切换 -->
-        <div class="mb-5">
-          <label class="block text-xs text-[#6b7280] mb-1.5">Provider</label>
-          <div class="flex gap-2">
-            <button
-              type="button"
-              class="px-4 py-1.5 text-xs rounded-md border transition-colors"
-              :class="form.provider === 'openai'
-                ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
-                : 'border-[#e5e7eb] text-[#6b7280] hover:text-[#111827]'"
-              @click="form.provider = 'openai'"
-            >OpenAI</button>
-            <button
-              type="button"
-              class="px-4 py-1.5 text-xs rounded-md border transition-colors"
-              :class="form.provider === 'anthropic'
-                ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
-                : 'border-[#e5e7eb] text-[#6b7280] hover:text-[#111827]'"
-              @click="form.provider = 'anthropic'"
-            >Anthropic</button>
-            <button
-              type="button"
-              class="px-4 py-1.5 text-xs rounded-md border transition-colors"
-              :class="form.provider === 'gemini'
-                ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
-                : 'border-[#e5e7eb] text-[#6b7280] hover:text-[#111827]'"
-              @click="form.provider = 'gemini'"
-            >Gemini</button>
-            <button
-              type="button"
-              class="px-4 py-1.5 text-xs rounded-md border transition-colors"
-              :class="form.provider === 'codex'
-                ? 'bg-[#ecfdf5] border-[#10b981] text-[#10b981]'
-                : 'border-[#e5e7eb] text-[#6b7280] hover:text-[#111827]'"
-              @click="form.provider = 'codex'"
-            >Codex</button>
-          </div>
-          <div v-if="form.provider === 'codex'" class="mt-3 px-3 py-2 text-xs text-[#92400e] bg-[#fffbeb] border border-[#f59e0b]/30 rounded-md">
-            Codex OAuth 反向代理：使用 ChatGPT 订阅的 Codex OAuth 反代可能违反 OpenAI 服务条款
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">下拉显示名称</label>
-            <input v-model="form.name"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-              placeholder="如：GPT-4o" />
-            <p class="text-[10px] text-[#6b7280] mt-1">Kiro 模型下拉框里显示的名字</p>
-          </div>
-
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">模型标识</label>
-            <input v-model="form.model_id"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-              placeholder="如：gpt-4o" />
-            <p class="text-[10px] text-[#6b7280] mt-1">Kiro 下拉列表里看到的名字，也是发给上游的 model 值</p>
-          </div>
-
-          <div v-if="form.provider !== 'codex'">
-            <label class="block text-xs text-[#6b7280] mb-1.5">接口地址</label>
-            <input v-model="form.base_url"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-              placeholder="https://api.openai.com/v1" />
-            <p class="text-[10px] text-[#6b7280] mt-1">只填写上游域名或基础地址，系统不会自动拼接版本路径</p>
-          </div>
-
-          <div :class="form.provider === 'codex' ? 'col-span-2' : ''">
-            <label class="block text-xs text-[#6b7280] mb-1.5">{{ form.provider === 'codex' ? 'Refresh Token / Codex Auth JSON' : '访问密钥' }}</label>
-            <div class="relative">
-              <textarea v-if="form.provider === 'codex'" v-model="form.refresh_token"
-                :rows="showKey ? 5 : 2"
-                :class="showKey ? '' : 'blur-sm'"
-                class="w-full px-3 py-2 pr-10 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none resize-y"
-                placeholder="粘贴 Codex refresh_token，或通过下方授权链接生成 auth JSON"></textarea>
-              <input v-else v-model="form.api_key"
-                :type="showKey ? 'text' : 'password'"
-                class="w-full px-3 py-2 pr-10 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="sk-..." />
-              <button
-                type="button"
-                class="absolute right-2 top-2 text-[#6b7280] hover:text-[#111827]"
-                @click="showKey = !showKey"
-              >
-                <IconEyeOff v-if="showKey" />
-                <IconEye v-else />
-              </button>
+        <div class="flex-1 overflow-y-auto px-4 pb-3">
+          <section class="rounded-lg border border-[#e5e7eb] bg-white p-3">
+            <div class="grid grid-cols-[72px_1fr] items-center gap-2.5 rounded-lg border border-[#eef2f7] bg-white p-2">
+              <div class="text-xs font-semibold text-[#111827]">Provider</div>
+              <div class="grid grid-cols-4 gap-1.5">
+                <button
+                  v-for="provider in providerOptions"
+                  :key="provider.value"
+                  type="button"
+                  class="flex h-9 items-center justify-center gap-1.5 rounded-md border text-xs font-medium transition-colors"
+                  :class="form.provider === provider.value
+                    ? 'border-[#93c5fd] bg-[#f8fbff] text-[#2563eb] shadow-sm'
+                    : 'border-[#edf2f7] bg-white text-[#374151] hover:border-[#d1d5db] hover:bg-[#f9fafb]'"
+                  @click="form.provider = provider.value"
+                >
+                  <span class="text-base font-semibold leading-none">{{ provider.icon }}</span>
+                  <span>{{ provider.label }}</span>
+                </button>
+              </div>
             </div>
-            <p v-if="form.provider === 'codex'" class="text-[10px] text-[#6b7280] mt-1">可手动粘贴 refresh_token；也可生成授权链接登录，处理回调后会自动填入完整 auth JSON。</p>
+            <div v-if="form.provider === 'codex'" class="mt-3 rounded-md border border-[#f59e0b]/30 bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
+              Codex OAuth 反向代理：使用 ChatGPT 订阅的 Codex OAuth 反代可能违反 OpenAI 服务条款
+            </div>
+          </section>
 
-            <div v-if="form.provider === 'codex'" class="mt-3 p-3 border border-[#e5e7eb] rounded-md bg-[#f9fafb] space-y-3">
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <div class="text-xs font-medium text-[#374151]">Codex OAuth 授权登录</div>
-                  <p class="text-[10px] text-[#6b7280] mt-1">授权后浏览器会跳转到 localhost 回调地址；如果页面无法打开，复制地址栏完整 URL 到下方处理。</p>
+          <section class="mt-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
+            <h3 class="mb-3 text-sm font-semibold text-[#111827]">基础信息</h3>
+            <div class="grid grid-cols-2 gap-x-8 gap-y-3">
+              <div>
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">下拉显示名称 <span class="text-[#ef4444]">*</span></label>
+                <input v-model="form.name"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                  :placeholder="providerPlaceholders.name" />
+                <p class="mt-1 text-[11px] text-[#9ca3af]">显示名称用于 Kiro 模型下拉</p>
+              </div>
+
+              <div v-if="form.provider !== 'codex'">
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">请求端点 endpoint <span class="text-[#ef4444]">*</span></label>
+                <select v-model="form.endpoint"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]">
+                  <option v-for="ep in endpointOptions" :key="ep" :value="ep">{{ ep }}</option>
+                </select>
+                <p class="mt-1 text-[11px] text-[#9ca3af]">endpoint 只表示接口端点</p>
+              </div>
+
+              <div>
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">模型标识 <span class="text-[#ef4444]">*</span></label>
+                <input v-model="form.model_id"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                  :placeholder="providerPlaceholders.modelId" />
+                <p class="mt-1 text-[11px] text-[#9ca3af]">模型标识会发送给上游 API</p>
+              </div>
+
+              <div :class="form.provider === 'codex' ? 'col-span-2' : ''">
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">{{ form.provider === 'codex' ? 'Refresh Token / Codex Auth JSON' : '访问密钥 API Key' }} <span class="text-[#ef4444]">*</span></label>
+                <div class="relative">
+                  <textarea v-if="form.provider === 'codex'" v-model="form.refresh_token"
+                    :rows="showKey ? 5 : 2"
+                    :class="showKey ? '' : 'blur-sm'"
+                    class="w-full rounded-md border border-[#e5e7eb] bg-white px-3 py-2 pr-10 text-sm text-[#111827] resize-y focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                    :placeholder="providerPlaceholders.token"></textarea>
+                  <input v-else v-model="form.api_key"
+                    :type="showKey ? 'text' : 'password'"
+                    class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 pr-14 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                    :placeholder="providerPlaceholders.apiKey" />
+                  <button
+                    type="button"
+                    class="absolute right-3 top-2.5 flex items-center gap-1 text-xs text-[#9ca3af] hover:text-[#111827]"
+                    @click="showKey = !showKey"
+                  >
+                    <IconEyeOff v-if="showKey" class="h-4 w-4" />
+                    <IconEye v-else class="h-4 w-4" />
+                    <span v-if="form.provider !== 'codex'">显示</span>
+                  </button>
                 </div>
-                <button type="button"
-                  class="shrink-0 px-3 py-1.5 text-xs text-white bg-[#10b981] hover:bg-[#059669] rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-                  :disabled="oauthLoading"
-                  @click="handleStartOAuth">{{ oauthLoading ? '处理中...' : '生成授权链接' }}</button>
-              </div>
+                <p class="mt-1 text-[11px] text-[#9ca3af]">用于请求上游 API 的鉴权</p>
 
-              <div v-if="oauthAuthUrl" class="space-y-2">
-                <a :href="oauthAuthUrl" target="_blank" rel="noopener noreferrer" class="inline-flex text-xs text-[#10b981] hover:underline">打开授权链接</a>
-                <input :value="oauthAuthUrl" readonly
-                  class="w-full px-3 py-2 text-xs bg-white border border-[#e5e7eb] rounded-md text-[#6b7280] focus:outline-none" />
-              </div>
+                <div v-if="form.provider === 'codex'" class="mt-3 space-y-3 rounded-md border border-[#e5e7eb] bg-[#f9fafb] p-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-medium text-[#374151]">Codex OAuth 授权登录</div>
+                      <p class="mt-1 text-[10px] text-[#6b7280]">授权后浏览器会跳转到 localhost 回调地址；如果页面无法打开，复制地址栏完整 URL 到下方处理。</p>
+                    </div>
+                    <button type="button"
+                      class="shrink-0 rounded-md bg-[#2563eb] px-3 py-1.5 text-xs text-white hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="oauthLoading"
+                      @click="handleStartOAuth">{{ oauthLoading ? '处理中...' : '生成授权链接' }}</button>
+                  </div>
 
-              <div class="space-y-2">
-                <textarea v-model="oauthCallbackUrl" rows="2"
-                  class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none resize-none"
-                  placeholder="粘贴 http://localhost:1455/auth/callback?... 回调 URL"></textarea>
-                <div class="flex items-center justify-between gap-3">
-                  <p class="text-[10px] text-[#6b7280]">处理成功后会自动填入上方 Refresh Token / Auth JSON。</p>
-                  <button type="button"
-                    class="px-3 py-1.5 text-xs text-[#10b981] border border-[#10b981]/40 rounded-md hover:bg-[#ecfdf5] disabled:opacity-50 disabled:cursor-not-allowed"
-                    :disabled="oauthLoading || !oauthCallbackUrl.trim()"
-                    @click="handleExchangeOAuth">处理回调</button>
+                  <div v-if="oauthAuthUrl" class="space-y-2">
+                    <a :href="oauthAuthUrl" target="_blank" rel="noopener noreferrer" class="inline-flex text-xs text-[#2563eb] hover:underline">打开授权链接</a>
+                    <input :value="oauthAuthUrl" readonly
+                      class="w-full rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#6b7280] focus:outline-none" />
+                  </div>
+
+                  <div class="space-y-2">
+                    <textarea v-model="oauthCallbackUrl" rows="2"
+                      class="w-full resize-none rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-sm text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                      placeholder="粘贴 http://localhost:1455/auth/callback?... 回调 URL"></textarea>
+                    <div class="flex items-center justify-between gap-3">
+                      <p class="text-[10px] text-[#6b7280]">处理成功后会自动填入上方 Refresh Token / Auth JSON。</p>
+                      <button type="button"
+                        class="rounded-md border border-[#93c5fd] px-3 py-1.5 text-xs text-[#2563eb] hover:bg-[#eff6ff] disabled:cursor-not-allowed disabled:opacity-50"
+                        :disabled="oauthLoading || !oauthCallbackUrl.trim()"
+                        @click="handleExchangeOAuth">处理回调</button>
+                    </div>
+                  </div>
+
+                  <div v-if="oauthError" class="rounded-md border border-[#ef4444]/20 bg-[#fef2f2] px-3 py-2 text-xs text-[#ef4444] whitespace-pre-wrap">
+                    {{ oauthError }}
+                  </div>
                 </div>
               </div>
 
-              <div v-if="oauthError" class="px-3 py-2 text-xs text-[#ef4444] bg-[#fef2f2] border border-[#ef4444]/20 rounded-md whitespace-pre-wrap">
-                {{ oauthError }}
+              <div v-if="form.provider !== 'codex'">
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">接口地址 base URL <span class="text-[#ef4444]">*</span></label>
+                <input v-model="form.base_url"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                  :placeholder="providerPlaceholders.baseUrl" />
+                <p class="mt-1 text-[11px] text-[#9ca3af]">用于请求上游 API</p>
+              </div>
+
+              <div>
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">单模型代理地址</label>
+                <input v-model="form.proxy_url"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                  placeholder="可选，留空表示直连" />
+                <p class="mt-1 text-[11px] text-[#9ca3af]">代理地址为空时表示直连</p>
+              </div>
+
+              <div class="col-span-2 grid grid-cols-[132px_1fr] items-center gap-3">
+                <label class="text-xs font-medium text-[#111827]">备注描述</label>
+                <div class="relative">
+                  <input v-model="form.note"
+                    maxlength="200"
+                    class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 pr-12 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                    placeholder="可选，便于识别与管理" />
+                  <span class="absolute right-3 top-2.5 text-xs text-[#9ca3af]">{{ (form.note || '').length }}/200</span>
+                </div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div v-if="form.provider !== 'codex'">
-            <label class="block text-xs text-[#6b7280] mb-1.5">接口端点</label>
-            <select v-model="form.endpoint"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none">
-              <option v-for="ep in endpointOptions" :key="ep" :value="ep">{{ ep }}</option>
-            </select>
-            <p class="text-[10px] text-[#6b7280] mt-1">仅选择端点类型，不包含版本前缀；系统不会自动拼接 /v1</p>
-          </div>
+          <section class="mt-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
+            <h3 class="mb-2 text-sm font-semibold text-[#111827]">模型能力参数</h3>
+            <div class="grid grid-cols-[1.6fr_.72fr_.72fr_1.6fr] items-start gap-4">
+              <div class="border-r border-[#e5e7eb] pr-4">
+                <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
+                  推理强度
+                  <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                    i
+                    <span class="pointer-events-none absolute bottom-5 left-0 z-20 hidden w-48 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                      控制模型推理投入强度；自动表示由系统或上游模型自行决定
+                    </span>
+                  </span>
+                </label>
+                <div class="grid h-9 grid-cols-4 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]">
+                  <button
+                    v-for="opt in reasoningOptions"
+                    :key="opt.value"
+                    type="button"
+                    class="border-r border-[#e5e7eb] text-xs last:border-r-0"
+                    :class="form.reasoning_effort === opt.value ? 'bg-[#eff6ff] text-[#2563eb] ring-1 ring-inset ring-[#93c5fd]' : 'text-[#374151] hover:bg-white'"
+                    @click="form.reasoning_effort = opt.value"
+                  >{{ opt.label }}</button>
+                </div>
+              </div>
 
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">代理地址</label>
-            <input v-model="form.proxy_url"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-              placeholder="留空直连，如 127.0.0.1:7890" />
-            <p class="text-[10px] text-[#6b7280] mt-1">仅作用于当前模型，支持 http/https/socks5 代理</p>
-          </div>
+              <div>
+                <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
+                  上下文窗口
+                  <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                    i
+                    <span class="pointer-events-none absolute bottom-5 left-1/2 z-20 hidden w-52 -translate-x-1/2 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                      模型可处理的最大上下文 Token 数，0 表示使用默认值
+                    </span>
+                  </span>
+                </label>
+                <input v-model.number="form.context_window" type="number" min="0"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                  placeholder="128000" />
+              </div>
 
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">推理强度</label>
-            <select v-model="form.reasoning_effort"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none">
-              <option v-for="opt in reasoningOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
-          </div>
+              <div>
+                <label class="mb-1.5 flex items-center gap-1 whitespace-nowrap text-xs font-medium text-[#111827]">
+                  最大输出 Token
+                  <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                    i
+                    <span class="pointer-events-none absolute bottom-5 left-1/2 z-20 hidden w-52 -translate-x-1/2 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                      单次响应允许的最大输出 Token 数，0 表示使用默认值
+                    </span>
+                  </span>
+                </label>
+                <input v-model.number="form.max_tokens" type="number" min="0"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                  placeholder="4096" />
+              </div>
 
-          <div>
-            <label class="block text-xs text-[#6b7280] mb-1.5">上下文窗口</label>
-            <input v-model.number="form.context_window" type="number"
-              class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-              placeholder="0 = 默认" />
-          </div>
-
-            <div>
-              <label class="block text-xs text-[#6b7280] mb-1.5">最大输出 Token</label>
-              <input v-model.number="form.max_tokens" type="number"
-                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="0 = 默认" />
+              <div class="flex items-start gap-2.5 border-l border-[#e5e7eb] pl-4 pt-0.5">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="truncate text-xs font-medium text-[#111827]">启用 continuation / previous_response_id</div>
+                    <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                      <input type="checkbox" v-model="form.enable_continuation" class="peer sr-only" />
+                      <div class="h-5 w-9 rounded-full bg-[#e5e7eb] after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#2563eb] peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
+                    </label>
+                  </div>
+                  <p class="mt-1 text-[11px] leading-4 text-[#9ca3af]">仅直连 OpenAI 官方 API 时建议启用；<br />使用中转站时建议关闭</p>
+                </div>
+              </div>
             </div>
+          </section>
 
-            <div>
-              <label class="block text-xs text-[#6b7280] mb-1.5">倍率</label>
-              <input v-model.number="form.rate_multiplier" type="number" step="0.01" min="0"
-                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="1.0" />
-              <p class="text-[10px] text-[#6b7280] mt-1">最终 Credits = 按价格计算结果 × 倍率</p>
+          <section class="mt-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
+            <div class="mb-2.5 flex items-center justify-between">
+              <h3 class="text-sm font-semibold text-[#111827]">Credit 价格配置 <span class="text-xs font-normal text-[#6b7280]">（每百万 Token）</span></h3>
+              <button type="button" class="text-xs font-medium text-[#2563eb] hover:underline" @click="applyDefaultPrices(form.provider)">⟳ 恢复当前 Provider 默认价格</button>
             </div>
-
-          </div>
-
-        <div class="mt-4">
-          <div class="flex items-center justify-between mb-2">
-            <label class="block text-xs font-medium text-[#374151]">Credit 价格配置</label>
-            <button type="button" class="text-[10px] text-[#10b981] hover:underline" @click="applyDefaultPrices(form.provider)">恢复当前 Provider 默认价格</button>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-xs text-[#6b7280] mb-1.5">输入价格</label>
-              <input v-model.number="form.input_price" type="number" step="0.001" min="0"
-                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="5" />
-              <p class="text-[10px] text-[#6b7280] mt-1">按百万输入 Token 计算，不需要填写单位</p>
+            <div class="grid grid-cols-5 gap-3">
+              <div>
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">输入价格</label>
+                <div class="relative">
+                  <input v-model.number="form.input_price" type="number" step="0.001" min="0"
+                    class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 pr-9 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]" />
+                  <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
+                </div>
+              </div>
+              <div class="border-l border-[#e5e7eb] pl-3">
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">输出价格</label>
+                <div class="relative">
+                  <input v-model.number="form.output_price" type="number" step="0.001" min="0"
+                    class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 pr-9 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]" />
+                  <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
+                </div>
+              </div>
+              <div class="border-l border-[#e5e7eb] pl-3">
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">缓存输入价格</label>
+                <div class="relative">
+                  <input v-model.number="form.cache_input_price" type="number" step="0.001" min="0"
+                    class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 pr-9 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]" />
+                  <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
+                </div>
+              </div>
+              <div class="border-l border-[#e5e7eb] pl-3">
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">缓存输出价格</label>
+                <div class="relative">
+                  <input v-model.number="form.cache_output_price" type="number" step="0.001" min="0"
+                    class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 pr-9 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]" />
+                  <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
+                </div>
+              </div>
+              <div class="border-l border-[#e5e7eb] pl-3">
+                <label class="mb-1.5 block text-xs font-medium text-[#111827]">倍率</label>
+                <input v-model.number="form.rate_multiplier" type="number" step="0.01" min="0"
+                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]" />
+              </div>
             </div>
-            <div>
-              <label class="block text-xs text-[#6b7280] mb-1.5">输出价格</label>
-              <input v-model.number="form.output_price" type="number" step="0.001" min="0"
-                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="30" />
-              <p class="text-[10px] text-[#6b7280] mt-1">按百万输出 Token 计算，不需要填写单位</p>
-            </div>
-            <div>
-              <label class="block text-xs text-[#6b7280] mb-1.5">缓存输入价格</label>
-              <input v-model.number="form.cache_input_price" type="number" step="0.001" min="0"
-                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="0.5" />
-              <p class="text-[10px] text-[#6b7280] mt-1">缓存命中/读取输入 Token 价格</p>
-            </div>
-            <div>
-              <label class="block text-xs text-[#6b7280] mb-1.5">缓存输出价格</label>
-              <input v-model.number="form.cache_output_price" type="number" step="0.001" min="0"
-                class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none"
-                placeholder="30" />
-              <p class="text-[10px] text-[#6b7280] mt-1">缓存写入价格；通常只有 Claude 返回该统计</p>
-            </div>
-          </div>
+          </section>
         </div>
 
-        <div class="mt-4 flex items-center gap-3">
-          <label class="relative inline-flex items-center cursor-pointer">
-            <input type="checkbox" v-model="form.enable_continuation" class="sr-only peer" />
-            <div class="w-9 h-5 bg-[#e5e7eb] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
-          </label>
-          <div>
-            <span class="text-xs text-[#111827]">启用续传 (previous_response_id)</span>
-            <p class="text-[10px] text-[#6b7280]">仅直连 OpenAI 官方 API 时启用；使用 sub2api 等中转站时请关闭（中转站会通过 prompt_cache_key 自动管理续传）</p>
+        <div class="flex shrink-0 items-center gap-3 border-t border-[#f1f5f9] px-4 py-3">
+          <div class="min-w-0 flex-1">
+            <div v-if="error" class="rounded-md bg-[#fff1f2] px-3 py-1.5 text-xs font-medium text-[#dc2626] whitespace-pre-wrap">
+              <span class="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#fca5a5] text-xs">×</span>{{ error }}
+            </div>
           </div>
+          <button type="button" class="h-9 rounded-md border border-[#e5e7eb] bg-white px-7 text-xs text-[#374151] shadow-sm hover:bg-[#f9fafb] disabled:opacity-50"
+            :disabled="saving" @click="emit('cancel')">取消</button>
+          <button type="button" class="h-9 rounded-md bg-[#2563eb] px-7 text-xs font-medium text-white shadow-sm hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</button>
         </div>
-
-        <div class="mt-4">
-          <label class="block text-xs text-[#6b7280] mb-1.5">下拉描述</label>
-          <textarea v-model="form.note" rows="2"
-            class="w-full px-3 py-2 text-sm bg-white border border-[#e5e7eb] rounded-md text-[#111827] focus:border-[#10b981] focus:outline-none resize-none"
-            placeholder="Kiro 模型下拉框里的描述文字（可选）"></textarea>
-        </div>
-
       </div>
     </div>
   </Teleport>

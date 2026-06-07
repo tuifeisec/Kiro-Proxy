@@ -111,6 +111,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/ca-status", s.handleCAStatus)
 	mux.HandleFunc("/api/install-ca", s.handleInstallCA)
 	mux.HandleFunc("/api/heartbeat", s.handleHeartbeat)
+	mux.HandleFunc("/api/service/status", s.handleServiceStatus)
+	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/proxy-mode", s.handleProxyMode)
 	mux.HandleFunc("/api/log-detail", s.handleLogDetail)
 	mux.HandleFunc("/api/kiro-proxy", s.handleKiroProxy)

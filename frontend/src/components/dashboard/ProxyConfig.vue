@@ -6,18 +6,22 @@ import IconCheck from '../icons/IconCheck.vue'
 const proxyHost = '127.0.0.1'
 const proxyPort = '18081'
 const copied = ref(false)
-
-// Kiro 代理配置状态
+const copiedProxy = ref(false)
 const kiroStatus = ref(null)
 const loading = ref(false)
 const restartLoading = ref(false)
 const result = ref('')
 
-async function copyToClipboard(text) {
+async function copyToClipboard(text, type = 'manual') {
   try {
     await navigator.clipboard.writeText(text)
-    copied.value = true
-    setTimeout(() => { copied.value = false }, 1500)
+    if (type === 'proxy') {
+      copiedProxy.value = true
+      setTimeout(() => { copiedProxy.value = false }, 1500)
+    } else {
+      copied.value = true
+      setTimeout(() => { copied.value = false }, 1500)
+    }
   } catch {}
 }
 
@@ -76,51 +80,53 @@ onMounted(fetchKiroStatus)
 </script>
 
 <template>
-  <div class="bg-white border border-[#e5e7eb] rounded-lg p-4 hover:border-[#d1d5db] transition-colors">
-    <h3 class="text-sm font-medium text-[#111827] mb-3">Kiro 代理配置</h3>
+  <div class="rounded-xl border border-[#e8edf5] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+    <div class="mb-2 flex items-center justify-between">
+      <h3 class="text-[14px] font-semibold text-[#0f172a]">Kiro 代理配置</h3>
+      <span class="inline-flex items-center gap-1.5 rounded-full bg-[#ecfdf5] px-2 py-0.5 text-[12px] font-medium text-[#059669]" v-if="kiroStatus?.configured">
+        <span class="h-1.5 w-1.5 rounded-full bg-[#22c55e]"></span>
+        已接管 Kiro 代理
+      </span>
+    </div>
 
-    <!-- 当前状态 -->
-    <div v-if="kiroStatus" class="mb-3">
-      <div class="flex items-center gap-2 text-xs">
-        <span class="text-[#6b7280]">当前代理：</span>
-        <span :class="kiroStatus.configured ? 'text-[#10b981]' : 'text-[#6b7280]'" class="font-mono">
-          {{ kiroStatus.current_proxy || '(未设置)' }}
-        </span>
-        <span v-if="kiroStatus.configured"
-          class="px-1.5 py-0.5 rounded text-[10px] bg-[#ecfdf5] text-[#10b981] border border-[#10b981]/20">
-          已接管
-        </span>
+    <div class="mb-2 rounded-xl border border-[#dcfce7] bg-[#f0fdf4] px-3 py-2" v-if="kiroStatus?.configured">
+      <div class="mb-1.5 flex items-center gap-2 text-[12px] font-medium text-[#059669]">
+        <span>♡</span>
+        <span>已接管 Kiro 代理</span>
       </div>
-      <div v-if="kiroStatus.original_proxy" class="text-[10px] text-[#9ca3af] mt-1">
-        原始代理：{{ kiroStatus.original_proxy }}
+      <div class="text-[12px] text-[#64748b]">目标代理地址</div>
+      <div class="mt-1 flex items-center gap-2">
+        <span class="font-mono text-[13px] text-[#0f172a]">{{ kiroStatus.current_proxy || `http://${proxyHost}:${proxyPort}` }}</span>
+        <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(kiroStatus.current_proxy || `http://${proxyHost}:${proxyPort}`, 'proxy')">
+          <IconCheck v-if="copiedProxy" class="text-[#059669]" />
+          <IconCopy v-else />
+        </button>
       </div>
     </div>
 
-    <!-- 操作按钮 -->
-    <div class="flex gap-2 mb-3">
+    <div v-else class="mb-2 rounded-xl border border-[#e8edf5] bg-[#fbfdff] px-3 py-2 text-[12px] text-[#64748b]">
+      当前未接管 Kiro 代理，可一键写入代理配置。
+    </div>
+
+    <div class="grid grid-cols-2 gap-2">
       <button
         v-if="!kiroStatus?.configured"
-        class="flex-1 py-2 text-xs font-medium rounded border transition-colors disabled:opacity-50"
-        :class="loading
-          ? 'bg-[#f9fafb] border-[#e5e7eb] text-[#9ca3af]'
-          : 'bg-[#10b981] border-[#10b981] text-white hover:bg-[#059669]'"
+        class="col-span-2 h-8 rounded-lg bg-[#1677ff] text-[12px] font-semibold text-white shadow-sm hover:bg-[#0958d9] disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="loading || restartLoading"
         @click="configureKiro"
       >
         {{ loading ? '配置中...' : '一键配置 Kiro 代理' }}
       </button>
-
       <button
-        v-if="kiroStatus?.configured"
-        class="flex-1 py-2 text-xs font-medium rounded border border-[#e5e7eb] text-[#6b7280] hover:text-[#111827] hover:border-[#d1d5db] transition-colors disabled:opacity-50"
+        v-else
+        class="h-8 rounded-lg border border-[#e2e8f0] bg-white text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
         :disabled="loading || restartLoading"
         @click="restoreKiro"
       >
         {{ loading ? '还原中...' : '还原原始代理' }}
       </button>
-
       <button
-        class="flex-1 py-2 text-xs font-medium rounded border border-[#e5e7eb] text-[#6b7280] hover:text-[#111827] hover:border-[#d1d5db] transition-colors disabled:opacity-50"
+        class="h-8 rounded-lg border border-[#e2e8f0] bg-white text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
         :disabled="loading || restartLoading"
         @click="restartKiro"
       >
@@ -128,25 +134,16 @@ onMounted(fetchKiroStatus)
       </button>
     </div>
 
-    <!-- 操作结果 -->
-    <div v-if="result" class="text-xs p-2 rounded border mb-3"
-      :class="result.includes('✓') ? 'bg-[#ecfdf5] border-[#10b981]/20 text-[#10b981]' : 'bg-[#fef2f2] border-[#ef4444]/20 text-[#ef4444]'">
+    <div v-if="result" class="mt-2 rounded-lg border px-3 py-1.5 text-[12px]" :class="result.includes('✓') ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#059669]' : 'border-[#fecaca] bg-[#fef2f2] text-[#dc2626]'">
       {{ result }}
     </div>
 
-    <!-- 手动配置提示 -->
-    <div class="border-t border-[#f3f4f6] pt-3 mt-2">
-      <p class="text-[10px] text-[#9ca3af] mb-2">手动配置：</p>
-      <div class="flex items-center gap-2 bg-[#f9fafb] rounded px-3 py-1.5 font-mono text-xs border border-[#e5e7eb]">
-        <span class="text-[#10b981] flex-1">http://{{ proxyHost }}:{{ proxyPort }}</span>
-        <button
-          class="text-[#6b7280] hover:text-[#111827] transition-colors"
-          @click="copyToClipboard(`http://${proxyHost}:${proxyPort}`)"
-        >
-          <IconCheck v-if="copied" class="text-[#10b981]" />
-          <IconCopy v-else />
-        </button>
-      </div>
+    <div class="mt-2 flex items-center gap-2 rounded-lg border border-[#e8edf5] bg-[#fbfdff] px-3 py-1.5 font-mono text-[12px]">
+      <span class="flex-1 truncate text-[#059669]">http://{{ proxyHost }}:{{ proxyPort }}</span>
+      <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(`http://${proxyHost}:${proxyPort}`)">
+        <IconCheck v-if="copied" class="text-[#059669]" />
+        <IconCopy v-else />
+      </button>
     </div>
   </div>
 </template>

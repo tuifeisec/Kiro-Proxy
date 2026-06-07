@@ -9,23 +9,32 @@ const emit = defineEmits(['filter', 'clear'])
 
 const search = ref('')
 const level = ref('')
+const includeDetail = ref(false)
 
-watch([search, level], () => {
-  emit('filter', { search: search.value, level: level.value })
+watch([search, level, includeDetail], () => {
+  emit('filter', { search: search.value, level: level.value, includeDetail: includeDetail.value })
 })
 </script>
 
 <template>
-  <div class="flex items-center gap-2 px-3 py-2 bg-[#f9fafb] border-b border-[#e5e7eb] shrink-0">
-    <input
-      v-model="search"
-      class="flex-1 bg-white border border-[#e5e7eb] rounded px-2.5 py-1 text-xs text-[#111827] placeholder-[#9ca3af] focus:border-[#10b981] outline-none transition-colors"
-      placeholder="搜索消息、分类、详情..."
-    />
+  <div class="flex shrink-0 items-center gap-2 border-b border-[#e5e7eb] bg-white px-3 py-2">
+    <div class="relative min-w-0 flex-1">
+      <span class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[#9ca3af]">⌕</span>
+      <input
+        v-model="search"
+        class="h-8 w-full rounded-lg border border-[#e5e7eb] bg-[#f9fafb] pl-7 pr-3 text-xs text-[#111827] outline-none transition-colors placeholder:text-[#9ca3af] focus:border-[#93c5fd] focus:bg-white focus:ring-2 focus:ring-[#dbeafe]"
+        placeholder="搜索消息、分类..."
+      />
+    </div>
+
+    <label class="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg border border-[#e5e7eb] bg-white px-2 text-[11px] text-[#6b7280]">
+      <input v-model="includeDetail" type="checkbox" class="h-3.5 w-3.5 accent-[#2563eb]" />
+      搜详情
+    </label>
 
     <select
       v-model="level"
-      class="bg-white border border-[#e5e7eb] rounded px-2 py-1 text-xs text-[#6b7280] focus:border-[#10b981] outline-none transition-colors"
+      class="h-8 rounded-lg border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#6b7280] outline-none transition-colors focus:border-[#93c5fd] focus:ring-2 focus:ring-[#dbeafe]"
     >
       <option value="">全部级别</option>
       <option value="info">Info</option>
@@ -34,9 +43,9 @@ watch([search, level], () => {
       <option value="debug">Debug</option>
     </select>
 
-    <span class="text-xs text-[#6b7280] shrink-0">{{ total }} 条</span>
+    <span class="shrink-0 rounded-md bg-[#f3f4f6] px-2 py-1 text-xs text-[#6b7280]">{{ total }} 条</span>
     <button
-      class="text-xs text-[#6b7280] hover:text-[#ef4444] transition-colors shrink-0"
+      class="h-8 shrink-0 rounded-lg border border-[#e5e7eb] bg-white px-3 text-xs text-[#6b7280] transition-colors hover:border-[#fecaca] hover:bg-[#fef2f2] hover:text-[#ef4444]"
       @click="emit('clear')"
     >清空</button>
   </div>
