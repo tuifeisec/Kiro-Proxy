@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	desktopWindowWidth  = 940
-	desktopWindowHeight = 640
+	desktopWindowWidth  = 1240
+	desktopWindowHeight = 760
 )
 
 type desktopWindowController struct {
