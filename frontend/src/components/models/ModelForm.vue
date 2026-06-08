@@ -395,7 +395,7 @@ async function handleExchangeOAuth() {
                     <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
                       i
                       <span class="pointer-events-none absolute bottom-5 left-0 z-20 hidden w-52 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
-                        快速模式会向 Codex 上游发送 service_tier=fast；标准模式不发送该字段
+                        快速模式会向 Codex 上游发送 service_tier=priority；标准模式不发送该字段
                       </span>
                     </span>
                   </label>

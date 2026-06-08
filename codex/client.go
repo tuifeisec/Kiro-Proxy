@@ -455,10 +455,9 @@ func NewRequestBodyFromResponses(body []byte, serviceTier string) []byte {
 	delete(parsed, "user")
 	delete(parsed, "previous_response_id") // HTTP SSE Codex endpoint does not support it safely.
 
+	delete(parsed, "service_tier")
 	if strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
-		parsed["service_tier"] = "fast"
-	} else {
-		delete(parsed, "service_tier")
+		parsed["service_tier"] = "priority"
 	}
 
 	if effort, ok := parsed["reasoning_effort"]; ok {
