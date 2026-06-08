@@ -48,6 +48,7 @@ type Model struct {
 	CodexAccountID       string  `json:"codex_account_id"`
 	AccessTokenExpiresAt int64   `json:"access_token_expires_at"`
 	CodexUsageJSON       string  `json:"codex_usage_json"`
+	ServiceTier          string  `json:"service_tier"` // Codex 速度层：空=标准，fast=快速
 	Enabled              bool    `json:"enabled"`
 	SortOrder            int     `json:"sort_order"`
 	Note                 string  `json:"note"`
@@ -61,7 +62,7 @@ func (db *DB) GetModels() ([]Model, error) {
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
-		       enabled, sort_order, note, created_at, updated_at
+		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models ORDER BY sort_order ASC, created_at ASC
 	`)
 	if err != nil {
@@ -78,7 +79,7 @@ func (db *DB) GetModels() ([]Model, error) {
 			&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 			&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 			&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
-			&enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt); err != nil {
 			return nil, err
 		}
 		m.Enabled = enabled == 1
@@ -96,14 +97,14 @@ func (db *DB) GetModel(id string) (*Model, error) {
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
-		       enabled, sort_order, note, created_at, updated_at
+		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE id = ?
 	`, id).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
-		&enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
+		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -121,14 +122,14 @@ func (db *DB) FindByModelID(modelID string) (*Model, error) {
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
-		       enabled, sort_order, note, created_at, updated_at
+		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE model_id = ? AND enabled = 1 LIMIT 1
 	`, modelID).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
-		&enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
+		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -146,14 +147,14 @@ func (db *DB) FindModelByName(name string) (*Model, error) {
 		       endpoint, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
-		       enabled, sort_order, note, created_at, updated_at
+		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE name = ? LIMIT 1
 	`, name).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
-		&enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
+		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +175,7 @@ func (db *DB) CreateModel(m *Model) error {
 	}
 	m.Endpoint = strings.TrimSpace(m.Endpoint)
 	m.ProxyURL = strings.TrimSpace(m.ProxyURL)
+	m.ServiceTier = normalizeServiceTier(m.ServiceTier)
 	normalizeModelPrices(m)
 	enabled := 0
 	if m.Enabled {
@@ -188,13 +190,13 @@ func (db *DB) CreateModel(m *Model) error {
 		  endpoint, context_window, max_tokens, reasoning_effort, rate_multiplier,
 		  input_price, output_price, cache_input_price, cache_output_price,
 		  enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
-		  enabled, sort_order, note, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		  service_tier, enabled, sort_order, note, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.ID, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
 		m.Endpoint, m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
-		enabled, m.SortOrder, m.Note, m.CreatedAt, m.UpdatedAt)
+		m.ServiceTier, enabled, m.SortOrder, m.Note, m.CreatedAt, m.UpdatedAt)
 	return err
 }
 
@@ -213,19 +215,20 @@ func (db *DB) UpdateModel(m *Model) error {
 	}
 	m.Endpoint = strings.TrimSpace(m.Endpoint)
 	m.ProxyURL = strings.TrimSpace(m.ProxyURL)
+	m.ServiceTier = normalizeServiceTier(m.ServiceTier)
 	normalizeModelPrices(m)
 	res, err := db.conn.Exec(`
 		UPDATE models SET name=?, model_id=?, provider=?, base_url=?, api_key=?, refresh_token=?, proxy_url=?,
 		  endpoint=?, context_window=?, max_tokens=?, reasoning_effort=?,
 		  rate_multiplier=?, input_price=?, output_price=?, cache_input_price=?, cache_output_price=?,
 		  enable_continuation=?, codex_email=?, codex_plan_type=?, codex_account_id=?, access_token_expires_at=?, codex_usage_json=?,
-		  enabled=?, sort_order=?, note=?, updated_at=?
+		  service_tier=?, enabled=?, sort_order=?, note=?, updated_at=?
 		WHERE id=?
 	`, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
 		m.Endpoint, m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
-		enabled, m.SortOrder, m.Note, m.UpdatedAt, m.ID)
+		m.ServiceTier, enabled, m.SortOrder, m.Note, m.UpdatedAt, m.ID)
 	if err != nil {
 		return err
 	}
@@ -239,6 +242,14 @@ func (db *DB) UpdateModel(m *Model) error {
 func (db *DB) DeleteModel(id string) error {
 	_, err := db.conn.Exec(`DELETE FROM models WHERE id = ?`, id)
 	return err
+}
+
+func normalizeServiceTier(serviceTier string) string {
+	serviceTier = strings.ToLower(strings.TrimSpace(serviceTier))
+	if serviceTier == "fast" {
+		return "fast"
+	}
+	return ""
 }
 
 func normalizeModelPrices(m *Model) {

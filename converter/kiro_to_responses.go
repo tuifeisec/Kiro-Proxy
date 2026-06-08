@@ -16,16 +16,16 @@ import (
 
 // ResponsesRequest OpenAI Responses API 请求体
 type ResponsesRequest struct {
-	Model              string     `json:"model"`
-	Instructions       string     `json:"instructions,omitempty"`
-	Input              []ReqInput `json:"input"`
-	Tools              []ReqTool  `json:"tools,omitempty"`
-	ReasoningEffort    string     `json:"reasoning_effort,omitempty"`
-	Stream             bool       `json:"stream"`
-	Store              bool       `json:"store"`
-	PromptCacheKey     string     `json:"prompt_cache_key,omitempty"`
-	PreviousResponseID string     `json:"previous_response_id,omitempty"`
-	User               string     `json:"user,omitempty"`
+	Model              string           `json:"model"`
+	Instructions       string           `json:"instructions,omitempty"`
+	Input              []ReqInput       `json:"input"`
+	Tools              []ReqTool        `json:"tools,omitempty"`
+	Reasoning          *OpenAIReasoning `json:"reasoning,omitempty"`
+	Stream             bool             `json:"stream"`
+	Store              bool             `json:"store"`
+	PromptCacheKey     string           `json:"prompt_cache_key,omitempty"`
+	PreviousResponseID string           `json:"previous_response_id,omitempty"`
+	User               string           `json:"user,omitempty"`
 }
 
 type ReqInput struct {
@@ -73,7 +73,7 @@ func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 		Store:  true, // 必须 true，否则中转站无法缓存 prompt（previous_response_id 续传依赖此字段）
 	}
 	if reasoningEffort = strings.TrimSpace(reasoningEffort); reasoningEffort != "" {
-		req.ReasoningEffort = reasoningEffort
+		req.Reasoning = &OpenAIReasoning{Effort: reasoningEffort}
 	}
 
 	// prompt_cache_key 帮助中转站关联同一会话的请求，用于缓存调度

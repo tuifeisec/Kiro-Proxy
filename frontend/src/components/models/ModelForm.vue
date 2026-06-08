@@ -25,6 +25,7 @@ const defaultForm = () => ({
   context_window: 0,
   max_tokens: 0,
   reasoning_effort: '',
+  service_tier: '',
   rate_multiplier: 1.0,
   input_price: 5,
   output_price: 30,
@@ -126,11 +127,22 @@ const endpointOptions = computed(() => {
   return ['/chat/completions', '/responses']
 })
 
-const reasoningOptions = [
-  { value: '', label: '自动' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' }
+const reasoningOptions = computed(() => {
+  const options = [
+    { value: '', label: '自动' },
+    { value: 'low', label: '低' },
+    { value: 'medium', label: '中' },
+    { value: 'high', label: '高' }
+  ]
+  if (form.value.provider === 'openai' || form.value.provider === 'codex') {
+    options.push({ value: 'xhigh', label: '极高' })
+  }
+  return options
+})
+
+const codexServiceTierOptions = [
+  { value: '', label: '标准' },
+  { value: 'fast', label: '快速' }
 ]
 
 const defaultPrices = {
@@ -366,7 +378,7 @@ async function handleExchangeOAuth() {
                     </span>
                   </span>
                 </label>
-                <div class="grid h-9 grid-cols-4 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]">
+                <div class="grid h-9 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]" :class="reasoningOptions.length === 5 ? 'grid-cols-5' : 'grid-cols-4'">
                   <button
                     v-for="opt in reasoningOptions"
                     :key="opt.value"
@@ -375,6 +387,28 @@ async function handleExchangeOAuth() {
                     :class="form.reasoning_effort === opt.value ? 'bg-[#eff6ff] text-[#2563eb] ring-1 ring-inset ring-[#93c5fd]' : 'text-[#374151] hover:bg-white'"
                     @click="form.reasoning_effort = opt.value"
                   >{{ opt.label }}</button>
+                </div>
+
+                <div v-if="form.provider === 'codex'" class="mt-3">
+                  <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
+                    Codex 速度模式
+                    <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                      i
+                      <span class="pointer-events-none absolute bottom-5 left-0 z-20 hidden w-52 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                        快速模式会向 Codex 上游发送 service_tier=fast；标准模式不发送该字段
+                      </span>
+                    </span>
+                  </label>
+                  <div class="grid h-9 grid-cols-2 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]">
+                    <button
+                      v-for="opt in codexServiceTierOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="border-r border-[#e5e7eb] text-xs last:border-r-0"
+                      :class="form.service_tier === opt.value ? 'bg-[#ecfdf5] text-[#059669] ring-1 ring-inset ring-[#86efac]' : 'text-[#374151] hover:bg-white'"
+                      @click="form.service_tier = opt.value"
+                    >{{ opt.label }}</button>
+                  </div>
                 </div>
               </div>
 

@@ -442,7 +442,7 @@ func findNestedAccountID(v interface{}) string {
 	return ""
 }
 
-func NewRequestBodyFromResponses(body []byte) []byte {
+func NewRequestBodyFromResponses(body []byte, serviceTier string) []byte {
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return body
@@ -455,15 +455,22 @@ func NewRequestBodyFromResponses(body []byte) []byte {
 	delete(parsed, "user")
 	delete(parsed, "previous_response_id") // HTTP SSE Codex endpoint does not support it safely.
 
+	if strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
+		parsed["service_tier"] = "fast"
+	} else {
+		delete(parsed, "service_tier")
+	}
+
 	if effort, ok := parsed["reasoning_effort"]; ok {
 		delete(parsed, "reasoning_effort")
 		if s, ok := effort.(string); ok && strings.TrimSpace(s) != "" {
 			parsed["reasoning"] = map[string]interface{}{
-				"effort":  strings.TrimSpace(s),
-				"summary": "auto",
+				"effort": strings.TrimSpace(s),
 			}
 		}
 	}
+	ensureCodexReasoningSummary(parsed)
+
 	if input, ok := parsed["input"].([]interface{}); ok {
 		parsed["input"] = sanitizeCodexInput(input)
 	}
@@ -475,6 +482,16 @@ func NewRequestBodyFromResponses(body []byte) []byte {
 		return body
 	}
 	return bytes.TrimSpace(out)
+}
+
+func ensureCodexReasoningSummary(parsed map[string]interface{}) {
+	reasoning, ok := parsed["reasoning"].(map[string]interface{})
+	if !ok || reasoning == nil {
+		return
+	}
+	if _, ok := reasoning["summary"]; !ok {
+		reasoning["summary"] = "auto"
+	}
 }
 
 func sanitizeCodexInput(input []interface{}) []interface{} {

@@ -152,6 +152,10 @@ type OpenAIRequest struct {
 	User            string            `json:"user,omitempty"`
 }
 
+type OpenAIReasoning struct {
+	Effort string `json:"effort,omitempty"`
+}
+
 type OpenAIStreamOpts struct {
 	IncludeUsage bool `json:"include_usage"`
 }

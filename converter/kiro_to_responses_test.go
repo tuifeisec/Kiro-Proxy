@@ -290,9 +290,13 @@ Here is the last user message:
 		t.Error("丢失 EnvironmentContext 中的文件名")
 	}
 
-	// 7. reasoning_effort 应该传递
-	if req.ReasoningEffort != "medium" {
-		t.Errorf("reasoning_effort = %q, want medium", req.ReasoningEffort)
+	// 7. Responses API 的 reasoning.effort 应该传递
+	if req.Reasoning == nil || req.Reasoning.Effort != "medium" {
+		got := ""
+		if req.Reasoning != nil {
+			got = req.Reasoning.Effort
+		}
+		t.Errorf("reasoning.effort = %q, want medium", got)
 	}
 
 	// 8. 工具定义不能丢

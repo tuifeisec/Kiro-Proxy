@@ -246,14 +246,6 @@ function usedText(row) {
 
       <div class="flex items-center justify-start gap-1.5 px-1 whitespace-nowrap">
         <button
-          v-if="provider === 'codex'"
-          class="inline-flex h-[30px] min-w-[58px] shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#dbeafe] bg-white px-2 text-[12px] font-medium leading-none text-[#2563eb] hover:bg-[#eff6ff] disabled:opacity-50"
-          :disabled="refreshingCodex"
-          @click="emit('refresh-codex')"
-        >
-          <span class="shrink-0">↻</span><span>{{ refreshingCodex ? '刷新中' : '刷新' }}</span>
-        </button>
-        <button
           class="inline-flex h-[30px] min-w-[62px] shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#e5e7eb] bg-white px-2 text-[12px] font-medium leading-none text-[#374151] hover:border-[#bfdbfe] hover:bg-[#eff6ff] hover:text-[#2563eb] disabled:opacity-50"
           :disabled="testing || !isEnabled"
           @click="emit('test')"

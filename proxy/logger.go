@@ -100,6 +100,35 @@ func (tl *TrafficLogger) LogWithMeta(level, category, message string, meta LogMe
 }
 
 func (tl *TrafficLogger) logPrepared(level, category, message, det string, meta *LogMeta) {
+	template := tl.newEntry(level, category, message, det, meta)
+
+	// 控制台
+	prefix := ""
+	switch level {
+	case "error":
+		prefix = "✗"
+	case "warn":
+		prefix = "⚠"
+	default:
+		prefix = "→"
+	}
+	logMsg := fmt.Sprintf("[%s] %s [%s] %s", template.Time, prefix, category, message)
+	log.Println(logMsg)
+
+	if tl.file == nil && (tl.hub == nil || tl.hub.ClientCount() == 0) {
+		return
+	}
+
+	data, _ := json.Marshal(template)
+	if tl.file != nil {
+		fmt.Fprintf(tl.file, "%s\n", data)
+	}
+	if tl.hub != nil {
+		tl.hub.Broadcast(data)
+	}
+}
+
+func (tl *TrafficLogger) newEntry(level, category, message, det string, meta *LogMeta) *LogEntry {
 	tl.mu.Lock()
 	tl.seq++
 	id := fmt.Sprintf("%06d", tl.seq)
@@ -127,31 +156,7 @@ func (tl *TrafficLogger) logPrepared(level, category, message, det string, meta 
 		entry.LatencyMS = meta.LatencyMS
 		entry.Metadata = meta.Metadata
 	}
-
-	// 控制台
-	prefix := ""
-	switch level {
-	case "error":
-		prefix = "✗"
-	case "warn":
-		prefix = "⚠"
-	default:
-		prefix = "→"
-	}
-	logMsg := fmt.Sprintf("[%s] %s [%s] %s", entry.Time, prefix, category, message)
-	log.Println(logMsg)
-
-	// 写文件
-	if tl.file != nil {
-		data, _ := json.Marshal(entry)
-		fmt.Fprintf(tl.file, "%s\n", data)
-	}
-
-	// WebSocket 广播
-	if tl.hub != nil {
-		data, _ := json.Marshal(entry)
-		tl.hub.Broadcast(data)
-	}
+	return entry
 }
 
 func (tl *TrafficLogger) Info(category, msg string, detail ...string) {
@@ -263,4 +268,33 @@ func logStatsDay(t time.Time) string {
 		t = t.AddDate(0, 0, -1)
 	}
 	return t.Format("2006-01-02")
+}
+
+func (tl *TrafficLogger) InfoWithMetaLazyDetail(category, msg string, meta LogMeta, detail func(maxBytes int) string) {
+	tl.LogWithMetaLazyDetail("info", category, msg, meta, detail)
+}
+
+func (tl *TrafficLogger) ErrorWithMetaLazyDetail(category, msg string, meta LogMeta, detail func(maxBytes int) string) {
+	tl.LogWithMetaLazyDetail("error", category, msg, meta, detail)
+}
+
+func (tl *TrafficLogger) LogWithMetaLazyDetail(level, category, message string, meta LogMeta, detail func(maxBytes int) string) {
+	det := ""
+	if detail != nil {
+		opts := tl.Options()
+		maxBytes := opts.MaxDetailBytes
+		if opts.DetailMode == "full" {
+			maxBytes = 0
+		}
+		det = detail(maxBytes)
+	}
+	tl.logPrepared(level, category, message, det, &meta)
+}
+
+func (tl *TrafficLogger) DetailLimit() int {
+	opts := tl.Options()
+	if opts.DetailMode == "full" {
+		return 0
+	}
+	return opts.MaxDetailBytes
 }

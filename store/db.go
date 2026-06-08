@@ -62,6 +62,7 @@ func (db *DB) migrate() error {
 		{"models", "codex_account_id", "TEXT NOT NULL DEFAULT ''"},
 		{"models", "access_token_expires_at", "INTEGER NOT NULL DEFAULT 0"},
 		{"models", "codex_usage_json", "TEXT NOT NULL DEFAULT ''"},
+		{"models", "service_tier", "TEXT NOT NULL DEFAULT ''"},
 		{"daily_stats", "credits", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, col := range columns {
@@ -128,6 +129,7 @@ CREATE TABLE IF NOT EXISTS models (
     codex_account_id TEXT NOT NULL DEFAULT '',
     access_token_expires_at INTEGER NOT NULL DEFAULT 0,
     codex_usage_json TEXT NOT NULL DEFAULT '',
+    service_tier   TEXT NOT NULL DEFAULT '',
     enabled         INTEGER NOT NULL DEFAULT 1,
     sort_order      INTEGER NOT NULL DEFAULT 0,
     note            TEXT NOT NULL DEFAULT '',

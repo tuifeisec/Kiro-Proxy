@@ -51,7 +51,7 @@ type responsesRequestForContinuation struct {
 	Instructions       string            `json:"instructions,omitempty"`
 	Input              []json.RawMessage `json:"input"`
 	Tools              []ReqTool         `json:"tools,omitempty"`
-	ReasoningEffort    string            `json:"reasoning_effort,omitempty"`
+	Reasoning          *OpenAIReasoning  `json:"reasoning,omitempty"`
 	Stream             bool              `json:"stream"`
 	Store              bool              `json:"store"`
 	PromptCacheKey     string            `json:"prompt_cache_key,omitempty"`

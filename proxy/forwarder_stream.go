@@ -1,0 +1,236 @@
+package proxy
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"kiro-proxy/converter"
+	"kiro-proxy/store"
+	"log"
+	"net/http"
+	"time"
+
+	json "github.com/goccy/go-json"
+)
+
+// wrapKiroStream 将上游 SSE 流包装为 Kiro AWS Event Stream
+func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult) (*http.Response, error) {
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		logger.ErrorWithMeta("forwarder", fmt.Sprintf("上游错误 %d", resp.StatusCode), LogMeta{
+			Model:     statsModelID(m),
+			Status:    resp.StatusCode,
+			LatencyMS: time.Since(pre.StartTime).Milliseconds(),
+		}, truncate(string(body), 500))
+		// 4xx/5xx 上游错误也需要计入统计（总请求数 + 错误数）
+		f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
+		return buildKiroTextStreamResponse(reqFromResponse(resp), buildUpstreamErrorMessage(resp.StatusCode, resp.Status, body), kiroModelID(pre, m), true), nil
+	}
+
+	cw := m.ContextWindow
+	if cw <= 0 {
+		cw = defaultMaxTokens
+	}
+
+	modelID := ""
+	if pre.Conv != nil {
+		modelID = pre.Conv.ModelID
+	}
+
+	logger.Info("converter", fmt.Sprintf("开始流式转换: provider=%s endpoint=%s → Kiro Event Stream", m.Provider, m.Endpoint))
+
+	capture := newStreamCapture(logger.DetailLimit())
+	wrappedBody := capture.wrap(resp.Body)
+
+	var streamBody io.ReadCloser
+	switch {
+	case m.Provider == "anthropic":
+		sc := converter.NewAnthropicStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
+		streamBody = sc
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[forwarder] panic in anthropic stats goroutine: %v", r)
+					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
+				}
+			}()
+			in, out := sc.Usage()
+			cacheR, cacheW := sc.CacheTokens()
+			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
+			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
+				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
+			})
+		}()
+	case m.Provider == "gemini":
+		sc := converter.NewGeminiStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
+		streamBody = sc
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[forwarder] panic in gemini stats goroutine: %v", r)
+					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
+				}
+			}()
+			in, out := sc.Usage()
+			cacheR, _ := sc.CacheTokens()
+			credits := store.CalculateCredits(in, out, cacheR, 0, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
+			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), func(maxBytes int) string {
+				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0, maxBytes)
+			})
+		}()
+	case useResponsesAPI(pre, m) || m.Provider == "codex":
+		// responses SSE → Kiro Event Stream（一段式直转）
+		sc := converter.NewResponsesStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
+		streamBody = sc
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[forwarder] panic in responses stats goroutine: %v", r)
+					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
+				}
+			}()
+			in, out := sc.Usage()
+			cacheR, _ := sc.CacheTokens()
+			credits := store.CalculateCredits(in, out, cacheR, 0, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
+			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), func(maxBytes int) string {
+				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0, maxBytes)
+			})
+
+			// 保存 response_id 用于下次续传；只有明确完成且无错误的流才能更新续传状态。
+			responseID := sc.ResponseID()
+			if responseID != "" && sc.Succeeded() && contResult != nil && pre.Conv != nil && pre.Conv.ConversationID != "" {
+				f.db.UpsertResponsesSession(&store.ResponsesSession{
+					ConversationID: pre.Conv.ConversationID,
+					InputHash:      converter.HashInput(contResult.FullInputJSON),
+					ResponseID:     responseID,
+					InputJSON:      contResult.FullInputJSON,
+					ItemCount:      contResult.InputItemCount,
+					UpdatedAt:      time.Now(),
+				})
+				ridShort := responseID
+				if len(ridShort) > 12 {
+					ridShort = ridShort[:12]
+				}
+				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, responseId=%s", pre.Conv.ConversationID, ridShort))
+			}
+		}()
+	default: // /v1/chat/completions（含 classifier）
+		sc := converter.NewOpenAIStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
+		streamBody = sc
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[forwarder] panic in openai stats goroutine: %v", r)
+					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
+				}
+			}()
+			in, out := sc.Usage()
+			cacheR, cacheW := sc.CacheTokens()
+			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
+			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
+				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
+			})
+		}()
+	}
+
+	resp.Body = streamBody
+	resp.ContentLength = -1
+	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Set("Transfer-Encoding", "chunked")
+	resp.Header.Set("Connection", "close")
+	resp.Header.Del("Content-Length")
+	resp.Header.Set("Cache-Control", "no-cache")
+
+	return resp, nil
+}
+
+type streamCapture struct {
+	buf bytes.Buffer
+	max int // 最大缓冲字节数，超过后停止捕获
+}
+
+func newStreamCapture(maxBytes int) *streamCapture {
+	if maxBytes <= 0 {
+		maxBytes = 512 * 1024
+	}
+	return &streamCapture{max: maxBytes}
+}
+
+func (c *streamCapture) wrap(source io.ReadCloser) io.ReadCloser {
+	return &captureReadCloser{source: source, writer: &c.buf, max: c.max}
+}
+
+func (c *streamCapture) String(maxBytes int) string {
+	if maxBytes > 0 && c.buf.Len() > maxBytes {
+		return string(c.buf.Bytes()[:maxBytes]) + fmt.Sprintf("\n... [truncated upstream stream: %d -> %d bytes]", c.buf.Len(), maxBytes)
+	}
+	return c.buf.String()
+}
+
+type captureReadCloser struct {
+	source  io.ReadCloser
+	writer  *bytes.Buffer
+	max     int
+	stopped bool
+}
+
+func (r *captureReadCloser) Read(p []byte) (int, error) {
+	n, err := r.source.Read(p)
+	if n > 0 && !r.stopped {
+		if r.writer.Len()+n > r.max {
+			r.stopped = true // 超限后停止写入，避免无限增长
+		} else {
+			_, _ = r.writer.Write(p[:n])
+		}
+	}
+	return n, err
+}
+
+func (r *captureReadCloser) Close() error {
+	return r.source.Close()
+}
+
+func formatUpstreamResponseDetail(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	data := map[string]interface{}{
+		"status":         resp.Status,
+		"status_code":    resp.StatusCode,
+		"proto":          resp.Proto,
+		"content_length": resp.ContentLength,
+		"headers":        sanitizedHeaders(resp.Header),
+	}
+	b, _ := json.MarshalIndent(data, "", "  ")
+	return string(b)
+}
+
+func formatStreamCompletionDetail(resp *http.Response, capture *streamCapture, in, out, cacheRead, cacheWrite int, maxBytes int) string {
+	data := map[string]interface{}{
+		"usage": map[string]int{
+			"input_tokens":       in,
+			"output_tokens":      out,
+			"cache_read_tokens":  cacheRead,
+			"cache_write_tokens": cacheWrite,
+		},
+	}
+	if resp != nil {
+		data["upstream_response"] = map[string]interface{}{
+			"status":         resp.Status,
+			"status_code":    resp.StatusCode,
+			"proto":          resp.Proto,
+			"content_length": resp.ContentLength,
+			"headers":        sanitizedHeaders(resp.Header),
+		}
+	}
+	if capture != nil {
+		data["upstream_stream"] = capture.String(maxBytes)
+	}
+	b, _ := json.MarshalIndent(data, "", "  ")
+	return string(b)
+}
