@@ -15,6 +15,10 @@ const refreshingCodexIds = ref({})
 const togglingEnabledIds = ref({})
 const saving = ref(false)
 const loadingModels = ref(false)
+const showDeleteModal = ref(false)
+const deleteTarget = ref(null)
+const deletingModel = ref(false)
+const deleteError = ref('')
 const errorMessage = ref('')
 const searchText = ref('')
 const providerFilter = ref('all')
@@ -77,6 +81,8 @@ const summaryItems = computed(() => [
   { label: '测试失败', value: summary.value.failed, suffix: '', icon: 'alert', tone: 'text-[#dc2626] bg-[#fef2f2] border-[#fecaca]' },
   { label: '平均响应速度', value: summary.value.avgSpeed ? summary.value.avgSpeed.toFixed(1) : '-', suffix: summary.value.avgSpeed ? 't/s' : '', icon: 'trend', tone: 'text-[#2563eb] bg-[#eff6ff] border-[#bfdbfe]' }
 ])
+
+const deleteTargetName = computed(() => deleteTarget.value?.name || deleteTarget.value?.model_id || '当前模型')
 
 const TEST_RESULTS_STORAGE_KEY = 'kiro-proxy:model-test-results:v1'
 
@@ -155,14 +161,33 @@ async function handleSave(form) {
   }
 }
 
-async function handleDelete(m) {
-  if (!confirm(`确定删除模型「${m.name || m.model_id}」？`)) return
+function openDeleteModal(m) {
+  deleteTarget.value = m
+  deleteError.value = ''
+  showDeleteModal.value = true
+}
+
+function closeDeleteModal() {
+  if (deletingModel.value) return
+  showDeleteModal.value = false
+  deleteTarget.value = null
+  deleteError.value = ''
+}
+
+async function confirmDelete() {
+  if (!deleteTarget.value?.id || deletingModel.value) return
+  deletingModel.value = true
+  deleteError.value = ''
   errorMessage.value = ''
   try {
-    await deleteModel(m.id)
+    await deleteModel(deleteTarget.value.id)
+    showDeleteModal.value = false
+    deleteTarget.value = null
     await loadModels()
   } catch (e) {
-    errorMessage.value = e?.message || '删除失败'
+    deleteError.value = e?.message || '删除失败'
+  } finally {
+    deletingModel.value = false
   }
 }
 
@@ -352,7 +377,7 @@ onMounted(() => {
             :toggling-enabled="!!togglingEnabledIds[m.id]"
             @toggle-enabled="handleToggleEnabled(m)"
             @edit="openEdit(m)"
-            @delete="handleDelete(m)"
+            @delete="openDeleteModal(m)"
             @test="handleTest(m)"
             @refresh-codex="handleRefreshCodex(m)"
           />
@@ -380,5 +405,52 @@ onMounted(() => {
       @save="handleSave"
       @cancel="showForm = false"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="showDeleteModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
+        @click.self="closeDeleteModal"
+      >
+        <div class="w-full max-w-[420px] rounded-2xl border border-[#e5e7eb] bg-white p-5 shadow-2xl">
+          <div class="flex items-start gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#fef2f2] text-[#dc2626]">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.3 4.2 2.8 17.5A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.5L13.7 4.2a2 2 0 0 0-3.4 0Z" />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+            </div>
+            <div class="min-w-0 flex-1">
+              <h3 class="text-[15px] font-semibold text-[#111827]">删除模型</h3>
+              <p class="mt-2 text-[13px] leading-5 text-[#475569]">
+                确定删除模型「<span class="font-medium text-[#111827]">{{ deleteTargetName }}</span>」？此操作无法撤销。
+              </p>
+            </div>
+          </div>
+
+          <div v-if="deleteError" class="mt-4 rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">
+            {{ deleteError }}
+          </div>
+
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              class="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-[13px] font-medium text-[#374151] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="deletingModel"
+              @click="closeDeleteModal"
+            >
+              取消
+            </button>
+            <button
+              class="rounded-lg bg-[#dc2626] px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-[#b91c1c] disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="deletingModel"
+              @click="confirmDelete"
+            >
+              {{ deletingModel ? '删除中...' : '确认删除' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
