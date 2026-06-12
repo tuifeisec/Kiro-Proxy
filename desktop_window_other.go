@@ -1,4 +1,4 @@
-//go:build desktop && !windows
+//go:build desktop && !windows && !darwin
 
 package main
 

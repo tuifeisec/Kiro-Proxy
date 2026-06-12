@@ -2,11 +2,16 @@
 
 package main
 
-import "github.com/getlantern/systray"
+import (
+	"sync"
+
+	"github.com/getlantern/systray"
+)
 
 type desktopTrayController struct {
-	window *desktopWindowController
-	done   chan struct{}
+	window   *desktopWindowController
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 func newDesktopTrayController(window *desktopWindowController) *desktopTrayController {
@@ -22,6 +27,7 @@ func (c *desktopTrayController) run() {
 
 func (c *desktopTrayController) quit() {
 	systray.Quit()
+	c.closeDone()
 }
 
 func (c *desktopTrayController) showWindow() {
@@ -64,5 +70,11 @@ func (c *desktopTrayController) onReady() {
 }
 
 func (c *desktopTrayController) onExit() {
-	close(c.done)
+	c.closeDone()
+}
+
+func (c *desktopTrayController) closeDone() {
+	c.doneOnce.Do(func() {
+		close(c.done)
+	})
 }
