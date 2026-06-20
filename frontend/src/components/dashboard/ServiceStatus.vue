@@ -1,8 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 
-const router = useRouter()
 const status = ref('checking')
 const service = ref({
   proxy_url: 'http://127.0.0.1:18081',
@@ -52,10 +50,6 @@ function formatUptime(seconds) {
   return `${h}h ${m}m`
 }
 
-function openLogs() {
-  router.push('/inspector')
-}
-
 onMounted(() => {
   checkStatus()
   timer = setInterval(checkStatus, 5000)
@@ -95,13 +89,5 @@ onUnmounted(() => clearInterval(timer))
       </div>
     </div>
 
-    <div class="mt-2">
-      <button
-        class="h-8 w-full rounded-lg border border-[#dbe3ef] bg-white text-[12px] font-medium text-[#475569] transition hover:bg-[#f8fafc] active:scale-[0.98]"
-        @click="openLogs"
-      >
-        查看日志
-      </button>
-    </div>
   </div>
 </template>

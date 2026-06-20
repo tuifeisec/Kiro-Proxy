@@ -47,3 +47,7 @@ test_sse.ps1
 install-ca.ps1
 
 .codegraph
+
+# Node dependencies in admin scaffold
+go/web/admin/node_modules/
+.vben-template/node_modules/

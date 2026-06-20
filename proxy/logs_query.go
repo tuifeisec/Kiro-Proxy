@@ -27,6 +27,9 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireTrafficLogPermission(w) {
+		return
+	}
 
 	date := strings.TrimSpace(r.URL.Query().Get("date"))
 	if date == "" {

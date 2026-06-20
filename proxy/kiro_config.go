@@ -55,7 +55,7 @@ func (s *Server) handleKiroProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetProxy := fmt.Sprintf("http://127.0.0.1:%d", s.cfg.Proxy.Port)
+	targetProxy := fmt.Sprintf("http://%s:%d", s.proxyDisplayHost(), s.cfg.Proxy.Port)
 
 	switch r.Method {
 	case http.MethodGet:

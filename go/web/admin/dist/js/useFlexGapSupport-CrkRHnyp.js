@@ -1,0 +1,1 @@
+import{In as e,mr as t}from"../jse/index-index-Tdmu65Tj.js";import{n}from"./styleChecker-WczsI8de.js";var r=(()=>{let r=t(!1);return e(()=>{r.value=n()}),r});export{r as t};

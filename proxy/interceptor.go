@@ -133,6 +133,16 @@ func (s *Server) setupInterceptor() {
 			s.logger.Error("interceptor", "无可用路由: model="+pre.SourceModel)
 			return req, errorResponse(req, http.StatusServiceUnavailable, "no route for model: "+pre.SourceModel)
 		}
+		if result, err := s.licenseClient.CheckCached(); err != nil || !result.Authorized {
+			msg := "未授权，请加入群获取免费授权并在后台添加机器码"
+			if err != nil {
+				msg = "授权检测失败: " + err.Error()
+			} else if result.Tampered {
+				msg = "程序防篡改校验失败，请重新下载官方版本"
+			}
+			s.logger.Error("license", msg)
+			return req, errorResponse(req, http.StatusForbidden, msg)
+		}
 
 		s.logger.InfoWithMeta("router", fmt.Sprintf("路由命中: %s → %s (%s)", pre.SourceModel, route.Model.ModelID, route.Model.BaseURL), LogMeta{
 			Model: statsModelID(route.Model),

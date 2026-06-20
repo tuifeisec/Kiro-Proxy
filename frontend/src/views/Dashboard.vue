@@ -1,5 +1,6 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { getAdvertisements, openExternalURL } from '../api/license.js'
 import { useStats } from '../composables/useStats.js'
 import StatsCard from '../components/dashboard/StatsCard.vue'
 import ServiceStatus from '../components/dashboard/ServiceStatus.vue'
@@ -7,6 +8,7 @@ import CAStatus from '../components/dashboard/CAStatus.vue'
 import ProxyConfig from '../components/dashboard/ProxyConfig.vue'
 import AdvancedSettings from '../components/dashboard/AdvancedSettings.vue'
 import UsageBreakdown from '../components/dashboard/UsageBreakdown.vue'
+import ConfirmDialog from '../components/common/ConfirmDialog.vue'
 import IconLogs from '../components/icons/IconLogs.vue'
 import IconDashboard from '../components/icons/IconDashboard.vue'
 import IconWifi from '../components/icons/IconWifi.vue'
@@ -21,6 +23,90 @@ const showRangeMenu = ref(false)
 const showMoreMenu = ref(false)
 const selectedRangeLabel = ref('今天')
 const selectedRangeDays = ref(0)
+const proxyAccess = ref({ mode: 'local', host: '127.0.0.1' })
+const proxyAccessLoading = ref(false)
+const showProxyAccessConfirm = ref(false)
+const pendingProxyAccessMode = ref('')
+const advertisements = ref([])
+
+const proxyAccessConfirmTitle = computed(() => pendingProxyAccessMode.value === 'lan' ? '切换到局域网代理？' : '切回本地代理？')
+const proxyAccessConfirmMessage = computed(() => pendingProxyAccessMode.value === 'lan'
+  ? '切换到局域网代理后，同一局域网内的其他设备可能访问你的代理端口。\n请确认当前网络可信，并确保不要暴露敏感流量。'
+  : '切换回本地代理后，仅本机使用 127.0.0.1 访问代理，局域网设备将无法继续使用。'
+)
+
+async function loadProxyAccess() {
+  try {
+    const r = await fetch('/api/proxy-access-mode')
+    if (r.ok) proxyAccess.value = await r.json()
+  } catch {}
+}
+
+async function loadAdvertisements() {
+  try {
+    const ads = await getAdvertisements()
+    advertisements.value = Array.isArray(ads) ? ads : []
+  } catch {
+    advertisements.value = []
+  }
+}
+
+async function openAdvertisement(ad) {
+  const url = String(ad?.link_url || '').trim()
+  if (!url) return
+  try {
+    await openExternalURL(url)
+  } catch {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
+
+function advertisementText(ad) {
+  return [ad?.title, ad?.description].filter(Boolean).join('：') || '广告'
+}
+
+function advertisementKey(ad, index) {
+  return ad?.id || `${ad?.title || 'ad'}-${index}`
+}
+
+function advertisementImageStyle(ad) {
+  return ad?.image_url ? { backgroundImage: `url(${ad.image_url})` } : {}
+}
+
+function toggleProxyAccess() {
+  if (proxyAccessLoading.value) return
+  pendingProxyAccessMode.value = proxyAccess.value.mode === 'lan' ? 'local' : 'lan'
+  showProxyAccessConfirm.value = true
+}
+
+async function confirmProxyAccessToggle() {
+  if (!pendingProxyAccessMode.value) return
+  proxyAccessLoading.value = true
+  try {
+    const r = await fetch('/api/proxy-access-mode', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: pendingProxyAccessMode.value })
+    })
+    const data = await r.json()
+    if (r.ok) proxyAccess.value = data
+  } catch {
+  } finally {
+    proxyAccessLoading.value = false
+    showProxyAccessConfirm.value = false
+    pendingProxyAccessMode.value = ''
+  }
+}
+
+function cancelProxyAccessToggle() {
+  showProxyAccessConfirm.value = false
+  pendingProxyAccessMode.value = ''
+}
+
+onMounted(() => {
+  loadProxyAccess()
+  loadAdvertisements()
+})
 
 const rangeOptions = [
   { label: '今天', days: 0 },
@@ -139,10 +225,17 @@ async function confirmClearStats() {
         <div class="flex items-center gap-2.5">
           <h1 class="text-[22px] font-semibold tracking-tight text-[#0f172a]">仪表盘</h1>
           <span class="text-[12px] text-[#64748b]">Kiro Proxy 运行状态总览</span>
-          <span class="inline-flex items-center gap-1.5 rounded-full border border-[#e2e8f0] bg-white px-2.5 py-0.5 text-[12px] text-[#475569] shadow-sm">
-            <span class="h-1.5 w-1.5 rounded-full bg-[#22c55e]"></span>
-            本地代理 · 127.0.0.1
-          </span>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-full border bg-white px-2.5 py-0.5 text-[12px] text-[#475569] shadow-sm transition hover:border-[#bfdbfe] hover:bg-[#eff6ff] hover:text-[#2563eb] disabled:cursor-not-allowed disabled:opacity-60"
+            :class="proxyAccess.mode === 'lan' ? 'border-[#fed7aa] text-[#d97706] hover:border-[#fdba74] hover:bg-[#fffbeb] hover:text-[#d97706]' : 'border-[#e2e8f0]'"
+            :disabled="proxyAccessLoading"
+            :title="proxyAccess.mode === 'lan' ? '点击切回本地代理' : '点击切换为局域网代理'"
+            @click="toggleProxyAccess"
+          >
+            <span class="h-1.5 w-1.5 rounded-full" :class="proxyAccess.mode === 'lan' ? 'bg-[#f59e0b]' : 'bg-[#22c55e]'"></span>
+            {{ proxyAccess.mode === 'lan' ? '局域网代理' : '本地代理' }} · {{ proxyAccess.host || '127.0.0.1' }}
+          </button>
         </div>
 
         <div class="flex items-center gap-2">
@@ -208,6 +301,29 @@ async function confirmClearStats() {
           </div>
         </div>
       </header>
+
+      <section v-if="advertisements.length" class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <button
+          v-for="(ad, index) in advertisements"
+          :key="advertisementKey(ad, index)"
+          type="button"
+          class="group h-[96px] overflow-hidden rounded-xl border border-[#e2e8f0] bg-white text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition hover:border-[#bfdbfe] hover:shadow-[0_8px_20px_rgba(37,99,235,0.08)]"
+          :class="ad.link_url ? 'cursor-pointer' : 'cursor-default'"
+          @click="openAdvertisement(ad)"
+        >
+          <div
+            class="flex h-full items-center justify-center bg-[#f8fafc] bg-cover bg-center px-4 text-center"
+            :style="advertisementImageStyle(ad)"
+          >
+            <div
+              v-if="!ad.image_url"
+              class="line-clamp-2 text-[14px] font-semibold leading-5 text-[#334155]"
+            >
+              {{ advertisementText(ad) }}
+            </div>
+          </div>
+        </button>
+      </section>
 
       <p v-if="error" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">统计加载失败：{{ error }}</p>
 
@@ -303,4 +419,15 @@ async function confirmClearStats() {
       </div>
     </div>
   </Teleport>
+
+  <ConfirmDialog
+    :visible="showProxyAccessConfirm"
+    :title="proxyAccessConfirmTitle"
+    :message="proxyAccessConfirmMessage"
+    :confirm-text="pendingProxyAccessMode === 'lan' ? '确认切换' : '确认切回'"
+    cancel-text="取消"
+    :tone="pendingProxyAccessMode === 'lan' ? 'danger' : 'primary'"
+    @confirm="confirmProxyAccessToggle"
+    @cancel="cancelProxyAccessToggle"
+  />
 </template>

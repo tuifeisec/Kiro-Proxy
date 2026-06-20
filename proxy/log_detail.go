@@ -23,6 +23,9 @@ func (s *Server) handleLogDetail(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	if !s.requireTrafficLogPermission(w) {
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:

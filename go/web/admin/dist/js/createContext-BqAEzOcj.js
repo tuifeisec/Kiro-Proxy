@@ -1,0 +1,1 @@
+import{$n as e,Bn as t,Tn as n,lr as r}from"../jse/index-index-Tdmu65Tj.js";import{r as i}from"./en_US-CYT-WGRI.js";function a(a){let o=Symbol(`contextKey`);return{useProvide:(n,a)=>{let s=r({});return t(o,s),e(()=>{i(s,n,a||{})}),s},useInject:()=>n(o,a)||{}}}export{a as t};

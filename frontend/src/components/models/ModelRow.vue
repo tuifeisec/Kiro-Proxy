@@ -13,10 +13,13 @@ const props = defineProps({
   testing: { type: Boolean, default: false },
   refreshingCodex: { type: Boolean, default: false },
   togglingEnabled: { type: Boolean, default: false },
-  primary: { type: Boolean, default: false }
+  primary: { type: Boolean, default: false },
+  hidePrivateInfo: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['edit', 'delete', 'test', 'refresh-codex', 'toggle-enabled'])
+
+const PRIVATE_MASK = '******'
 
 const displayName = computed(() => props.model.name || props.model.model_id || '未命名模型')
 const provider = computed(() => props.model.provider || 'openai')
@@ -53,6 +56,7 @@ const providerMeta = computed(() => {
 })
 
 const maskedCredential = computed(() => {
+  if (props.hidePrivateInfo) return PRIVATE_MASK
   const key = props.model.api_key || props.model.refresh_token || ''
   if (!key) return '-'
   const plain = key.replace(/\*/g, '').replace(/•/g, '')
@@ -65,9 +69,13 @@ const maskedCredential = computed(() => {
   return `${key.slice(0, 4)}••••${key.slice(-4)}`
 })
 
-const baseUrl = computed(() => props.model.base_url || (provider.value === 'codex' ? 'https://api.openai.com' : '-'))
-const proxyLabel = computed(() => props.model.proxy_url || '直连')
-const endpointLabel = computed(() => props.model.endpoint || '-')
+const privateLabel = computed(() => props.hidePrivateInfo ? PRIVATE_MASK : null)
+const baseUrl = computed(() => privateLabel.value || props.model.base_url || (provider.value === 'codex' ? 'https://api.openai.com' : '-'))
+const proxyLabel = computed(() => privateLabel.value || props.model.proxy_url || '直连')
+const endpointLabel = computed(() => privateLabel.value || props.model.endpoint || '-')
+const codexEmailLabel = computed(() => privateLabel.value || props.model.codex_email || '-')
+const codexPlanLabel = computed(() => privateLabel.value || props.model.codex_plan_type || '-')
+const codexAccountIdLabel = computed(() => privateLabel.value || props.model.codex_account_id || '-')
 
 const statusMeta = computed(() => {
   if (!isEnabled.value) {
@@ -210,7 +218,7 @@ function usedText(row) {
         <span class="font-medium text-[#64748b]">Endpoint</span>
         <span class="truncate font-mono text-[#111827]" :title="endpointLabel">{{ endpointLabel }}</span>
         <span class="font-medium text-[#64748b]">代理</span>
-        <span class="truncate font-medium" :class="model.proxy_url ? 'text-[#2563eb]' : 'text-[#059669]'" :title="proxyLabel">{{ proxyLabel }}</span>
+        <span class="truncate font-medium" :class="!hidePrivateInfo && model.proxy_url ? 'text-[#2563eb]' : 'text-[#059669]'" :title="proxyLabel">{{ proxyLabel }}</span>
       </div>
 
       <div class="grid grid-cols-5 gap-0.5 px-1.5 text-center text-[12px] leading-5">
@@ -267,9 +275,9 @@ function usedText(row) {
         <div class="border-r border-[#edf0f5] px-4 py-4 text-[12px]">
           <div class="mb-3 font-semibold text-[#111827]">账户信息</div>
           <div class="grid grid-cols-[70px_minmax(0,1fr)] gap-y-2 leading-4">
-            <span class="text-[#64748b]">邮箱</span><span class="truncate text-[#111827]">{{ model.codex_email || '-' }}</span>
-            <span class="text-[#64748b]">计划</span><span class="truncate text-[#111827]">{{ model.codex_plan_type || '-' }}</span>
-            <span class="text-[#64748b]">账户 ID</span><span class="truncate font-mono text-[#111827]">{{ model.codex_account_id || '-' }}</span>
+            <span class="text-[#64748b]">邮箱</span><span class="truncate text-[#111827]">{{ codexEmailLabel }}</span>
+            <span class="text-[#64748b]">计划</span><span class="truncate text-[#111827]">{{ codexPlanLabel }}</span>
+            <span class="text-[#64748b]">账户 ID</span><span class="truncate font-mono text-[#111827]">{{ codexAccountIdLabel }}</span>
             <span class="text-[#64748b]">Access Token</span><span class="truncate text-[#f59e0b]">将于 {{ updatedAtLabel }} 过期</span>
           </div>
         </div>

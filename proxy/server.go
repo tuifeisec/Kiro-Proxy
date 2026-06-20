@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"kiro-proxy/api"
+	"kiro-proxy/license"
 	"kiro-proxy/router"
 	"kiro-proxy/rules"
 	"kiro-proxy/store"
@@ -39,6 +40,7 @@ type Server struct {
 	router             *router.Router
 	forwarder          *Forwarder
 	stats              *store.Stats
+	db                 *store.DB
 	apiServer          *api.Server
 	staticFS           fs.FS // 嵌入的前端静态文件
 	uiServer           *http.Server
@@ -46,6 +48,7 @@ type Server struct {
 	classifierMu       sync.RWMutex
 	conversationModels map[string]string
 	lastMainModel      string
+	licenseClient      *license.Client
 	closeOnce          sync.Once
 }
 
@@ -88,9 +91,11 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
 		router:             r,
 		forwarder:          fwd,
 		stats:              stats,
+		db:                 db,
 		apiServer:          apiSrv,
 		staticFS:           staticFS,
 		conversationModels: make(map[string]string),
+		licenseClient:      license.NewClient(os.Getenv("KIRO_LICENSE_SERVER")),
 	}
 
 	// 注册拦截器（在 interceptor.go 中实现）
@@ -114,6 +119,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/service/status", s.handleServiceStatus)
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/proxy-mode", s.handleProxyMode)
+	mux.HandleFunc("/api/proxy-access-mode", s.handleProxyAccessMode)
 	mux.HandleFunc("/api/log-detail", s.handleLogDetail)
 	mux.HandleFunc("/api/kiro-proxy", s.handleKiroProxy)
 	mux.HandleFunc("/api/kiro-restart", s.handleKiroRestart)
@@ -195,6 +201,9 @@ func (s *Server) Close() {
 
 // handleWS 处理 WebSocket 升级
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTrafficLogPermission(w) {
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[server] WS 升级失败: %v", err)

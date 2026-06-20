@@ -16,6 +16,8 @@ type serviceStatusResp struct {
 	UIPort            int    `json:"ui_port"`
 	ProxyURL          string `json:"proxy_url"`
 	UIURL             string `json:"ui_url"`
+	AccessMode        string `json:"access_mode"`
+	LAN               bool   `json:"lan"`
 	Protocol          string `json:"protocol"`
 	Mode              string `json:"mode"`
 	UptimeSeconds     int64  `json:"uptime_seconds"`
@@ -32,7 +34,8 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	host := "127.0.0.1"
+	host := s.proxyDisplayHost()
+	accessMode := s.proxyAccessMode()
 	proxyPort := s.cfg.Proxy.Port
 	uiPort := s.UIPort()
 	snapshot := s.stats.Snapshot()
@@ -48,6 +51,8 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 		UIPort:            uiPort,
 		ProxyURL:          fmt.Sprintf("http://%s:%d", host, proxyPort),
 		UIURL:             fmt.Sprintf("http://%s:%d", host, uiPort),
+		AccessMode:        accessMode,
+		LAN:               accessMode == ProxyAccessLAN,
 		Protocol:          "HTTP / HTTPS MITM",
 		Mode:              GetProxyMode(),
 		UptimeSeconds:     snapshot.UptimeSeconds,

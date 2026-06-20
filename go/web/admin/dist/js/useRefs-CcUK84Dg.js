@@ -1,0 +1,1 @@
+import{Pn as e,dr as t}from"../jse/index-index-Tdmu65Tj.js";var n=()=>{let n=t(new Map);return e(()=>{n.value=new Map}),[e=>t=>{n.value.set(e,t)},n]};export{n as t};

@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useWebSocket } from '../composables/useWebSocket.js'
 import LogFilter from '../components/inspector/LogFilter.vue'
 import LogList from '../components/inspector/LogList.vue'
@@ -8,7 +9,8 @@ import IconForward from '../components/icons/IconForward.vue'
 import IconCapture from '../components/icons/IconCapture.vue'
 import IconSettings from '../components/icons/IconSettings.vue'
 
-const { messages, connected, clearMessages } = useWebSocket()
+const { messages, connected, trafficLogAllowed, clearMessages, refreshTrafficLogPermission } = useWebSocket()
+const router = useRouter()
 
 const selected = ref(null)
 const filter = ref({ search: '', level: '', includeDetail: false })
@@ -58,7 +60,12 @@ async function setLogDetail(mode) {
   } catch {}
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await refreshTrafficLogPermission()
+  if (!trafficLogAllowed.value) {
+    router.replace('/')
+    return
+  }
   fetchMode()
   fetchLogDetail()
 })

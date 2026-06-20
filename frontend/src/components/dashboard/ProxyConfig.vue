@@ -1,10 +1,12 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import IconCopy from '../icons/IconCopy.vue'
 import IconCheck from '../icons/IconCheck.vue'
 
-const proxyHost = '127.0.0.1'
 const proxyPort = '18081'
+const accessMode = ref({ mode: 'local', host: '127.0.0.1', proxy_url: 'http://127.0.0.1:18081' })
+const proxyHost = computed(() => accessMode.value.host || '127.0.0.1')
+const proxyURL = computed(() => accessMode.value.proxy_url || `http://${proxyHost.value}:${proxyPort}`)
 const copied = ref(false)
 const copiedProxy = ref(false)
 const kiroStatus = ref(null)
@@ -22,6 +24,14 @@ async function copyToClipboard(text, type = 'manual') {
       copied.value = true
       setTimeout(() => { copied.value = false }, 1500)
     }
+  } catch {}
+}
+
+async function fetchProxyAccessMode() {
+  try {
+    const r = await fetch('/api/proxy-access-mode')
+    if (!r.ok) return
+    accessMode.value = await r.json()
   } catch {}
 }
 
@@ -76,7 +86,10 @@ async function restartKiro() {
   }
 }
 
-onMounted(fetchKiroStatus)
+onMounted(() => {
+  fetchProxyAccessMode()
+  fetchKiroStatus()
+})
 </script>
 
 <template>
@@ -96,8 +109,8 @@ onMounted(fetchKiroStatus)
       </div>
       <div class="text-[12px] text-[#64748b]">目标代理地址</div>
       <div class="mt-1 flex items-center gap-2">
-        <span class="font-mono text-[13px] text-[#0f172a]">{{ kiroStatus.current_proxy || `http://${proxyHost}:${proxyPort}` }}</span>
-        <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(kiroStatus.current_proxy || `http://${proxyHost}:${proxyPort}`, 'proxy')">
+        <span class="font-mono text-[13px] text-[#0f172a]">{{ kiroStatus.current_proxy || proxyURL }}</span>
+        <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(kiroStatus.current_proxy || proxyURL, 'proxy')">
           <IconCheck v-if="copiedProxy" class="text-[#059669]" />
           <IconCopy v-else />
         </button>
@@ -139,8 +152,8 @@ onMounted(fetchKiroStatus)
     </div>
 
     <div class="mt-2 flex items-center gap-2 rounded-lg border border-[#e8edf5] bg-[#fbfdff] px-3 py-1.5 font-mono text-[12px]">
-      <span class="flex-1 truncate text-[#059669]">http://{{ proxyHost }}:{{ proxyPort }}</span>
-      <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(`http://${proxyHost}:${proxyPort}`)">
+      <span class="flex-1 truncate text-[#059669]">{{ proxyURL }}</span>
+      <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(proxyURL)">
         <IconCheck v-if="copied" class="text-[#059669]" />
         <IconCopy v-else />
       </button>

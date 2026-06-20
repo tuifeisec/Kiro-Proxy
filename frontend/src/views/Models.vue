@@ -23,6 +23,7 @@ const errorMessage = ref('')
 const searchText = ref('')
 const providerFilter = ref('all')
 const statusFilter = ref('all')
+const hidePrivateInfo = ref(false)
 
 const providerOptions = [
   { value: 'all', label: '全部 Provider' },
@@ -85,6 +86,24 @@ const summaryItems = computed(() => [
 const deleteTargetName = computed(() => deleteTarget.value?.name || deleteTarget.value?.model_id || '当前模型')
 
 const TEST_RESULTS_STORAGE_KEY = 'kiro-proxy:model-test-results:v1'
+const HIDE_PRIVATE_INFO_STORAGE_KEY = 'kiro-proxy:models-hide-private-info:v1'
+
+function loadPrivateInfoPreference() {
+  try {
+    hidePrivateInfo.value = localStorage.getItem(HIDE_PRIVATE_INFO_STORAGE_KEY) === 'true'
+  } catch {
+    hidePrivateInfo.value = false
+  }
+}
+
+function togglePrivateInfo() {
+  hidePrivateInfo.value = !hidePrivateInfo.value
+  try {
+    localStorage.setItem(HIDE_PRIVATE_INFO_STORAGE_KEY, String(hidePrivateInfo.value))
+  } catch {
+    // localStorage 不可用时只影响跨重启记忆，不影响当前隐私开关
+  }
+}
 
 function loadStoredTestResults() {
   try {
@@ -235,6 +254,7 @@ async function handleRefreshCodex(m) {
 }
 
 onMounted(() => {
+  loadPrivateInfoPreference()
   loadStoredTestResults()
   loadModels()
 })
@@ -273,6 +293,19 @@ onMounted(() => {
           >
             <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
+
+          <button
+            type="button"
+            class="flex h-9 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium shadow-sm transition"
+            :class="hidePrivateInfo
+              ? 'border-[#bfdbfe] bg-[#eff6ff] text-[#2563eb]'
+              : 'border-[#edf0f5] bg-white text-[#64748b] hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#111827]'"
+            :title="hidePrivateInfo ? '当前已隐藏连接配置与 Codex 账户信息' : '显示连接配置与 Codex 账户信息'"
+            @click="togglePrivateInfo"
+          >
+            <span class="text-[13px]">{{ hidePrivateInfo ? '🔒' : '👁' }}</span>
+            <span>{{ hidePrivateInfo ? '隐私已隐藏' : '隐藏隐私' }}</span>
+          </button>
 
           <button
             class="flex h-9 w-9 items-center justify-center rounded-xl border border-[#e6ebf2] bg-white text-[#475569] shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#111827] disabled:cursor-not-allowed disabled:opacity-70"
@@ -371,6 +404,7 @@ onMounted(() => {
             :key="m.id"
             :model="m"
             :primary="m.id === primaryModelId"
+            :hide-private-info="hidePrivateInfo"
             :test-result="testResults[m.id]"
             :testing="!!testingIds[m.id]"
             :refreshing-codex="!!refreshingCodexIds[m.id]"

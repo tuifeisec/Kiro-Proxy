@@ -1,18 +1,38 @@
 <script setup>
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { getAppVersion, getLicenseInfo } from '../../api/license.js'
 import IconDashboard from '../icons/IconDashboard.vue'
 import IconModels from '../icons/IconModels.vue'
 import IconUsage from '../icons/IconUsage.vue'
 import IconLogs from '../icons/IconLogs.vue'
 
 const route = useRoute()
+const trafficLogAllowed = ref(false)
+const appVersion = ref('dev')
 
-const navItems = [
+const navItems = computed(() => [
   { path: '/', label: '仪表盘', icon: IconDashboard },
   { path: '/models', label: '模型配置', icon: IconModels },
   { path: '/usage', label: '用量明细', icon: IconUsage },
-  { path: '/inspector', label: '流量抓包', icon: IconLogs },
-]
+  ...(trafficLogAllowed.value ? [{ path: '/inspector', label: '流量抓包', icon: IconLogs }] : []),
+])
+
+onMounted(async () => {
+  try {
+    const info = await getLicenseInfo()
+    trafficLogAllowed.value = !!(info.authorized && info.traffic_logs)
+  } catch {
+    trafficLogAllowed.value = false
+  }
+
+  try {
+    const versionInfo = await getAppVersion()
+    appVersion.value = versionInfo.version || 'dev'
+  } catch {
+    appVersion.value = 'dev'
+  }
+})
 </script>
 
 <template>
@@ -36,7 +56,7 @@ const navItems = [
       </router-link>
     </nav>
 
-    <!-- Bottom spacer -->
-    <div class="text-[#9ca3af] text-xs select-none">v2</div>
+    <!-- Bottom version -->
+    <div class="text-[#9ca3af] text-xs select-none">v{{ appVersion }}</div>
   </aside>
 </template>
