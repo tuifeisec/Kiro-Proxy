@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"net"
 	"os"
-	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
@@ -53,7 +52,7 @@ func darwinMachineParts() []string {
 }
 
 func darwinPlatformValues() map[string]string {
-	out, err := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
+	out, err := hiddenCommand("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
 	if err != nil {
 		return nil
 	}
@@ -87,7 +86,7 @@ func windowsMachineParts() []string {
 }
 
 func powershellLine(command string) string {
-	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command).Output()
+	out, err := hiddenCommand("powershell", "-NoProfile", "-NonInteractive", "-Command", command).Output()
 	if err != nil {
 		return ""
 	}
@@ -100,7 +99,7 @@ func powershellLine(command string) string {
 }
 
 func windowsMachineGuid() string {
-	out, err := exec.Command("reg", "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid").Output()
+	out, err := hiddenCommand("reg", "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid").Output()
 	if err != nil {
 		return ""
 	}

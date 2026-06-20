@@ -5,6 +5,8 @@ package main
 import (
 	"flag"
 	"log"
+	"net/http"
+	"time"
 )
 
 func main() {
@@ -43,6 +45,8 @@ func main() {
 }
 
 func runDesktopWindow(url string) {
+	waitForDesktopWebUI(url)
+
 	window := newDesktopWindowController(url)
 	tray := newDesktopTrayController(window)
 	startDesktopTray(tray)
@@ -54,4 +58,19 @@ func runDesktopWindow(url string) {
 	window.run()
 	tray.quit()
 	tray.wait()
+}
+
+func waitForDesktopWebUI(url string) {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < http.StatusInternalServerError {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

@@ -62,8 +62,25 @@ echo [3/3] 构建 Go 桌面壳二进制 (含嵌入前端资源和程序图标)..
 go build -tags desktop -ldflags="-s -w -H=windowsgui -X kiro-proxy/license.AppVersion=%APP_VERSION%" -trimpath -o kiro-proxy.exe .
 if errorlevel 1 goto err
 
-for /f "usebackq delims=" %%H in (`powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 'kiro-proxy.exe').Hash.ToLower()"`) do set "SHA256=%%H"
-if "%SHA256%"=="" goto err
+set "SHA256="
+set "SHA256_FILE=kiro-proxy.exe.sha256.tmp"
+certutil -hashfile kiro-proxy.exe SHA256 > "%SHA256_FILE%"
+if errorlevel 1 (
+    del "%SHA256_FILE%" >nul 2>nul
+    goto err
+)
+for /f "skip=1 tokens=* delims=" %%H in (%SHA256_FILE%) do (
+    if not defined SHA256 set "SHA256=%%H"
+)
+del "%SHA256_FILE%" >nul 2>nul
+set "SHA256=%SHA256: =%"
+set "SHA256=%SHA256:A=a%"
+set "SHA256=%SHA256:B=b%"
+set "SHA256=%SHA256:C=c%"
+set "SHA256=%SHA256:D=d%"
+set "SHA256=%SHA256:E=e%"
+set "SHA256=%SHA256:F=f%"
+if not defined SHA256 goto err
 
 echo.
 echo ============================================================
