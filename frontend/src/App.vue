@@ -3,6 +3,7 @@ import Sidebar from './components/layout/Sidebar.vue'
 import StatusBar from './components/layout/StatusBar.vue'
 import TitleBar from './components/layout/TitleBar.vue'
 import ConfirmDialog from './components/common/ConfirmDialog.vue'
+import AdvertisementList from './components/common/AdvertisementList.vue'
 import { computed, onMounted, ref } from 'vue'
 import { getLicenseInfo, getUpdateInfo, openExternalURL } from './api/license.js'
 import { useHeartbeat } from './composables/useHeartbeat.js'
@@ -74,6 +75,11 @@ onMounted(() => {
     <TitleBar />
 
     <div v-if="licenseLoaded && !isAuthorized" class="relative flex flex-1 flex-col bg-[#fbfbfc]">
+      <div class="absolute left-0 right-0 top-6 px-6">
+        <div class="mx-auto max-w-[1320px]">
+          <AdvertisementList />
+        </div>
+      </div>
       <div class="flex flex-1 items-center justify-center px-6 pb-16">
         <div class="text-center">
           <h1 class="text-[34px] font-semibold tracking-tight text-[#111827]">{{ appName }}</h1>

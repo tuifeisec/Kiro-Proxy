@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { getAdvertisements, openExternalURL } from '../api/license.js'
+import AdvertisementList from '../components/common/AdvertisementList.vue'
 import { useStats } from '../composables/useStats.js'
 import StatsCard from '../components/dashboard/StatsCard.vue'
 import ServiceStatus from '../components/dashboard/ServiceStatus.vue'
@@ -27,7 +27,6 @@ const proxyAccess = ref({ mode: 'local', host: '127.0.0.1' })
 const proxyAccessLoading = ref(false)
 const showProxyAccessConfirm = ref(false)
 const pendingProxyAccessMode = ref('')
-const advertisements = ref([])
 
 const proxyAccessConfirmTitle = computed(() => pendingProxyAccessMode.value === 'lan' ? '切换到局域网代理？' : '切回本地代理？')
 const proxyAccessConfirmMessage = computed(() => pendingProxyAccessMode.value === 'lan'
@@ -40,37 +39,6 @@ async function loadProxyAccess() {
     const r = await fetch('/api/proxy-access-mode')
     if (r.ok) proxyAccess.value = await r.json()
   } catch {}
-}
-
-async function loadAdvertisements() {
-  try {
-    const ads = await getAdvertisements()
-    advertisements.value = Array.isArray(ads) ? ads : []
-  } catch {
-    advertisements.value = []
-  }
-}
-
-async function openAdvertisement(ad) {
-  const url = String(ad?.link_url || '').trim()
-  if (!url) return
-  try {
-    await openExternalURL(url)
-  } catch {
-    window.open(url, '_blank', 'noopener,noreferrer')
-  }
-}
-
-function advertisementText(ad) {
-  return [ad?.title, ad?.description].filter(Boolean).join('：') || '广告'
-}
-
-function advertisementKey(ad, index) {
-  return ad?.id || `${ad?.title || 'ad'}-${index}`
-}
-
-function advertisementImageStyle(ad) {
-  return ad?.image_url ? { backgroundImage: `url(${ad.image_url})` } : {}
 }
 
 function toggleProxyAccess() {
@@ -105,7 +73,6 @@ function cancelProxyAccessToggle() {
 
 onMounted(() => {
   loadProxyAccess()
-  loadAdvertisements()
 })
 
 const rangeOptions = [
@@ -302,27 +269,8 @@ async function confirmClearStats() {
         </div>
       </header>
 
-      <section v-if="advertisements.length" class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        <button
-          v-for="(ad, index) in advertisements"
-          :key="advertisementKey(ad, index)"
-          type="button"
-          class="group h-[96px] overflow-hidden rounded-xl border border-[#e2e8f0] bg-white text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition hover:border-[#bfdbfe] hover:shadow-[0_8px_20px_rgba(37,99,235,0.08)]"
-          :class="ad.link_url ? 'cursor-pointer' : 'cursor-default'"
-          @click="openAdvertisement(ad)"
-        >
-          <div
-            class="flex h-full items-center justify-center bg-[#f8fafc] bg-cover bg-center px-4 text-center"
-            :style="advertisementImageStyle(ad)"
-          >
-            <div
-              v-if="!ad.image_url"
-              class="line-clamp-2 text-[14px] font-semibold leading-5 text-[#334155]"
-            >
-              {{ advertisementText(ad) }}
-            </div>
-          </div>
-        </button>
+      <section>
+        <AdvertisementList />
       </section>
 
       <p v-if="error" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">统计加载失败：{{ error }}</p>
