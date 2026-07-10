@@ -112,6 +112,35 @@ func (r *Router) ResolveByName(modelName string) *Route {
 	return nil
 }
 
+// ResolveExact 根据模型名称或上游 model_id 精确解析模型，不做兜底回退。
+// 用于本地 OpenAI/Anthropic 兼容接口，避免未知 model 被误路由到第一条可用模型。
+func (r *Router) ResolveExact(modelID string) *Route {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var modelIDMatch *store.Model
+	for i := range r.models {
+		m := &r.models[i]
+		if !m.Enabled {
+			continue
+		}
+		name := m.Name
+		if name == "" {
+			name = m.ModelID
+		}
+		if name == modelID {
+			return &Route{Model: m}
+		}
+		if modelIDMatch == nil && m.ModelID == modelID {
+			modelIDMatch = m
+		}
+	}
+	if modelIDMatch != nil {
+		return &Route{Model: modelIDMatch}
+	}
+	return nil
+}
+
 // EnabledModels 返回所有启用的模型（用于向 Kiro 返回模型列表）
 func (r *Router) EnabledModels() []store.Model {
 	r.mu.RLock()

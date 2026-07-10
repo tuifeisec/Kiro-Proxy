@@ -63,7 +63,12 @@ func runModelTest(m *store.Model, model string) testResult {
 	if endpoint == "" {
 		return testResult{Error: "接口端点不能为空，请在模型配置中完整填写端点路径"}
 	}
-	upstreamURL := baseURL + endpoint
+	upstreamURL := endpoint
+	if m.DisableAutoSuffix {
+		upstreamURL = strings.TrimSpace(m.BaseURL)
+	} else if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		upstreamURL = baseURL + endpoint
+	}
 
 	var reqBody []byte
 	switch {
@@ -89,7 +94,7 @@ func runModelTest(m *store.Model, model string) testResult {
 		reqBody, _ = json.Marshal(map[string]interface{}{
 			"model":  model,
 			"stream": true,
-			"store":  true,
+			"store":  m.EnableContinuation,
 			"input":  []map[string]string{{"role": "user", "content": "Hi"}},
 		})
 	default:

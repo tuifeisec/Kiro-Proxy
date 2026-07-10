@@ -34,6 +34,7 @@ type Model struct {
 	RefreshToken         string  `json:"refresh_token"`       // codex OAuth refresh_token
 	ProxyURL             string  `json:"proxy_url"`           // 单模型上游代理地址，留空则直连
 	Endpoint             string  `json:"endpoint"`            // 接口端点路径（如 chat/completions，需完整填写）
+	DisableAutoSuffix    bool    `json:"disable_auto_suffix"` // 不自动改写端点或追加 query，严格使用用户配置的接口路径
 	ContextWindow        int     `json:"context_window"`      // 上下文窗口，0=默认
 	MaxTokens            int     `json:"max_tokens"`          // 最大输出 Token，0=默认
 	ReasoningEffort      string  `json:"reasoning_effort"`    // 推理强度：空/low/medium/high
@@ -59,7 +60,7 @@ type Model struct {
 func (db *DB) GetModels() ([]Model, error) {
 	rows, err := db.conn.Query(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
@@ -73,9 +74,9 @@ func (db *DB) GetModels() ([]Model, error) {
 	var models []Model
 	for rows.Next() {
 		var m Model
-		var enabled, enableCont int
+		var enabled, enableCont, disableAuto int
 		if err := rows.Scan(&m.ID, &m.Name, &m.ModelID,
-			&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint,
+			&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
 			&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 			&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 			&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
@@ -84,6 +85,7 @@ func (db *DB) GetModels() ([]Model, error) {
 		}
 		m.Enabled = enabled == 1
 		m.EnableContinuation = enableCont == 1
+		m.DisableAutoSuffix = disableAuto == 1
 		models = append(models, m)
 	}
 	return models, rows.Err()
@@ -91,16 +93,16 @@ func (db *DB) GetModels() ([]Model, error) {
 
 func (db *DB) GetModel(id string) (*Model, error) {
 	var m Model
-	var enabled, enableCont int
+	var enabled, enableCont, disableAuto int
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE id = ?
 	`, id).Scan(&m.ID, &m.Name, &m.ModelID,
-		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint,
+		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
@@ -110,22 +112,23 @@ func (db *DB) GetModel(id string) (*Model, error) {
 	}
 	m.Enabled = enabled == 1
 	m.EnableContinuation = enableCont == 1
+	m.DisableAutoSuffix = disableAuto == 1
 	return &m, nil
 }
 
 // FindByModelID 根据 modelId 查找模型配置（路由用）
 func (db *DB) FindByModelID(modelID string) (*Model, error) {
 	var m Model
-	var enabled, enableCont int
+	var enabled, enableCont, disableAuto int
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE model_id = ? AND enabled = 1 LIMIT 1
 	`, modelID).Scan(&m.ID, &m.Name, &m.ModelID,
-		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint,
+		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
@@ -135,22 +138,23 @@ func (db *DB) FindByModelID(modelID string) (*Model, error) {
 	}
 	m.Enabled = true
 	m.EnableContinuation = enableCont == 1
+	m.DisableAutoSuffix = disableAuto == 1
 	return &m, nil
 }
 
 // FindModelByName 根据显示名称查找模型（用于唯一性校验）
 func (db *DB) FindModelByName(name string) (*Model, error) {
 	var m Model
-	var enabled, enableCont int
+	var enabled, enableCont, disableAuto int
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE name = ? LIMIT 1
 	`, name).Scan(&m.ID, &m.Name, &m.ModelID,
-		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint,
+		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
 		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
@@ -160,6 +164,7 @@ func (db *DB) FindModelByName(name string) (*Model, error) {
 	}
 	m.Enabled = enabled == 1
 	m.EnableContinuation = enableCont == 1
+	m.DisableAutoSuffix = disableAuto == 1
 	return &m, nil
 }
 
@@ -187,13 +192,13 @@ func (db *DB) CreateModel(m *Model) error {
 	}
 	_, err := db.conn.Exec(`
 		INSERT INTO models (id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		  endpoint, context_window, max_tokens, reasoning_effort, rate_multiplier,
+		  endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, rate_multiplier,
 		  input_price, output_price, cache_input_price, cache_output_price,
 		  enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		  service_tier, enabled, sort_order, note, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.ID, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
-		m.Endpoint, m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
+		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
 		m.ServiceTier, enabled, m.SortOrder, m.Note, m.CreatedAt, m.UpdatedAt)
@@ -219,13 +224,13 @@ func (db *DB) UpdateModel(m *Model) error {
 	normalizeModelPrices(m)
 	res, err := db.conn.Exec(`
 		UPDATE models SET name=?, model_id=?, provider=?, base_url=?, api_key=?, refresh_token=?, proxy_url=?,
-		  endpoint=?, context_window=?, max_tokens=?, reasoning_effort=?,
+		  endpoint=?, disable_auto_suffix=?, context_window=?, max_tokens=?, reasoning_effort=?,
 		  rate_multiplier=?, input_price=?, output_price=?, cache_input_price=?, cache_output_price=?,
 		  enable_continuation=?, codex_email=?, codex_plan_type=?, codex_account_id=?, access_token_expires_at=?, codex_usage_json=?,
 		  service_tier=?, enabled=?, sort_order=?, note=?, updated_at=?
 		WHERE id=?
 	`, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
-		m.Endpoint, m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
+		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
 		m.ServiceTier, enabled, m.SortOrder, m.Note, m.UpdatedAt, m.ID)
@@ -237,6 +242,13 @@ func (db *DB) UpdateModel(m *Model) error {
 		return fmt.Errorf("model not found: %s", m.ID)
 	}
 	return nil
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func (db *DB) DeleteModel(id string) error {

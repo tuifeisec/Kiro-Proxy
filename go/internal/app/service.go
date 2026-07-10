@@ -185,13 +185,11 @@ func (s *Service) recordClientLogin(machineCode string) {
 		snap.Authorizations[machineCode] = auth
 	}
 
+	loginDay := now.Format("2006-01-02")
 	for _, event := range snap.ClientLoginEvents {
-		if event.MachineCode == machineCode {
-			if now.Sub(event.CreatedAt) < time.Hour {
-				_ = s.store.SaveSnapshot(snap)
-				return
-			}
-			break
+		if event.MachineCode == machineCode && event.CreatedAt.Format("2006-01-02") == loginDay {
+			_ = s.store.SaveSnapshot(snap)
+			return
 		}
 	}
 
@@ -295,13 +293,33 @@ func (s *Service) DashboardStats() core.DashboardStats {
 
 	cutoff := time.Now().AddDate(0, 0, -6)
 	cutoff = time.Date(cutoff.Year(), cutoff.Month(), cutoff.Day(), 0, 0, 0, 0, cutoff.Location())
+	recentLoginMachines := make(map[string]struct{})
+	dailyLoginMachines := make(map[string]map[string]struct{}, len(days))
+	for _, day := range days {
+		dailyLoginMachines[day] = make(map[string]struct{})
+	}
 	for _, event := range snap.ClientLoginEvents {
 		if event.CreatedAt.Before(cutoff) {
 			continue
 		}
+		machineCode := strings.TrimSpace(event.MachineCode)
+		if machineCode == "" {
+			continue
+		}
+		if _, exists := snap.Authorizations[machineCode]; !exists {
+			continue
+		}
 		day := event.CreatedAt.Format("2006-01-02")
+		machines := dailyLoginMachines[day]
+		if machines == nil {
+			continue
+		}
+		machines[machineCode] = struct{}{}
+		recentLoginMachines[machineCode] = struct{}{}
+	}
+	for day, machines := range dailyLoginMachines {
 		if item := byDay[day]; item != nil {
-			item.Logins++
+			item.Logins = len(machines)
 		}
 	}
 	for _, auth := range snap.Authorizations {
@@ -314,15 +332,13 @@ func (s *Service) DashboardStats() core.DashboardStats {
 		}
 	}
 
-	recentLogins := 0
 	recentAuthorizations := 0
 	for _, item := range daily {
-		recentLogins += item.Logins
 		recentAuthorizations += item.Authorizations
 	}
 	return core.DashboardStats{
 		AuthorizationCount:       len(snap.Authorizations),
-		RecentLoginCount:         recentLogins,
+		RecentLoginCount:         len(recentLoginMachines),
 		RecentAuthorizationCount: recentAuthorizations,
 		Daily:                    daily,
 	}

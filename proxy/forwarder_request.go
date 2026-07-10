@@ -27,6 +27,13 @@ func useResponsesAPI(pre *Preflight, m *store.Model) bool {
 	return strings.Contains(m.Endpoint, "/responses")
 }
 
+func buildUpstreamURL(baseURL, endpoint string) string {
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return endpoint
+	}
+	return strings.TrimRight(baseURL, "/") + endpoint
+}
+
 // convertRequest 将请求体转换为上游格式
 func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 	baseURL := strings.TrimRight(m.BaseURL, "/")
@@ -34,7 +41,10 @@ func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 	if endpoint == "" {
 		return nil, "", fmt.Errorf("接口端点不能为空，请在模型配置中完整填写端点路径")
 	}
-	upstreamURL := baseURL + endpoint
+	upstreamURL := buildUpstreamURL(baseURL, endpoint)
+	if m.DisableAutoSuffix {
+		upstreamURL = strings.TrimSpace(m.BaseURL)
+	}
 
 	if pre.Protocol != "kiro" || pre.Conv == nil {
 		return replaceModelInBody(pre.Body, m.ModelID), upstreamURL, nil
@@ -50,13 +60,15 @@ func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 		body, err = converter.KiroToAnthropic(pre.Conv, m.ModelID, reasoningEffort)
 	case m.Provider == "gemini":
 		body, err = converter.KiroToGemini(pre.Conv, m.ModelID, reasoningEffort)
-		// Gemini URL: 替换 {model} 占位符，追加 ?alt=sse
-		upstreamURL = strings.Replace(upstreamURL, "{model}", m.ModelID, 1)
-		if !strings.Contains(upstreamURL, "alt=sse") {
-			if strings.Contains(upstreamURL, "?") {
-				upstreamURL += "&alt=sse"
-			} else {
-				upstreamURL += "?alt=sse"
+		if !m.DisableAutoSuffix {
+			// Gemini URL: 替换 {model} 占位符，追加 ?alt=sse
+			upstreamURL = strings.Replace(upstreamURL, "{model}", m.ModelID, 1)
+			if !strings.Contains(upstreamURL, "alt=sse") {
+				if strings.Contains(upstreamURL, "?") {
+					upstreamURL += "&alt=sse"
+				} else {
+					upstreamURL += "?alt=sse"
+				}
 			}
 		}
 	case m.Provider == "codex":
@@ -66,8 +78,11 @@ func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 		}
 	case useResponsesAPI(pre, m):
 		body, err = converter.KiroToResponses(pre.Conv, m.ModelID, reasoningEffort)
+		if err == nil {
+			body = setResponsesStore(body, m.EnableContinuation)
+		}
 	default: // chat/completions，或 classifier 请求
-		if strings.Contains(endpoint, "/responses") {
+		if !m.DisableAutoSuffix && strings.Contains(endpoint, "/responses") {
 			// 配置成 responses，但本次走 chat（classifier）：替换端点路径
 			chatEndpoint := strings.Replace(endpoint, "/responses", "/chat/completions", 1)
 			upstreamURL = baseURL + chatEndpoint
@@ -87,5 +102,18 @@ func replaceModelInBody(body []byte, newModel string) []byte {
 	}
 	parsed["model"] = newModel
 	result, _ := json.Marshal(parsed)
+	return result
+}
+
+func setResponsesStore(body []byte, store bool) []byte {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return body
+	}
+	parsed["store"] = store
+	result, err := json.Marshal(parsed)
+	if err != nil {
+		return body
+	}
 	return result
 }

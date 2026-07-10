@@ -112,6 +112,9 @@ func (s *Server) Start() error {
 	log.Printf("[server] BUILD VERSION: 2026-05-30-v10-clean")
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", s.handleLocalOpenAIChat)
+	mux.HandleFunc("/v1/responses", s.handleLocalOpenAIResponses)
+	mux.HandleFunc("/v1/messages", s.handleLocalAnthropicMessages)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/api/ca-status", s.handleCAStatus)
 	mux.HandleFunc("/api/install-ca", s.handleInstallCA)

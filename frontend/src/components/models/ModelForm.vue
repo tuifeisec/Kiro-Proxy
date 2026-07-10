@@ -22,6 +22,7 @@ const defaultForm = () => ({
   base_url: '',
   proxy_url: '',
   endpoint: '/chat/completions',
+  disable_auto_suffix: false,
   context_window: 0,
   max_tokens: 0,
   reasoning_effort: '',
@@ -67,7 +68,7 @@ watch(() => form.value.provider, (val) => {
       : val === 'codex'
         ? ['/codex/responses']
         : ['/chat/completions', '/responses']
-  if (!options.includes(form.value.endpoint)) {
+  if (!form.value.disable_auto_suffix && !options.includes(form.value.endpoint)) {
     form.value.endpoint = options[0]
   }
   if (!loadingModel.value) {
@@ -102,6 +103,7 @@ const providerPlaceholders = computed(() => {
       return {
         name: 'Codex - gpt-5-codex',
         modelId: 'gpt-5-codex',
+        baseUrl: 'https://chatgpt.com/backend-api',
         token: '粘贴 Codex refresh_token，或通过下方授权链接生成 auth JSON'
       }
     default:
@@ -144,6 +146,21 @@ const codexServiceTierOptions = [
   { value: '', label: '标准' },
   { value: 'fast', label: '快速' }
 ]
+
+const NO_AUTO_SUFFIX_VALUE = '__no_auto_suffix__'
+const endpointSelectValue = computed({
+  get() {
+    return form.value.disable_auto_suffix ? NO_AUTO_SUFFIX_VALUE : form.value.endpoint
+  },
+  set(value) {
+    if (value === NO_AUTO_SUFFIX_VALUE) {
+      form.value.disable_auto_suffix = true
+      return
+    }
+    form.value.disable_auto_suffix = false
+    form.value.endpoint = value
+  }
+})
 
 const defaultPrices = {
   openai: { input_price: 5, output_price: 30, cache_input_price: 0.5, cache_output_price: 30 },
@@ -258,13 +275,14 @@ async function handleExchangeOAuth() {
                 <p class="mt-1 text-[11px] text-[#9ca3af]">显示名称用于 Kiro 模型下拉</p>
               </div>
 
-              <div v-if="form.provider !== 'codex'">
+              <div>
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">请求端点 endpoint <span class="text-[#ef4444]">*</span></label>
-                <select v-model="form.endpoint"
+                <select v-model="endpointSelectValue"
                   class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]">
                   <option v-for="ep in endpointOptions" :key="ep" :value="ep">{{ ep }}</option>
+                  <option :value="NO_AUTO_SUFFIX_VALUE">不自动添加后缀</option>
                 </select>
-                <p class="mt-1 text-[11px] text-[#9ca3af]">endpoint 只表示接口端点</p>
+                <p class="mt-1 text-[11px] text-[#9ca3af]">选择“不自动添加后缀”时，只访问 base URL，不再拼接 endpoint</p>
               </div>
 
               <div>
@@ -336,7 +354,7 @@ async function handleExchangeOAuth() {
                 </div>
               </div>
 
-              <div v-if="form.provider !== 'codex'">
+              <div>
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">接口地址 base URL <span class="text-[#ef4444]">*</span></label>
                 <input v-model="form.base_url"
                   class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
