@@ -51,7 +51,9 @@ type LogMeta struct {
 type TrafficLogger struct {
 	mu             sync.Mutex
 	optionsMu      sync.RWMutex
+	fileMu         sync.Mutex
 	file           *os.File
+	fileSize       int64
 	hub            *Hub
 	seq            int64
 	detailMode     string
@@ -63,6 +65,8 @@ type LogOptions struct {
 	MaxDetailBytes int
 }
 
+const maxTrafficLogBytes int64 = 100 * 1024 * 1024
+
 func NewTrafficLogger(logFile string, hub *Hub, opts ...LogOptions) (*TrafficLogger, error) {
 	tl := &TrafficLogger{hub: hub}
 	tl.SetOptions(firstLogOptions(opts...))
@@ -71,15 +75,51 @@ func NewTrafficLogger(logFile string, hub *Hub, opts ...LogOptions) (*TrafficLog
 		if err != nil {
 			return nil, fmt.Errorf("打开日志文件失败: %w", err)
 		}
+		info, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("读取日志文件信息失败: %w", err)
+		}
 		tl.file = f
+		tl.fileSize = info.Size()
 	}
 	return tl, nil
 }
 
 func (tl *TrafficLogger) Close() {
+	tl.fileMu.Lock()
+	defer tl.fileMu.Unlock()
 	if tl.file != nil {
 		tl.file.Close()
 	}
+}
+
+func (tl *TrafficLogger) writeFile(data []byte) {
+	tl.fileMu.Lock()
+	defer tl.fileMu.Unlock()
+	if tl.file == nil {
+		return
+	}
+
+	entrySize := int64(len(data) + 1)
+	if tl.fileSize+entrySize > maxTrafficLogBytes {
+		if err := tl.file.Truncate(0); err != nil {
+			log.Printf("[logger] 清理超限流量日志失败: %v", err)
+			return
+		}
+		if _, err := tl.file.Seek(0, 0); err != nil {
+			log.Printf("[logger] 重置流量日志写入位置失败: %v", err)
+			return
+		}
+		tl.fileSize = 0
+	}
+
+	n, err := tl.file.Write(append(data, '\n'))
+	if err != nil {
+		log.Printf("[logger] 写入流量日志失败: %v", err)
+		return
+	}
+	tl.fileSize += int64(n)
 }
 
 // Log 记录一条日志（推送到 WebSocket + 写文件 + 控制台）
@@ -120,9 +160,7 @@ func (tl *TrafficLogger) logPrepared(level, category, message, det string, meta 
 	}
 
 	data, _ := json.Marshal(template)
-	if tl.file != nil {
-		fmt.Fprintf(tl.file, "%s\n", data)
-	}
+	tl.writeFile(data)
 	if tl.hub != nil {
 		tl.hub.Broadcast(data)
 	}
