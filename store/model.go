@@ -301,6 +301,43 @@ func defaultPricesForProvider(provider string) defaultModelPrices {
 	}
 }
 
+type CreditBreakdown struct {
+	Input      float64
+	Output     float64
+	CacheRead  float64
+	CacheWrite float64
+}
+
+func (b CreditBreakdown) Total() float64 {
+	return b.Input + b.Output + b.CacheRead + b.CacheWrite
+}
+
+// CalculateCreditBreakdown 按现有计费规则拆分单次请求成本。
+func CalculateCreditBreakdown(inputTokens, outputTokens, cacheRead, cacheWrite int, m *Model) CreditBreakdown {
+	if m == nil {
+		m = &Model{}
+	}
+	cp := *m
+	normalizeModelPrices(&cp)
+	if cacheRead < 0 {
+		cacheRead = 0
+	}
+	if cacheWrite < 0 {
+		cacheWrite = 0
+	}
+	regularInput := inputTokens - cacheRead - cacheWrite
+	if regularInput < 0 {
+		regularInput = 0
+	}
+	multiplier := cp.RateMultiplier / 1000000
+	return CreditBreakdown{
+		Input:      float64(regularInput) * cp.InputPrice * multiplier,
+		Output:     float64(outputTokens) * cp.OutputPrice * multiplier,
+		CacheRead:  float64(cacheRead) * cp.CacheInputPrice * multiplier,
+		CacheWrite: float64(cacheWrite) * cp.CacheOutputPrice * multiplier,
+	}
+}
+
 // CalculateCredits 按每百万 token 的模型价格计算 Credit 用量。
 func CalculateCredits(inputTokens, outputTokens, cacheRead, cacheWrite int, m *Model) float64 {
 	if m == nil {

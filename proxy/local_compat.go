@@ -101,15 +101,18 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	}
 
 	modelKey := statsModelID(m)
+	usageRecord := newRequestUsageRecorder(s.db, start, m, r.URL.Path, string(api))
 	s.logger.InfoBytes("local-compat", fmt.Sprintf("本地兼容接口转发: api=%s model=%s → %s", api, modelKey, upstreamURL), upstreamBody)
-	resp, err := s.forwarder.sendWithRetry(r.Context(), upstreamURL, upstreamBody, m, s.logger, "local-compat")
+	resp, err := s.forwarder.sendWithRetry(r.Context(), upstreamURL, upstreamBody, m, s.logger, "local-compat", usageRecord)
 	if err != nil {
+		usageRecord.finish(http.StatusBadGateway, localCompatUsage{}, err.Error())
 		s.stats.RecordRequestFull(0, 0, 0, 0, modelKey, true)
 		s.logger.ErrorWithMeta("local-compat", "转发失败: "+err.Error(), LogMeta{Model: modelKey, LatencyMS: time.Since(start).Milliseconds()})
 		writeLocalCompatError(w, http.StatusBadGateway, "upstream error: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
+	usageRecord.wrapResponse(resp)
 
 	var usage localCompatUsage
 	var writeErr error
@@ -134,6 +137,13 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	}
 
 	isError := status >= http.StatusBadRequest || writeErr != nil
+	errorMessage := ""
+	if writeErr != nil {
+		errorMessage = writeErr.Error()
+	} else if status >= http.StatusBadRequest {
+		errorMessage = fmt.Sprintf("HTTP %d", status)
+	}
+	usageRecord.finish(status, usage, errorMessage)
 	credits := store.CalculateCredits(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, m)
 	s.stats.RecordRequestFullWithCredits(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, credits, modelKey, isError)
 	if writeErr != nil {

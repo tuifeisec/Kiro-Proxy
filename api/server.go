@@ -42,6 +42,7 @@ func (s *Server) registerRoutes() {
 
 func (s *Server) registerRoutesTo(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stats", s.handleStats)
+	mux.HandleFunc("/api/request-usage", s.handleRequestUsage)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/models/", s.handleModel)
 	mux.HandleFunc("/api/refresh-codex-model", s.handleRefreshCodexModel)

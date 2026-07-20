@@ -18,7 +18,7 @@ func NewClient(proxyAddr string, timeout time.Duration) (*http.Client, error) {
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 32,
 		MaxConnsPerHost:     0,
-		IdleConnTimeout:     120 * time.Second,
+		IdleConnTimeout:     5 * time.Minute,
 		ForceAttemptHTTP2:   true,
 		WriteBufferSize:     32 * 1024,
 		ReadBufferSize:      32 * 1024,

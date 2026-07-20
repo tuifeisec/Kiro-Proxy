@@ -25,6 +25,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 		}, truncate(string(body), 500))
 		// 4xx/5xx 上游错误也需要计入统计（总请求数 + 错误数）
 		f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
+		pre.usage.finish(resp.StatusCode, localCompatUsage{}, fmt.Sprintf("HTTP %d", resp.StatusCode))
 		return buildKiroTextStreamResponse(reqFromResponse(resp), buildUpstreamErrorMessage(resp.StatusCode, resp.Status, body), kiroModelID(pre, m), true), nil
 	}
 
@@ -59,6 +60,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			cacheR, cacheW := sc.CacheTokens()
 			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
 			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
+			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR, CacheWriteTokens: cacheW}, "")
 			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
 				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
 			})
@@ -77,6 +79,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			cacheR, _ := sc.CacheTokens()
 			credits := store.CalculateCredits(in, out, cacheR, 0, m)
 			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
+			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR}, "")
 			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), func(maxBytes int) string {
 				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0, maxBytes)
 			})
@@ -96,6 +99,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			cacheR, _ := sc.CacheTokens()
 			credits := store.CalculateCredits(in, out, cacheR, 0, m)
 			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
+			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR}, "")
 			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), func(maxBytes int) string {
 				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0, maxBytes)
 			})
@@ -132,6 +136,7 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 			cacheR, cacheW := sc.CacheTokens()
 			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
 			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
+			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR, CacheWriteTokens: cacheW}, "")
 			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
 				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
 			})

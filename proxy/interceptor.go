@@ -26,6 +26,7 @@ type Preflight struct {
 	IsClassifier   bool
 	ConversationID string
 	StartTime      time.Time
+	usage          *requestUsageRecorder
 }
 
 // setupInterceptor 注册请求拦截器
@@ -157,10 +158,12 @@ func (s *Server) setupInterceptor() {
 			},
 		})
 		s.rememberMainModel(pre, route)
+		pre.usage = newRequestUsageRecorder(s.db, time.Now(), route.Model, req.URL.Path, pre.Protocol)
 
 		// 转发
 		resp, err := s.forwarder.Forward(req, pre, route, s.logger)
 		if err != nil {
+			pre.usage.finish(http.StatusBadGateway, localCompatUsage{}, err.Error())
 			s.logger.ErrorWithMeta("forwarder", "转发失败: "+err.Error(), LogMeta{
 				Model:     statsModelID(route.Model),
 				LatencyMS: time.Since(pre.StartTime).Milliseconds(),

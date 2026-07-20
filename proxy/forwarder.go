@@ -81,7 +81,11 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 
 	// 转换请求体
 	logger.Info("converter", fmt.Sprintf("开始转换: provider=%s, model_id=%s", m.Provider, m.ModelID))
+	conversionStarted := time.Now()
 	upstreamBody, upstreamURL, err := convertRequest(pre, m)
+	if pre != nil && pre.usage != nil {
+		pre.usage.setConversionDuration(conversionStarted)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("转换失败: %w", err)
 	}
@@ -126,7 +130,7 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 			sessionID = pre.Conv.ConversationID
 		}
 	}
-	resp, err := f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID)
+	resp, err := f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID, pre.usage)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +146,7 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 			f.db.DeleteResponsesSession(pre.Conv.ConversationID)
 			upstreamBody = contResult.FallbackBody
 			contResult.UsedContinuation = false
-			resp, err = f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID)
+			resp, err = f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID, pre.usage)
 			if err != nil {
 				return nil, err
 			}
@@ -150,6 +154,10 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 			// 不是可安全归因于续传状态的 4xx，原样返回
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 		}
+	}
+
+	if pre != nil && pre.usage != nil {
+		pre.usage.wrapResponse(resp)
 	}
 
 	// 非 Kiro 协议直接返回
@@ -161,8 +169,8 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 	return f.wrapKiroStream(resp, pre, m, logger, contResult)
 }
 
-// sendWithRetry// sendWithRetry 发送请求，失败重试
-func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string) (*http.Response, error) {
+// sendWithRetry 发送请求，失败重试
+func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
@@ -175,7 +183,7 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 			}
 		}
 
-		resp, err := f.doRequest(ctx, url, body, m, sessionID)
+		resp, err := f.doRequest(ctx, url, body, m, sessionID, usage)
 		if err != nil {
 			lastErr = err
 			if ctx.Err() != nil {
@@ -186,6 +194,9 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 		}
 
 		if resp.StatusCode >= 500 && attempt < maxRetries {
+			if resp.ContentLength >= 0 && resp.ContentLength <= 32*1024 {
+				_, _ = io.Copy(io.Discard, resp.Body)
+			}
 			resp.Body.Close()
 			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
 			continue
@@ -195,7 +206,7 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 	return nil, fmt.Errorf("上游失败（重试 %d 次）: %w", maxRetries, lastErr)
 }
 
-func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *store.Model, sessionID string) (*http.Response, error) {
+func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *store.Model, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -222,7 +233,12 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 	case "codex":
 		beforeToken := m.APIKey
 		beforeRefresh := m.RefreshToken
-		if err := codex.EnsureAccessToken(ctx, m); err != nil {
+		authStarted := time.Now()
+		err := codex.EnsureAccessToken(ctx, m)
+		if usage != nil {
+			usage.addAuthDuration(time.Since(authStarted))
+		}
+		if err != nil {
 			return nil, err
 		}
 		if (m.APIKey != beforeToken || m.RefreshToken != beforeRefresh) && f.db != nil {
@@ -250,6 +266,10 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 	client, err := f.clientForProxy(m.ProxyURL)
 	if err != nil {
 		return nil, err
+	}
+	if usage != nil {
+		usage.beginAttempt()
+		req = req.WithContext(usage.traceContext(ctx))
 	}
 	return client.Do(req)
 }

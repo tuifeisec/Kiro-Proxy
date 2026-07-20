@@ -15,6 +15,7 @@ const navItems = computed(() => [
   { path: '/', label: '仪表盘', icon: IconDashboard },
   { path: '/models', label: '模型配置', icon: IconModels },
   { path: '/usage', label: '用量明细', icon: IconUsage },
+  { path: '/request-usage', label: '请求统计', icon: IconLogs },
   ...(trafficLogAllowed.value ? [{ path: '/inspector', label: '流量抓包', icon: IconLogs }] : []),
 ])
 

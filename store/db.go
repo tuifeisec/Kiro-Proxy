@@ -7,12 +7,15 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type DB struct {
-	conn *sql.DB
+	conn                   *sql.DB
+	requestUsageCleanupDay atomic.Int64
 }
 
 func Open(path string) (*DB, error) {
@@ -65,6 +68,23 @@ func (db *DB) migrate() error {
 		{"models", "codex_usage_json", "TEXT NOT NULL DEFAULT ''"},
 		{"models", "service_tier", "TEXT NOT NULL DEFAULT ''"},
 		{"daily_stats", "credits", "REAL NOT NULL DEFAULT 0"},
+		{"request_usage", "credits", "REAL NOT NULL DEFAULT 0"},
+		{"request_usage", "input_cost", "REAL NOT NULL DEFAULT 0"},
+		{"request_usage", "output_cost", "REAL NOT NULL DEFAULT 0"},
+		{"request_usage", "cache_read_cost", "REAL NOT NULL DEFAULT 0"},
+		{"request_usage", "cache_write_cost", "REAL NOT NULL DEFAULT 0"},
+		{"request_usage", "conversion_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "auth_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "dns_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "connect_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "tls_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "request_send_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "upstream_wait_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "response_header_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "stream_wait_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "retry_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "reused_connection", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "service_tier", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range columns {
 		if err := db.addColumnIfNotExists(col.table, col.name, col.def); err != nil {
@@ -72,8 +92,11 @@ func (db *DB) migrate() error {
 		}
 	}
 
-	// 启动时清理过期 session
+	// 启动时清理过期数据。
 	db.CleanExpiredResponsesSessions()
+	if err := db.cleanupExpiredRequestUsage(time.Now()); err != nil {
+		log.Printf("[store] 清理过期请求统计失败: %v", err)
+	}
 	return nil
 }
 
@@ -157,6 +180,44 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     credits       REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (date, model_id)
 );
+
+CREATE TABLE IF NOT EXISTS request_usage (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_date       TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    model_id           TEXT NOT NULL DEFAULT '',
+    provider           TEXT NOT NULL DEFAULT '',
+    endpoint           TEXT NOT NULL DEFAULT '',
+    request_path       TEXT NOT NULL DEFAULT '',
+    protocol           TEXT NOT NULL DEFAULT '',
+    status_code        INTEGER NOT NULL DEFAULT 0,
+    success            INTEGER NOT NULL DEFAULT 0,
+    input_tokens       INTEGER NOT NULL DEFAULT 0,
+    output_tokens      INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    first_byte_ms      INTEGER NOT NULL DEFAULT 0,
+    duration_ms        INTEGER NOT NULL DEFAULT 0,
+    credits            REAL NOT NULL DEFAULT 0,
+    input_cost         REAL NOT NULL DEFAULT 0,
+    output_cost        REAL NOT NULL DEFAULT 0,
+    cache_read_cost    REAL NOT NULL DEFAULT 0,
+    cache_write_cost   REAL NOT NULL DEFAULT 0,
+    conversion_ms      INTEGER NOT NULL DEFAULT 0,
+    auth_ms            INTEGER NOT NULL DEFAULT 0,
+    dns_ms             INTEGER NOT NULL DEFAULT 0,
+    connect_ms         INTEGER NOT NULL DEFAULT 0,
+    tls_ms             INTEGER NOT NULL DEFAULT 0,
+    request_send_ms    INTEGER NOT NULL DEFAULT 0,
+    upstream_wait_ms   INTEGER NOT NULL DEFAULT 0,
+    response_header_ms INTEGER NOT NULL DEFAULT 0,
+    stream_wait_ms     INTEGER NOT NULL DEFAULT 0,
+    retry_count        INTEGER NOT NULL DEFAULT 0,
+    reused_connection  INTEGER NOT NULL DEFAULT 0,
+    service_tier       TEXT NOT NULL DEFAULT '',
+    error_message      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_request_usage_date_id ON request_usage(request_date, id DESC);
 
 CREATE TABLE IF NOT EXISTS responses_sessions (
     conversation_id TEXT PRIMARY KEY,
