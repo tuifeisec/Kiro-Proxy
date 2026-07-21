@@ -224,6 +224,9 @@ func DetectProtocol(host, path string) string {
 	// 新版本：Kiro 按职责拆分为 runtime / management 子域名。
 	if isKiroRuntimeHostName(hostname) {
 		switch {
+		case path == "/":
+			// 新版将对话操作放到根路径，请求层需继续根据 method/body 确认。
+			return "kiro-runtime-root"
 		case hasSuffix(path, "/generateAssistantResponse"):
 			return "kiro"
 		default:

@@ -29,6 +29,35 @@ type Preflight struct {
 	usage          *requestUsageRecorder
 }
 
+// isKiroConversationRequest 检查 runtime 根路径请求是否具有对话操作的稳定结构。
+// 读取后恢复 body，确保后续解析或原样放行不受影响。
+func isKiroConversationRequest(req *http.Request) bool {
+	if req.Body == nil {
+		return false
+	}
+
+	body, err := io.ReadAll(req.Body)
+	req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil || len(body) == 0 {
+		return false
+	}
+
+	var payload struct {
+		ConversationState *struct {
+			CurrentMessage *struct {
+				UserInputMessage *json.RawMessage `json:"userInputMessage"`
+			} `json:"currentMessage"`
+		} `json:"conversationState"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return payload.ConversationState != nil &&
+		payload.ConversationState.CurrentMessage != nil &&
+		payload.ConversationState.CurrentMessage.UserInputMessage != nil
+}
+
 // setupInterceptor 注册请求拦截器
 func (s *Server) setupInterceptor() {
 	s.proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
@@ -42,6 +71,13 @@ func (s *Server) setupInterceptor() {
 		s.logger.Debug("proxy", fmt.Sprintf("%s %s%s", req.Method, host, path))
 
 		protocol := router.DetectProtocol(host, path)
+		if protocol == "kiro-runtime-root" {
+			if req.Method == http.MethodPost && isKiroConversationRequest(req) {
+				protocol = "kiro"
+			} else {
+				protocol = "kiro-passthrough"
+			}
+		}
 		if protocol == "" {
 			return req, nil // 非目标请求，直接放行
 		}
