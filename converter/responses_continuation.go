@@ -8,7 +8,7 @@
 //
 //   这样做的好处：
 //   1. 请求体大幅缩小（从 300KB → 几 KB）
-//   2. 上游不需要重新 prefix match，缓存命中率接近 100%
+//   2. 避免重复上传已由 previous_response_id 引用的响应输出
 //   3. 减少网络传输和序列化开销
 //
 // 流程：
@@ -30,10 +30,9 @@ import (
 
 // ResponsesContinuationState 保存续传所需的状态（由调用方管理存储）
 type ResponsesContinuationState struct {
-	ConversationID string
-	ResponseID     string // 上一次的 response_id
-	InputJSON      string // 上一次的完整 input JSON
-	ItemCount      int    // 上一次 input 的 item 数量
+	ResponseID string // 上一次的 response_id
+	InputJSON  string // 上一次的完整 input JSON
+	ItemCount  int    // 上一次 input 的 item 数量
 }
 
 // ResponsesContinuationResult 续传处理结果
@@ -47,15 +46,17 @@ type ResponsesContinuationResult struct {
 
 // responsesRequestForContinuation 用于解析/修改 Responses 请求
 type responsesRequestForContinuation struct {
-	Model              string            `json:"model"`
-	Instructions       string            `json:"instructions,omitempty"`
-	Input              []json.RawMessage `json:"input"`
-	Tools              []ReqTool         `json:"tools,omitempty"`
-	Reasoning          *OpenAIReasoning  `json:"reasoning,omitempty"`
-	Stream             bool              `json:"stream"`
-	Store              bool              `json:"store"`
-	PromptCacheKey     string            `json:"prompt_cache_key,omitempty"`
-	PreviousResponseID string            `json:"previous_response_id,omitempty"`
+	Model              string              `json:"model"`
+	Instructions       string              `json:"instructions,omitempty"`
+	Input              []json.RawMessage   `json:"input"`
+	Tools              []ReqTool           `json:"tools,omitempty"`
+	Reasoning          *OpenAIReasoning    `json:"reasoning,omitempty"`
+	Stream             bool                `json:"stream"`
+	Store              bool                `json:"store"`
+	PromptCacheKey     string              `json:"prompt_cache_key,omitempty"`
+	PromptCacheOpts    *PromptCacheOptions `json:"prompt_cache_options,omitempty"`
+	PreviousResponseID string              `json:"previous_response_id,omitempty"`
+	User               string              `json:"user,omitempty"`
 }
 
 // ApplyResponsesContinuation 尝试对 Responses API 请求应用续传优化
@@ -63,7 +64,8 @@ type responsesRequestForContinuation struct {
 // 如果 prevState 为 nil 或 ResponseID 为空，直接返回原始 body（首次请求）。
 // 如果前次 input 是当前 input 的严格前缀，则：
 //   - 设置 previous_response_id
-//   - input 只保留 delta 部分（新增的 items）
+//   - 跳过已包含在 previous response 中的 assistant/function_call 输出
+//   - input 只保留新的客户端输入
 func ApplyResponsesContinuation(body []byte, prevState *ResponsesContinuationState) (*ResponsesContinuationResult, error) {
 	// 解析当前请求
 	var req responsesRequestForContinuation
@@ -110,8 +112,13 @@ func ApplyResponsesContinuation(body []byte, prevState *ResponsesContinuationSta
 		}
 	}
 
-	// 前缀匹配！构建续传请求
-	delta := req.Input[len(prevInput):]
+	// 前缀匹配后，Kiro history 会把上次响应的 assistant/function_call 输出补进来。
+	// previous_response_id 已经包含这些输出，续传时只发送其后的新客户端输入。
+	delta := trimPreviousResponseOutputs(req.Input[len(prevInput):])
+	if len(delta) == 0 {
+		result.Body = body
+		return result, nil
+	}
 	req.PreviousResponseID = prevState.ResponseID
 	req.Input = delta
 
@@ -124,6 +131,24 @@ func ApplyResponsesContinuation(body []byte, prevState *ResponsesContinuationSta
 	result.Body = continuationBody
 	result.UsedContinuation = true
 	return result, nil
+}
+
+func trimPreviousResponseOutputs(delta []json.RawMessage) []json.RawMessage {
+	for len(delta) > 0 {
+		var item struct {
+			Type string `json:"type"`
+			Role string `json:"role"`
+		}
+		if json.Unmarshal(delta[0], &item) != nil {
+			break
+		}
+		if item.Type == "function_call" || (item.Type == "message" && item.Role == "assistant") {
+			delta = delta[1:]
+			continue
+		}
+		break
+	}
+	return delta
 }
 
 // HashInput 计算 input JSON 的短 hash（用于快速比对是否可能匹配）

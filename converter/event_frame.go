@@ -36,8 +36,9 @@ var crc32Table = crc32.MakeTable(crc32.IEEE)
 
 // 预计算的固定头部片段（独立分配，不共享底层数组）
 var (
-	prebuiltHeaderPrefix []byte // :message-type=event
-	prebuiltHeaderSuffix []byte // :content-type=application/json
+	prebuiltHeaderPrefix   []byte // :message-type=event
+	prebuiltHeaderSuffix   []byte // :content-type=application/json
+	prebuiltInitialHeaders []byte
 )
 
 func init() {
@@ -49,6 +50,7 @@ func init() {
 	suffix := make([]byte, 0, 48)
 	suffix = appendStringHeader(suffix, headerContentType, "application/json")
 	prebuiltHeaderSuffix = suffix
+	prebuiltInitialHeaders = buildHeadersBytesWithContentType("initial-response", "application/x-amz-json-1.0")
 }
 
 // headerCache 缓存已知 eventType 的完整头部字节
@@ -103,6 +105,27 @@ func BuildKiroEventFrame(eventType string, payload map[string]interface{}) []byt
 		return nil
 	}
 	return buildFrameFast(getCachedHeaders(eventType), payloadBytes)
+}
+
+// MetadataStopFrame marks the end of a Kiro response turn.
+func MetadataStopFrame(stopReason string) []byte {
+	if stopReason != "TOOL_USE" {
+		stopReason = "END_TURN"
+	}
+	buf := make([]byte, 0, 40)
+	buf = append(buf, `{"stopReason":`...)
+	buf = appendJSONString(buf, stopReason)
+	buf = append(buf, '}')
+	return buildFrameFast(getCachedHeaders("metadataEvent"), buf)
+}
+
+// InitialResponseFrame is the first frame in a Kiro response stream.
+func InitialResponseFrame(conversationID string) []byte {
+	buf := make([]byte, 0, 32+len(conversationID)*2)
+	buf = append(buf, `{"conversationId":`...)
+	buf = appendJSONString(buf, conversationID)
+	buf = append(buf, '}')
+	return buildFrameFast(prebuiltInitialHeaders, buf)
 }
 
 // ── 高频帧：手工拼接 JSON，避免 map 分配 + json.Marshal ──────────
@@ -185,7 +208,7 @@ func MetadataFrame(inputTokens, outputTokens, cacheRead, cacheWrite int) []byte 
 		buf = strconv.AppendInt(buf, int64(cacheWrite), 10)
 	}
 	buf = append(buf, `}}`...)
-	return buildFrameFast(getCachedHeaders("messageMetadataEvent"), buf)
+	return MetadataStopFrame("END_TURN")
 }
 
 // ContextUsageFrame 构建上下文使用率帧
@@ -217,12 +240,17 @@ func MeteringFrame(credits float64) []byte {
 // ── 头部构建 ─────────────────────────────────────────────────────
 
 func buildHeadersBytes(eventType string) []byte {
+	return buildHeadersBytesWithContentType(eventType, "application/json")
+}
+
+func buildHeadersBytesWithContentType(eventType, contentType string) []byte {
 	size := len(prebuiltHeaderPrefix) + len(prebuiltHeaderSuffix) +
-		1 + len(headerEventType) + 1 + 2 + len(eventType)
+		1 + len(headerEventType) + 1 + 2 + len(eventType) +
+		len(contentType) - len("application/json")
 	buf := make([]byte, 0, size)
 	buf = append(buf, prebuiltHeaderPrefix...)
 	buf = appendStringHeader(buf, headerEventType, eventType)
-	buf = append(buf, prebuiltHeaderSuffix...)
+	buf = appendStringHeader(buf, headerContentType, contentType)
 	return buf
 }
 

@@ -52,12 +52,17 @@ type TrafficLogger struct {
 	mu             sync.Mutex
 	optionsMu      sync.RWMutex
 	fileMu         sync.Mutex
+	queueMu        sync.Mutex
 	file           *os.File
 	fileSize       int64
 	hub            *Hub
 	seq            int64
 	detailMode     string
 	maxDetailBytes int
+	queue          chan []byte
+	queueClosed    bool
+	workerWG       sync.WaitGroup
+	dropped        uint64
 }
 
 type LogOptions struct {
@@ -83,14 +88,53 @@ func NewTrafficLogger(logFile string, hub *Hub, opts ...LogOptions) (*TrafficLog
 		tl.file = f
 		tl.fileSize = info.Size()
 	}
+	if tl.file != nil || tl.hub != nil {
+		tl.queue = make(chan []byte, 512)
+		tl.workerWG.Add(1)
+		go tl.run()
+	}
 	return tl, nil
 }
 
 func (tl *TrafficLogger) Close() {
+	tl.queueMu.Lock()
+	if tl.queue != nil && !tl.queueClosed {
+		tl.queueClosed = true
+		close(tl.queue)
+	}
+	tl.queueMu.Unlock()
+	tl.workerWG.Wait()
+
 	tl.fileMu.Lock()
 	defer tl.fileMu.Unlock()
 	if tl.file != nil {
 		tl.file.Close()
+	}
+}
+
+func (tl *TrafficLogger) run() {
+	defer tl.workerWG.Done()
+	for data := range tl.queue {
+		tl.writeFile(data)
+		if tl.hub != nil {
+			tl.hub.Broadcast(data)
+		}
+	}
+}
+
+func (tl *TrafficLogger) enqueue(data []byte) {
+	tl.queueMu.Lock()
+	defer tl.queueMu.Unlock()
+	if tl.queue == nil || tl.queueClosed {
+		return
+	}
+	select {
+	case tl.queue <- data:
+	default:
+		tl.dropped++
+		if tl.dropped == 1 || tl.dropped%100 == 0 {
+			log.Printf("[logger] async log queue full, dropped %d entries", tl.dropped)
+		}
 	}
 }
 
@@ -160,10 +204,7 @@ func (tl *TrafficLogger) logPrepared(level, category, message, det string, meta 
 	}
 
 	data, _ := json.Marshal(template)
-	tl.writeFile(data)
-	if tl.hub != nil {
-		tl.hub.Broadcast(data)
-	}
+	tl.enqueue(data)
 }
 
 func (tl *TrafficLogger) newEntry(level, category, message, det string, meta *LogMeta) *LogEntry {

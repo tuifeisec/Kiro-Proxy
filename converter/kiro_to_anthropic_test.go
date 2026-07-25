@@ -230,7 +230,40 @@ Here is the last user message:
 	}
 }
 
-func TestAnthropic_EnvironmentContextSplitWithinCurrentUserBlocks(t *testing.T) {
+func TestAnthropic_RollingCacheBreakpointOnLastToolResult(t *testing.T) {
+	conv := &ParsedConversation{
+		ModelID: "claude-sonnet-4.5",
+		History: []ParsedHistoryEntry{
+			{UserContent: "first", HasAssistant: true, AssistantContent: "done"},
+		},
+		CurrentToolResults: []ParsedToolResult{{
+			ToolUseID: "call_1",
+			Content:   "tool output",
+		}},
+	}
+
+	body, err := KiroToAnthropic(conv, "", "")
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+	req := parseAnthropicReq(t, body)
+	if len(req.Messages) != 3 {
+		t.Fatalf("messages count = %d, want 3", len(req.Messages))
+	}
+	historyBlocks := anthropicContentBlocks(t, req.Messages[0].Content)
+	if len(historyBlocks) != 1 || historyBlocks[0].CacheControl != nil {
+		t.Fatalf("historical user should not retain rolling breakpoint: %+v", historyBlocks)
+	}
+	blocks := anthropicContentBlocks(t, req.Messages[2].Content)
+	if len(blocks) != 1 || blocks[0].Type != "tool_result" {
+		t.Fatalf("current tool_result blocks = %+v", blocks)
+	}
+	if blocks[0].CacheControl == nil || blocks[0].CacheControl.Type != "ephemeral" {
+		t.Fatal("last tool_result should be the rolling cache breakpoint")
+	}
+}
+
+func TestAnthropic_EnvironmentContextPreservesCurrentMessage(t *testing.T) {
 	conv := &ParsedConversation{
 		ModelID:        "claude-sonnet-4.5",
 		SystemText:     "<identity>\nYou are Kiro.\n</identity>",
@@ -246,13 +279,17 @@ func TestAnthropic_EnvironmentContextSplitWithinCurrentUserBlocks(t *testing.T) 
 		t.Fatalf("messages count = %d, want 1", len(req.Messages))
 	}
 	blocks := anthropicContentBlocks(t, req.Messages[0].Content)
-	if len(blocks) != 2 {
-		t.Fatalf("current user should split env and question into 2 text blocks, got %d: %+v", len(blocks), blocks)
+	content, ok := "", len(blocks) == 1
+	if ok {
+		content = blocks[0].Text
 	}
-	if !strings.Contains(blocks[0].Text, "EnvironmentContext") {
-		t.Fatalf("第一个动态块应为 EnvironmentContext: %+v", blocks)
+	if ok && (blocks[0].CacheControl == nil || blocks[0].CacheControl.Type != "ephemeral") {
+		t.Fatal("current user should be the rolling cache breakpoint")
 	}
-	if blocks[1].Text != "帮我写测试" {
-		t.Fatalf("第二个动态块应为用户问题，got %q", blocks[1].Text)
+	if !ok {
+		t.Fatalf("current user should contain one text block, got %T", req.Messages[0].Content)
+	}
+	if content != conv.CurrentContent {
+		t.Fatalf("current 内容发生变化: %q", content)
 	}
 }

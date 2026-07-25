@@ -34,6 +34,17 @@ func buildUpstreamURL(baseURL, endpoint string) string {
 	return strings.TrimRight(baseURL, "/") + endpoint
 }
 
+func resolveReasoningEffort(pre *Preflight, model *store.Model) string {
+	defaultEffort := ""
+	if model != nil {
+		defaultEffort, _ = converter.NormalizeReasoningEffort(model.ReasoningEffort)
+	}
+	if pre == nil || pre.Conv == nil || pre.IsClassifier || pre.Conv.ReasoningEffort == "" {
+		return defaultEffort
+	}
+	return pre.Conv.ReasoningEffort
+}
+
 // convertRequest 将请求体转换为上游格式
 func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 	baseURL := strings.TrimRight(m.BaseURL, "/")
@@ -50,7 +61,7 @@ func convertRequest(pre *Preflight, m *store.Model) ([]byte, string, error) {
 		return replaceModelInBody(pre.Body, m.ModelID), upstreamURL, nil
 	}
 
-	reasoningEffort := strings.TrimSpace(m.ReasoningEffort)
+	reasoningEffort := resolveReasoningEffort(pre, m)
 
 	// Kiro 协议：根据 provider + endpoint 选择转换器
 	var body []byte

@@ -17,7 +17,7 @@ const (
 
 // toOpenAITools 将 Kiro 原始工具定义转换为 OpenAI function 格式
 func toOpenAITools(rawTools []json.RawMessage) []OpenAITool {
-	specs := sortedToolSpecs(rawTools, false)
+	specs := sortedToolSpecs(rawTools, true)
 	result := make([]OpenAITool, 0, len(specs))
 	for _, spec := range specs {
 		result = append(result, OpenAITool{
@@ -39,12 +39,9 @@ func toAnthropicTools(rawTools []json.RawMessage) []AnthropicTool {
 	for _, spec := range specs {
 		if spec.isWebSearch {
 			result = append(result, AnthropicTool{
-				Name:        "web_search",
-				Description: "Search the web for current information",
-				InputSchema: map[string]interface{}{
-					"type":       "object",
-					"properties": map[string]interface{}{},
-				},
+				Name:        spec.name,
+				Description: truncateDesc(spec.description),
+				InputSchema: spec.schema,
 			})
 			continue
 		}
@@ -80,10 +77,11 @@ func sortedToolSpecs(rawTools []json.RawMessage, includeWebSearch bool) []toolSp
 
 // toolSpec 是从 Kiro 工具定义中提取的中间结构
 type toolSpec struct {
-	name        string
-	description string
-	schema      json.RawMessage // 保留原始 JSON 字节，避免 interface{} 深层分配
-	isWebSearch bool
+	name          string
+	description   string
+	schema        json.RawMessage // 保留原始 JSON 字节，避免 interface{} 深层分配
+	isWebSearch   bool
+	schemaInvalid bool
 }
 
 func (s toolSpec) stableName() string {
@@ -102,7 +100,21 @@ func extractToolSpec(raw json.RawMessage) (toolSpec, bool) {
 
 	// webSearchTool 特殊处理
 	if _, ok := wrapper["webSearchTool"]; ok {
-		return toolSpec{isWebSearch: true}, true
+		description := "Search the web for current information"
+		var webSearch struct {
+			Description string `json:"description"`
+		}
+		if rawWebSearch := wrapper["webSearchTool"]; len(rawWebSearch) > 0 {
+			if json.Unmarshal(rawWebSearch, &webSearch) == nil && webSearch.Description != "" {
+				description = webSearch.Description
+			}
+		}
+		return toolSpec{
+			name:        "web_search",
+			description: description,
+			schema:      json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
+			isWebSearch: true,
+		}, true
 	}
 
 	specRaw, ok := wrapper["toolSpecification"]
@@ -125,11 +137,14 @@ func extractToolSpec(raw json.RawMessage) (toolSpec, bool) {
 	}
 
 	var schema json.RawMessage
+	schemaInvalid := false
 	if len(spec.InputSchema.JSON) > 0 {
 		// 验证 JSON 有效性，但保留原始字节
-		var js json.RawMessage
-		if json.Unmarshal(spec.InputSchema.JSON, &js) == nil {
+		var js map[string]json.RawMessage
+		if json.Unmarshal(spec.InputSchema.JSON, &js) == nil && js != nil {
 			schema = spec.InputSchema.JSON
+		} else {
+			schemaInvalid = true
 		}
 	}
 	if len(schema) == 0 {
@@ -137,9 +152,10 @@ func extractToolSpec(raw json.RawMessage) (toolSpec, bool) {
 	}
 
 	return toolSpec{
-		name:        spec.Name,
-		description: spec.Description,
-		schema:      schema,
+		name:          spec.Name,
+		description:   spec.Description,
+		schema:        schema,
+		schemaInvalid: schemaInvalid,
 	}, true
 }
 
@@ -148,4 +164,46 @@ func truncateDesc(s string) string {
 		return s
 	}
 	return s[:maxDescLen] + "..."
+}
+
+// ToolConversionReport describes data-shape changes made while converting
+// Kiro tool definitions for a provider.
+type ToolConversionReport struct {
+	RawTools               int
+	ProviderTools          int
+	InvalidTools           int
+	InvalidSchemas         int
+	FilteredWebSearchTools int
+	DescriptionTruncations int
+	OverLimitTools         int
+}
+
+// ToolConversionReportForAudit reports the exact filtering rules used by the
+// provider-visible tool list.
+func ToolConversionReportForAudit(rawTools []json.RawMessage, includeWebSearch bool) ToolConversionReport {
+	report := ToolConversionReport{RawTools: len(rawTools)}
+	for i, raw := range rawTools {
+		if i >= maxTools {
+			report.OverLimitTools++
+			continue
+		}
+
+		spec, ok := extractToolSpec(raw)
+		if !ok {
+			report.InvalidTools++
+			continue
+		}
+		if spec.schemaInvalid {
+			report.InvalidSchemas++
+		}
+		if len(spec.description) > maxDescLen {
+			report.DescriptionTruncations++
+		}
+		if spec.isWebSearch && !includeWebSearch {
+			report.FilteredWebSearchTools++
+			continue
+		}
+		report.ProviderTools++
+	}
+	return report
 }

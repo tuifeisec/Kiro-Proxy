@@ -96,30 +96,38 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 				}
 			}()
 			in, out := sc.Usage()
-			cacheR, _ := sc.CacheTokens()
-			credits := store.CalculateCredits(in, out, cacheR, 0, m)
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
-			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR}, "")
-			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), func(maxBytes int) string {
-				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0, maxBytes)
+			cacheR, cacheW := sc.CacheTokens()
+			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
+			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
+			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR, CacheWriteTokens: cacheW}, "")
+			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
+				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
 			})
 
 			// 保存 response_id 用于下次续传；只有明确完成且无错误的流才能更新续传状态。
 			responseID := sc.ResponseID()
-			if responseID != "" && sc.Succeeded() && contResult != nil && pre.Conv != nil && pre.Conv.ConversationID != "" {
-				f.db.UpsertResponsesSession(&store.ResponsesSession{
-					ConversationID: pre.Conv.ConversationID,
-					InputHash:      converter.HashInput(contResult.FullInputJSON),
-					ResponseID:     responseID,
-					InputJSON:      contResult.FullInputJSON,
-					ItemCount:      contResult.InputItemCount,
-					UpdatedAt:      time.Now(),
-				})
+			stateKey := responsesContinuationStateKeyFor(pre, m, resolveReasoningEffort(pre, m))
+			if responseID != "" && sc.Succeeded() && contResult != nil && stateKey != "" {
+				if err := f.db.UpsertResponsesSession(&store.ResponsesSession{
+					StateKey:   stateKey,
+					InputHash:  converter.HashInput(contResult.FullInputJSON),
+					ResponseID: responseID,
+					InputJSON:  contResult.FullInputJSON,
+					ItemCount:  contResult.InputItemCount,
+					UpdatedAt:  time.Now(),
+				}); err != nil {
+					logger.Error("forwarder", fmt.Sprintf("保存 Responses 续传状态失败: %v", err))
+					return
+				}
 				ridShort := responseID
 				if len(ridShort) > 12 {
 					ridShort = ridShort[:12]
 				}
-				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, responseId=%s", pre.Conv.ConversationID, ridShort))
+				stateScope := "conversation"
+				if stateKey != pre.Conv.ConversationID {
+					stateScope = "branch"
+				}
+				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, stateScope=%s, responseId=%s", pre.Conv.ConversationID, stateScope, ridShort))
 			}
 		}()
 	default: // /v1/chat/completions（含 classifier）
@@ -145,9 +153,9 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 
 	resp.Body = streamBody
 	resp.ContentLength = -1
-	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Set("Content-Type", "application/vnd.amazon.eventstream")
 	resp.Header.Set("Transfer-Encoding", "chunked")
-	resp.Header.Set("Connection", "close")
+	resp.Header.Del("Connection")
 	resp.Header.Del("Content-Length")
 	resp.Header.Set("Cache-Control", "no-cache")
 

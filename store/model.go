@@ -279,7 +279,12 @@ func normalizeModelPrices(m *Model) {
 		m.CacheInputPrice = defaults.cacheInput
 	}
 	if m.CacheOutputPrice <= 0 {
-		m.CacheOutputPrice = defaults.cacheOutput
+		provider := strings.ToLower(strings.TrimSpace(m.Provider))
+		if provider == "" || provider == "openai" || provider == "codex" {
+			m.CacheOutputPrice = m.InputPrice * 1.25
+		} else {
+			m.CacheOutputPrice = defaults.cacheOutput
+		}
 	}
 }
 
@@ -297,7 +302,7 @@ func defaultPricesForProvider(provider string) defaultModelPrices {
 	case "gemini":
 		return defaultModelPrices{input: 1.5, output: 9, cacheInput: 0.15, cacheOutput: 1.5}
 	default:
-		return defaultModelPrices{input: 5, output: 30, cacheInput: 0.5, cacheOutput: 30}
+		return defaultModelPrices{input: 5, output: 30, cacheInput: 0.5, cacheOutput: 6.25}
 	}
 }
 

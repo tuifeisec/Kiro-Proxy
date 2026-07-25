@@ -10,17 +10,18 @@
 package store
 
 import (
+	"database/sql"
 	"time"
 )
 
 // ResponsesSession 存储一次成功的 Responses API 交互状态
 type ResponsesSession struct {
-	ConversationID string // Kiro 会话 ID
-	InputHash      string // 本次 input 数组的 sha256 前缀 hash（用于快速比对）
-	ResponseID     string // 上游返回的 response.id
-	InputJSON      string // 本次完整 input 数组的 JSON（用于 delta 计算）
-	ItemCount      int    // input 数组的 item 数量
-	UpdatedAt      time.Time
+	StateKey   string // continuation 状态键（沿用 conversation_id 数据库列）
+	InputHash  string // 本次 input 数组的 sha256 前缀 hash（用于快速比对）
+	ResponseID string // 上游返回的 response.id
+	InputJSON  string // 本次完整 input 数组的 JSON（用于 delta 计算）
+	ItemCount  int    // input 数组的 item 数量
+	UpdatedAt  time.Time
 }
 
 // UpsertResponsesSession 保存或更新 Responses 会话状态
@@ -34,31 +35,34 @@ func (db *DB) UpsertResponsesSession(session *ResponsesSession) error {
 			input_json  = excluded.input_json,
 			item_count  = excluded.item_count,
 			updated_at  = excluded.updated_at
-	`, session.ConversationID, session.InputHash, session.ResponseID, session.InputJSON, session.ItemCount, session.UpdatedAt.Format(time.RFC3339))
+	`, session.StateKey, session.InputHash, session.ResponseID, session.InputJSON, session.ItemCount, session.UpdatedAt.Format(time.RFC3339))
 	return err
 }
 
 // GetResponsesSession 获取指定会话的上一次状态
-func (db *DB) GetResponsesSession(conversationID string) (*ResponsesSession, error) {
+func (db *DB) GetResponsesSession(stateKey string) (*ResponsesSession, error) {
 	row := db.conn.QueryRow(`
 		SELECT conversation_id, input_hash, response_id, input_json, item_count, updated_at
 		FROM responses_sessions
 		WHERE conversation_id = ?
-	`, conversationID)
+	`, stateKey)
 
 	var s ResponsesSession
 	var updatedAt string
-	err := row.Scan(&s.ConversationID, &s.InputHash, &s.ResponseID, &s.InputJSON, &s.ItemCount, &updatedAt)
+	err := row.Scan(&s.StateKey, &s.InputHash, &s.ResponseID, &s.InputJSON, &s.ItemCount, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, nil // 不存在返回 nil
+		return nil, err
 	}
 	s.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return &s, nil
 }
 
 // DeleteResponsesSession 删除指定会话的状态（用于续传失败时清理）
-func (db *DB) DeleteResponsesSession(conversationID string) error {
-	_, err := db.conn.Exec(`DELETE FROM responses_sessions WHERE conversation_id = ?`, conversationID)
+func (db *DB) DeleteResponsesSession(stateKey string) error {
+	_, err := db.conn.Exec(`DELETE FROM responses_sessions WHERE conversation_id = ?`, stateKey)
 	return err
 }
 

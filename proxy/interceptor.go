@@ -195,6 +195,7 @@ func (s *Server) setupInterceptor() {
 		})
 		s.rememberMainModel(pre, route)
 		pre.usage = newRequestUsageRecorder(s.db, time.Now(), route.Model, req.URL.Path, pre.Protocol)
+		pre.usage.setReasoningEffort(resolveReasoningEffort(pre, route.Model))
 
 		// 转发
 		resp, err := s.forwarder.Forward(req, pre, route, s.logger)

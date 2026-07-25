@@ -30,6 +30,7 @@ type AnthropicStreamConverter struct {
 	cacheRead    int // cache_read_input_tokens
 	cacheWrite   int // cache_creation_input_tokens
 	outputChars  int
+	toolUsed     bool
 	done         chan struct{}
 
 	// 工具调用状态：key = content block index
@@ -79,7 +80,7 @@ func (c *AnthropicStreamConverter) Usage() (int, int) {
 	<-c.done
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.inputTokens, c.outputTokens
+	return c.inputTokens + c.cacheRead + c.cacheWrite, c.outputTokens
 }
 
 // CacheTokens 返回缓存命中/写入的 token 数
@@ -101,6 +102,7 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 	defer c.pw.Close()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
+	c.write(InitialResponseFrame(""))
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -119,8 +121,12 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 	}
 
 	c.mu.Lock()
-	in, out := c.inputTokens, c.outputTokens
+	uncachedIn, out := c.inputTokens, c.outputTokens
 	cacheR, cacheW := c.cacheRead, c.cacheWrite
+	stopReason := "END_TURN"
+	if c.toolUsed {
+		stopReason = "TOOL_USE"
+	}
 	if out == 0 && c.outputChars > 0 {
 		out = c.outputChars / 4
 		if out == 0 {
@@ -130,9 +136,11 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 	}
 	c.mu.Unlock()
 
-	c.write(MetadataFrame(in, out, cacheR, cacheW))
-	c.write(ContextUsageFrame(in+out, c.maxTokens))
-	c.write(MeteringFrame(calcCredits(in, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
+	// 项目内统一约定 inputTokens 是总输入；Anthropic 原始 input_tokens 仅是未缓存尾部。
+	totalIn := uncachedIn + cacheR + cacheW
+	c.write(MetadataStopFrame(stopReason))
+	c.write(ContextUsageFrame(totalIn+out, c.maxTokens))
+	c.write(MeteringFrame(calcCredits(totalIn, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
 func (c *AnthropicStreamConverter) handleLine(line string) {
@@ -212,6 +220,9 @@ func (c *AnthropicStreamConverter) handleContentBlockStart(event map[string]json
 	}
 
 	if block.Type == "tool_use" {
+		c.mu.Lock()
+		c.toolUsed = true
+		c.mu.Unlock()
 		c.toolBlocks[idx] = &anthropicToolBlock{id: block.ID, name: block.Name}
 		c.write(ToolUseStartFrame(block.ID, block.Name))
 	}
@@ -265,19 +276,36 @@ func (c *AnthropicStreamConverter) handleMessageDelta(event map[string]json.RawM
 		StopReason string `json:"stop_reason"`
 	}
 	var usage struct {
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              *int `json:"input_tokens"`
+		OutputTokens             *int `json:"output_tokens"`
+		CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 	}
 
 	if deltaRaw, ok := event["delta"]; ok {
 		json.Unmarshal(deltaRaw, &delta)
 	}
+	if delta.StopReason == "tool_use" {
+		c.mu.Lock()
+		c.toolUsed = true
+		c.mu.Unlock()
+	}
 	if usageRaw, ok := event["usage"]; ok {
 		json.Unmarshal(usageRaw, &usage)
-		if usage.OutputTokens > 0 {
-			c.mu.Lock()
-			c.outputTokens = usage.OutputTokens
-			c.mu.Unlock()
+		c.mu.Lock()
+		if usage.InputTokens != nil {
+			c.inputTokens = *usage.InputTokens
 		}
+		if usage.CacheReadInputTokens != nil {
+			c.cacheRead = *usage.CacheReadInputTokens
+		}
+		if usage.CacheCreationInputTokens != nil {
+			c.cacheWrite = *usage.CacheCreationInputTokens
+		}
+		if usage.OutputTokens != nil && *usage.OutputTokens > 0 {
+			c.outputTokens = *usage.OutputTokens
+		}
+		c.mu.Unlock()
 	}
 
 	// 如果 stop_reason=tool_use 但还有未关闭的 tool block，补发 stop 帧

@@ -19,3 +19,18 @@ func TestIsPreviousResponseRejected(t *testing.T) {
 		t.Fatal("unrelated error should not be treated as previous_response_id rejection")
 	}
 }
+
+func TestMergeUsageObjectReadsOpenAICacheWrites(t *testing.T) {
+	var usage localCompatUsage
+	mergeUsageObject(&usage, []byte(`{
+		"input_tokens": 1400,
+		"output_tokens": 9,
+		"input_tokens_details": {
+			"cached_tokens": 200,
+			"cache_write_tokens": 1000
+		}
+	}`))
+	if usage.InputTokens != 1400 || usage.OutputTokens != 9 || usage.CacheReadTokens != 200 || usage.CacheWriteTokens != 1000 {
+		t.Fatalf("usage mismatch: %+v", usage)
+	}
+}

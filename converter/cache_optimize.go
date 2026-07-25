@@ -5,29 +5,201 @@
 //   - 按消息顺序从头开始匹配前缀
 //   - 只要前缀内容完全一致，就能命中缓存
 //   - 一旦某条消息内容变了，后面的都无法缓存
-//   - 缓存以请求前 256 tokens + user 参数做路由 hash，决定打到哪台机器
-//   - 同一台机器上 KV cache 5~10 分钟不活跃就被清理
+//   - prompt_cache_key 与初始前缀 hash 共同影响缓存路由
+//   - GPT-5.6 及后续模型的缓存最短生命周期当前为 30 分钟
 //
 // Kiro 的问题：
 //   1. system prompt 里嵌入了动态内容（如 "Here is the last user message:\n你好"）
 //      → 每次用户说不同的话，system 就变了 → 如果放在前缀里，缓存全废
-//   2. EnvironmentContext 每次可能不同（打开的文件变了）
-//   3. 不同会话路由到不同机器 → 5 分钟后缓存丢失
+//   2. 不同会话路由到不同机器 → 5 分钟后缓存丢失
 //
 // 优化策略：
 //   - 从 system prompt 里提取出动态尾部（"Here is the last user message:\n..."）
 //   - 静态部分保留在 system 最前面（可缓存）
 //   - 历史对话紧跟 system 之后（稳定，只会追加不会修改 → 可缓存）
-//   - 动态部分（system 尾部 + EnvironmentContext）移到最后，不影响前缀缓存
-//   - 通过 user 参数设置 conversation_id，让同一会话的请求路由到同一机器，
-//     避免 5 分钟超时因路由到不同机器而丢缓存
-//   - 最终顺序：[static system] [history...] [dynamic tail] [env context] [current user]
+//   - system 动态尾部移到历史之后
+//   - prompt_cache_key 基于模型、静态 system 和 tools 生成，让共享前缀的请求复用路由
+//   - 当前 user 保持 Kiro 原始内容，确保下一轮进入 history 后结构不变
 
 package converter
 
-import "strings"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
+	"strings"
+
+	json "github.com/goccy/go-json"
+)
 
 const lastUserMsgMarker = "Here is the last user message:\n"
+
+func supportsPromptCacheBreakpoints(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if slash := strings.LastIndexByte(model, '/'); slash >= 0 {
+		model = model[slash+1:]
+	}
+	if !strings.HasPrefix(model, "gpt-") {
+		return false
+	}
+
+	version := strings.TrimPrefix(model, "gpt-")
+	major, rest, ok := parseLeadingVersionNumber(version)
+	if !ok {
+		return false
+	}
+	if major > 5 {
+		return rest == "" || strings.HasPrefix(rest, ".") || strings.HasPrefix(rest, "-")
+	}
+	if major < 5 || !strings.HasPrefix(rest, ".") {
+		return false
+	}
+	minor, suffix, ok := parseLeadingVersionNumber(rest[1:])
+	return ok && minor >= 6 && (suffix == "" || strings.HasPrefix(suffix, "-"))
+}
+
+func parseLeadingVersionNumber(value string) (number int, rest string, ok bool) {
+	end := 0
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0, value, false
+	}
+	number, err := strconv.Atoi(value[:end])
+	if err != nil {
+		return 0, value, false
+	}
+	return number, value[end:], true
+}
+
+func openAIPromptCacheOptions() *PromptCacheOptions {
+	return &PromptCacheOptions{Mode: "implicit", TTL: "30m"}
+}
+
+func promptCacheKey(conv *ParsedConversation, model, api string) string {
+	if conv == nil {
+		return ""
+	}
+
+	var providerTools []OpenAITool
+	if isOpenAICacheAPI(api) && len(conv.RawTools) > 0 {
+		providerTools = toOpenAITools(conv.RawTools)
+	}
+	return promptCacheKeyWithProviderTools(conv, model, api, providerTools)
+}
+
+// promptCacheKeyWithProviderTools builds the affinity key from the exact
+// provider-visible tool list when one is available. Kiro's raw tool envelope
+// contains fields that OpenAI never receives, so hashing the raw envelope can
+// split an otherwise identical cache prefix.
+func promptCacheKeyWithProviderTools(conv *ParsedConversation, model, api string, providerTools []OpenAITool) string {
+	if conv == nil {
+		return ""
+	}
+	toolsHash := conv.ToolsHash
+	if isOpenAICacheAPI(api) && len(conv.RawTools) > 0 {
+		if providerTools == nil {
+			providerTools = toOpenAITools(conv.RawTools)
+		}
+		toolsHash = hashOpenAITools(providerTools)
+	} else if toolsHash == "" && len(conv.RawTools) > 0 {
+		toolsHash = hashTools(conv.RawTools)
+	}
+	return promptCacheKeyWithToolsHash(conv, model, api, toolsHash)
+}
+
+func promptCacheKeyWithToolsHash(conv *ParsedConversation, model, api, toolsHash string) string {
+	if conv == nil {
+		return ""
+	}
+	staticSystem, _ := optimizeSystemForCache(conv.SystemText)
+	if staticSystem == "" && toolsHash == "" {
+		if conv.PromptAffinityKey != "" {
+			return conv.PromptAffinityKey
+		}
+		return conv.ConversationID
+	}
+
+	h := sha256.New()
+	h.Write([]byte(strings.ToLower(strings.TrimSpace(api))))
+	h.Write([]byte{0})
+	h.Write([]byte(strings.ToLower(strings.TrimSpace(model))))
+	h.Write([]byte{0})
+	h.Write([]byte(staticSystem))
+	h.Write([]byte{0})
+	h.Write([]byte(toolsHash))
+	return "kiro-" + strings.ToLower(strings.TrimSpace(api)) + "-" + hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+func isOpenAICacheAPI(api string) bool {
+	switch strings.ToLower(strings.TrimSpace(api)) {
+	case "chat", "responses":
+		return true
+	default:
+		return false
+	}
+}
+
+// hashOpenAITools hashes the normalized tool list that is visible to OpenAI.
+// The list is already sorted by toOpenAITools; preserving that order matters
+// because tool order is part of the provider prompt prefix.
+func hashOpenAITools(tools []OpenAITool) string {
+	if len(tools) == 0 {
+		return ""
+	}
+
+	h := sha256.New()
+	for _, tool := range tools {
+		encoded, err := json.Marshal(tool)
+		if err != nil {
+			return ""
+		}
+		canonical := canonicalToolJSON(encoded)
+		if len(canonical) == 0 {
+			return ""
+		}
+		h.Write(canonical)
+		h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// PromptCacheKeyForAudit exposes the same key calculation to the proxy log
+// path without exposing the implementation details to other packages.
+func PromptCacheKeyForAudit(conv *ParsedConversation, model, api string) string {
+	return promptCacheKey(conv, model, api)
+}
+
+// PromptCacheKeyForAuditWithProviderToolsHash avoids re-converting the raw
+// Kiro tools when the caller already has the normalized provider hash.
+func PromptCacheKeyForAuditWithProviderToolsHash(conv *ParsedConversation, model, api, providerToolsHash string) string {
+	return promptCacheKeyWithToolsHash(conv, model, api, providerToolsHash)
+}
+
+// ProviderToolsHashForAudit returns the hash of the normalized OpenAI tools
+// list used for cache diagnostics.
+func ProviderToolsHashForAudit(rawTools []json.RawMessage) string {
+	return hashOpenAITools(toOpenAITools(rawTools))
+}
+
+func markOpenAIStablePrefixBreakpoint(messages []OpenAIMessage) {
+	for i := range messages {
+		if messages[i].Role != "system" {
+			continue
+		}
+		content, ok := messages[i].Content.(string)
+		if !ok || content == "" {
+			return
+		}
+		messages[i].Content = []OpenAIContentPart{{
+			Type:                  "text",
+			Text:                  content,
+			PromptCacheBreakpoint: &PromptCacheBreakpoint{Mode: "explicit"},
+		}}
+		return
+	}
+}
 
 // optimizeSystemForCache 分离 system prompt 的静态/动态部分
 // 返回: (staticSystem, dynamicTail)
@@ -44,9 +216,8 @@ func optimizeSystemForCache(system string) (staticPart, dynamicPart string) {
 	return
 }
 
-// optimizeCurrentContentForCache 从当前用户消息中分离出 EnvironmentContext
-// EnvironmentContext 每轮可能变化（打开的文件不同），但核心用户问题不变
-// 返回: (userQuestion, envContext)
+// optimizeCurrentContentForCache 仅用于缓存审计，分析当前消息中的动态上下文。
+// Provider 转换不能只拆 current，否则同一消息进入下一轮 history 后结构会变化。
 func optimizeCurrentContentForCache(content string) (userQuestion, envContext string) {
 	const envStart = "<EnvironmentContext>"
 	const envEnd = "</EnvironmentContext>"
@@ -71,19 +242,15 @@ func optimizeCurrentContentForCache(content string) (userQuestion, envContext st
 // applyOpenAICacheOptimization 对消息列表应用缓存优化。
 // 优化点：
 //  1. 拆分 system prompt 的动态尾部，避免每轮用户问题污染最前缀。
-//  2. 拆分最后一条当前 user 消息中的 EnvironmentContext，将易变 IDE 上下文
-//     作为独立 user 消息放在真实用户问题之前，便于历史前缀继续命中缓存。
-func applyOpenAICacheOptimization(msgs []OpenAIMessage) []OpenAIMessage {
+func applyOpenAICacheOptimization(msgs []OpenAIMessage, hasCurrentUser bool) []OpenAIMessage {
 	if len(msgs) == 0 {
 		return msgs
 	}
 
-	optimized := splitOpenAISystemDynamicTail(msgs)
-	optimized = splitOpenAICurrentEnvironmentContext(optimized)
-	return optimized
+	return splitOpenAISystemDynamicTail(msgs, hasCurrentUser)
 }
 
-func splitOpenAISystemDynamicTail(msgs []OpenAIMessage) []OpenAIMessage {
+func splitOpenAISystemDynamicTail(msgs []OpenAIMessage, hasCurrentUser bool) []OpenAIMessage {
 	// 找 system 消息
 	var systemIdx int = -1
 	for i, m := range msgs {
@@ -115,16 +282,18 @@ func splitOpenAISystemDynamicTail(msgs []OpenAIMessage) []OpenAIMessage {
 	// 这样 [static system] + [历史对话] 前缀保持稳定，最大化缓存命中。
 	// 之前的实现放在 system 之后/历史之前，导致动态内容破坏了整个历史前缀的缓存。
 	dynamicMsg := OpenAIMessage{
-		Role:    "user",
+		Role:    "system",
 		Content: dynamicPart,
 	}
 
 	// 找到最后一条 user 消息的位置（即当前用户输入），在其前面插入
-	insertIdx := len(msgs) // 默认放末尾
-	for i := len(msgs) - 1; i > systemIdx; i-- {
-		if msgs[i].Role == "user" {
-			insertIdx = i
-			break
+	insertIdx := len(msgs)
+	if hasCurrentUser {
+		for i := len(msgs) - 1; i > systemIdx; i-- {
+			if msgs[i].Role == "user" {
+				insertIdx = i
+				break
+			}
 		}
 	}
 
@@ -132,47 +301,6 @@ func splitOpenAISystemDynamicTail(msgs []OpenAIMessage) []OpenAIMessage {
 	result = append(result, msgs[:insertIdx]...)
 	result = append(result, dynamicMsg)
 	result = append(result, msgs[insertIdx:]...)
-	return result
-}
-
-func splitOpenAICurrentEnvironmentContext(msgs []OpenAIMessage) []OpenAIMessage {
-	// 只处理最后一条普通文本 user 消息，即当前用户输入。历史 user 消息保持原样，
-	// 避免改变已缓存的 append-only log。
-	idx := -1
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != "user" {
-			continue
-		}
-		if _, ok := msgs[i].Content.(string); ok {
-			idx = i
-		}
-		break
-	}
-	if idx < 0 {
-		return msgs
-	}
-
-	content := msgs[idx].Content.(string)
-	userQuestion, envContext := optimizeCurrentContentForCache(content)
-	if envContext == "" {
-		return msgs
-	}
-
-	replacement := make([]OpenAIMessage, 0, 2)
-	if envContext != "" {
-		replacement = append(replacement, OpenAIMessage{Role: "user", Content: envContext})
-	}
-	if userQuestion != "" {
-		replacement = append(replacement, OpenAIMessage{Role: "user", Content: userQuestion})
-	}
-	if len(replacement) == 0 {
-		return msgs
-	}
-
-	result := make([]OpenAIMessage, 0, len(msgs)+len(replacement)-1)
-	result = append(result, msgs[:idx]...)
-	result = append(result, replacement...)
-	result = append(result, msgs[idx+1:]...)
 	return result
 }
 

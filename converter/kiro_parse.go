@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	json "github.com/goccy/go-json"
@@ -23,9 +25,17 @@ func ParseKiroRequest(body []byte) (*ParsedConversation, error) {
 	cur := cs.CurrentMessage.UserInputMessage
 
 	conv := &ParsedConversation{
-		ModelID:        cur.ModelID,
-		ConversationID: cs.ConversationID,
-		IsClassifier:   looksLikeClassifierPrompt(cur.Content),
+		ModelID:              cur.ModelID,
+		ConversationID:       cs.ConversationID,
+		ProfileArn:           strings.TrimSpace(req.ProfileArn),
+		ChatTriggerType:      strings.TrimSpace(cs.ChatTriggerType),
+		AgentTaskType:        strings.TrimSpace(cs.AgentTaskType),
+		AgentMode:            strings.TrimSpace(req.AgentMode),
+		AgentContinuationID:  strings.TrimSpace(cs.AgentContinuationID),
+		Origin:               strings.TrimSpace(cur.Origin),
+		PromptAffinityKey:    cs.ConversationID,
+		ContinuationStateKey: buildContinuationStateKey(cs.ConversationID, req.AgentMode, cs.AgentContinuationID),
+		IsClassifier:         looksLikeClassifierPrompt(cur.Content),
 	}
 	if conv.ModelID == "" {
 		conv.ModelID = "claude-sonnet-4-5"
@@ -36,6 +46,13 @@ func ParseKiroRequest(body []byte) (*ParsedConversation, error) {
 		conv.MaxTokens = req.InferenceConfig.MaxTokens
 		conv.Temperature = req.InferenceConfig.Temperature
 		conv.TopP = req.InferenceConfig.TopP
+	}
+	if fields := req.AdditionalModelRequestFields; fields != nil {
+		effort, err := NormalizeReasoningEffort(fields.ReasoningEffort)
+		if err != nil {
+			return nil, err
+		}
+		conv.ReasoningEffort = effort
 	}
 
 	// 当前消息
@@ -59,7 +76,7 @@ func ParseKiroRequest(body []byte) (*ParsedConversation, error) {
 			}
 
 			// 第一条历史消息：检测是否是系统提示
-			if i == 0 && looksLikeSystemPrompt(entry.UserContent) {
+			if i == 0 && looksLikeSystemPrompt(entry.UserContent) && !keepBootstrapAsUser(conv.AgentMode) {
 				entry.IsSystem = true
 				conv.SystemText = entry.UserContent
 			}
@@ -84,6 +101,45 @@ func ParseKiroRequest(body []byte) (*ParsedConversation, error) {
 	return conv, nil
 }
 
+// NormalizeReasoningEffort validates the per-request reasoning override.
+func NormalizeReasoningEffort(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "", nil
+	}
+
+	switch value {
+	case "low", "medium", "high", "xhigh":
+		return value, nil
+	default:
+		return "", fmt.Errorf("unsupported reasoning effort %q", value)
+	}
+}
+
+func keepBootstrapAsUser(agentMode string) bool {
+	mode := strings.ToLower(strings.TrimSpace(agentMode))
+	return mode != "" && mode != "vibe"
+}
+
+func buildContinuationStateKey(conversationID, agentMode, continuationID string) string {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return ""
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(agentMode))
+	if mode == "" || mode == "vibe" {
+		return conversationID
+	}
+
+	continuationID = strings.TrimSpace(continuationID)
+	return "branch|" + lengthPrefixed(conversationID) + lengthPrefixed(mode) + lengthPrefixed(continuationID)
+}
+
+func lengthPrefixed(value string) string {
+	return strconv.Itoa(len(value)) + ":" + value
+}
+
 // ── 辅助函数 ─────────────────────────────────────────────────────
 
 func parseToolResults(trs []KiroToolResult) []ParsedToolResult {
@@ -93,17 +149,77 @@ func parseToolResults(trs []KiroToolResult) []ParsedToolResult {
 	result := make([]ParsedToolResult, 0, len(trs))
 	for _, tr := range trs {
 		text := ""
+		blocks := make([]ParsedToolResultBlock, 0, len(tr.Content))
 		for _, c := range tr.Content {
 			text += c.Text
+			block := parseToolResultBlock(c)
+			blocks = append(blocks, block)
 		}
 		text = appendProcessOutputPlaceholderHint(text)
 		result = append(result, ParsedToolResult{
 			ToolUseID: tr.ToolUseID,
 			Content:   text,
+			Blocks:    blocks,
 			IsError:   tr.Status == "error",
 		})
 	}
 	return result
+}
+
+func parseToolResultBlock(content KiroToolContent) ParsedToolResultBlock {
+	raw := bytes.TrimSpace(content.Raw)
+	if len(raw) == 0 {
+		raw, _ = json.Marshal(map[string]string{"text": content.Text})
+	}
+
+	kind := toolResultBlockKind(raw, content.Text)
+	block := ParsedToolResultBlock{
+		Kind: kind,
+		Text: content.Text,
+	}
+	if kind != "text" {
+		block.Raw = append(block.Raw[:0], raw...)
+	}
+	return block
+}
+
+func toolResultBlockKind(raw []byte, text string) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		if text != "" {
+			return "text"
+		}
+		return "unknown"
+	}
+
+	if rawType, ok := fields["type"]; ok {
+		var kind string
+		if json.Unmarshal(rawType, &kind) == nil && strings.TrimSpace(kind) != "" {
+			if kind == "text" {
+				if isTextBlockFields(fields) {
+					return "text"
+				}
+				return "unknown"
+			}
+			return kind
+		}
+	}
+	if isTextBlockFields(fields) {
+		return "text"
+	}
+	return "unknown"
+}
+
+func isTextBlockFields(fields map[string]json.RawMessage) bool {
+	if _, ok := fields["text"]; !ok {
+		return false
+	}
+	for key := range fields {
+		if key != "text" && key != "type" {
+			return false
+		}
+	}
+	return true
 }
 
 func looksLikeSystemPrompt(content string) bool {
@@ -118,6 +234,7 @@ func looksLikeSystemPrompt(content string) bool {
 		"You are an intent classifier",
 		"IMPORTANT: Respond ONLY with a raw JSON object",
 		// Sub-agent system prompts
+		"# Context Gathering Agent",
 		"# Efficient Context Gathering Agent",
 		"<progress_reporting>",
 		"<response_requirement>",

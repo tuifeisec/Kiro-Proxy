@@ -90,13 +90,47 @@ func buildAnthropicMessagesCacheOptimized(conv *ParsedConversation, dynamicSyste
 		}
 	}
 
-	// 当前消息：把 system 动态尾部、EnvironmentContext 等动态内容留在最后，
+	// 当前消息：把 system 动态尾部留在最后，
 	// 不进入 system/tools cache breakpoint。
 	if m := buildAnthropicCurrentMsgOptimized(conv, dynamicSystemTail); m != nil {
 		msgs = append(msgs, *m)
 	}
+	markAnthropicRollingCacheBreakpoint(msgs)
 
 	return msgs
+}
+
+// markAnthropicRollingCacheBreakpoint caches the growing conversation prefix.
+// Some Anthropic-compatible relays ignore top-level automatic cache_control,
+// so keep an explicit breakpoint on the last user content block as well.
+func markAnthropicRollingCacheBreakpoint(msgs []AnthropicMessage) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+
+		switch content := msgs[i].Content.(type) {
+		case string:
+			if content == "" {
+				continue
+			}
+			msgs[i].Content = []AnthropicBlock{{
+				Type:         "text",
+				Text:         content,
+				CacheControl: &CacheControl{Type: "ephemeral"},
+			}}
+			return
+		case []AnthropicBlock:
+			if len(content) == 0 {
+				continue
+			}
+			blocks := make([]AnthropicBlock, len(content))
+			copy(blocks, content)
+			blocks[len(blocks)-1].CacheControl = &CacheControl{Type: "ephemeral"}
+			msgs[i].Content = blocks
+			return
+		}
+	}
 }
 
 func buildAnthropicUserMsg(content string, trs []ParsedToolResult, images []KiroImage) *AnthropicMessage {
@@ -108,7 +142,13 @@ func buildAnthropicUserMsgWithExtraTexts(content string, trs []ParsedToolResult,
 		if content == "" {
 			return nil
 		}
-		return &AnthropicMessage{Role: "user", Content: content}
+		return &AnthropicMessage{
+			Role: "user",
+			Content: []AnthropicBlock{{
+				Type: "text",
+				Text: content,
+			}},
+		}
 	}
 
 	blocks := make([]AnthropicBlock, 0, len(trs)+len(images)+len(extraTexts)+1)
@@ -118,7 +158,7 @@ func buildAnthropicUserMsgWithExtraTexts(content string, trs []ParsedToolResult,
 		b := AnthropicBlock{
 			Type:      "tool_result",
 			ToolUseID: tr.ToolUseID,
-			Content:   tr.Content,
+			Content:   serializeToolResultForProvider(tr),
 		}
 		if tr.IsError {
 			b.IsError = true
@@ -158,20 +198,16 @@ func buildAnthropicCurrentMsg(conv *ParsedConversation) *AnthropicMessage {
 }
 
 func buildAnthropicCurrentMsgOptimized(conv *ParsedConversation, dynamicSystemTail string) *AnthropicMessage {
-	userQuestion, envContext := optimizeCurrentContentForCache(conv.CurrentContent)
-	needSplit := dynamicSystemTail != "" || envContext != ""
-	if !needSplit {
+	if dynamicSystemTail == "" {
 		return buildAnthropicUserMsg(conv.CurrentContent, conv.CurrentToolResults, conv.CurrentImages)
 	}
 
-	extraTexts := make([]string, 0, 2)
-	if dynamicSystemTail != "" {
-		extraTexts = append(extraTexts, dynamicSystemTail)
-	}
-	if envContext != "" {
-		extraTexts = append(extraTexts, envContext)
-	}
-	return buildAnthropicUserMsgWithExtraTexts(userQuestion, conv.CurrentToolResults, conv.CurrentImages, extraTexts)
+	return buildAnthropicUserMsgWithExtraTexts(
+		conv.CurrentContent,
+		conv.CurrentToolResults,
+		conv.CurrentImages,
+		[]string{dynamicSystemTail},
+	)
 }
 
 func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse) *AnthropicMessage {

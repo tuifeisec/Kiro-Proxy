@@ -13,6 +13,39 @@ import (
 	"github.com/elazarl/goproxy"
 )
 
+func reasoningEffortSchema(provider, defaultEffort string) map[string]interface{} {
+	effort, err := converter.NormalizeReasoningEffort(defaultEffort)
+	if err != nil || effort == "" {
+		return nil
+	}
+	enum := []string{"low", "medium", "high"}
+	if provider == "openai" || provider == "codex" {
+		enum = append(enum, "xhigh")
+	}
+	if !containsString(enum, effort) {
+		return nil
+	}
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"reasoningEffort": map[string]interface{}{
+				"type":    "string",
+				"enum":    enum,
+				"default": effort,
+			},
+		},
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 // buildModelsResponse 构造 Kiro 模型列表响应（拦截 /ListAvailableModels）
 // 严格对齐 AWS 原生响应格式，IDE 依赖这些字段展示模型下拉
 //
@@ -55,7 +88,7 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 		}
 
 		entry := map[string]interface{}{
-			"additionalModelRequestFieldsSchema": nil,
+			"additionalModelRequestFieldsSchema": reasoningEffortSchema(m.Provider, m.ReasoningEffort),
 			"availableOrigins":                   nil,
 			"description":                        m.Note,
 			"modelId":                            displayName,
@@ -74,7 +107,7 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 
 		if i == 0 {
 			defaultEntry = map[string]interface{}{
-				"additionalModelRequestFieldsSchema": nil,
+				"additionalModelRequestFieldsSchema": reasoningEffortSchema(m.Provider, m.ReasoningEffort),
 				"availableOrigins":                   nil,
 				"description":                        m.Note,
 				"modelId":                            displayName,
@@ -225,6 +258,7 @@ func buildKiroTextStreamResponse(req *http.Request, text, modelID string, typewr
 
 	go func() {
 		defer pw.Close()
+		pw.Write(converter.InitialResponseFrame(""))
 		runes := []rune(text)
 		if typewriter {
 			// 逐字发送，中文场景下近似 120 token/s
@@ -239,7 +273,7 @@ func buildKiroTextStreamResponse(req *http.Request, text, modelID string, typewr
 			pw.Write(converter.AssistantResponseFrame(text, modelID))
 		}
 		// 发送 metadata 帧（模拟 token 用量）
-		metaFrame := converter.MetadataFrame(100, len(runes), 0, 0)
+		metaFrame := converter.MetadataStopFrame("END_TURN")
 		pw.Write(metaFrame)
 	}()
 
@@ -254,9 +288,9 @@ func buildKiroTextStreamResponse(req *http.Request, text, modelID string, typewr
 		ContentLength: -1,
 		Request:       req,
 	}
-	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Set("Content-Type", "application/vnd.amazon.eventstream")
 	resp.Header.Set("Transfer-Encoding", "chunked")
-	resp.Header.Set("Connection", "close")
+	resp.Header.Del("Connection")
 	resp.Header.Set("Cache-Control", "no-cache")
 	return resp
 }

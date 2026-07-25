@@ -24,8 +24,10 @@ import (
 )
 
 const (
-	maxRetries       = 2
-	retryBaseDelay   = 200 * time.Millisecond
+	maxRetries     = 1
+	retryBaseDelay = 200 * time.Millisecond
+	// 两次请求各允许等待 60 秒，并预留重试间隔和少量调度开销。
+	retryBudget      = 125 * time.Second
 	defaultMaxTokens = 200000
 )
 
@@ -93,15 +95,21 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 	// Responses API 续传优化：使用 previous_response_id 减少重发
 	// 仅当模型配置启用了续传时才生效（默认关闭，因为很多中转站不支持）
 	var contResult *converter.ResponsesContinuationResult
-	if m.EnableContinuation && useResponsesAPI(pre, m) && pre.Conv != nil && !pre.Conv.IsClassifier && pre.Conv.ConversationID != "" {
-		prevSession, _ := f.db.GetResponsesSession(pre.Conv.ConversationID)
+	continuationStateKey := ""
+	if pre != nil {
+		continuationStateKey = responsesContinuationStateKeyFor(pre, m, resolveReasoningEffort(pre, m))
+	}
+	if m.EnableContinuation && useResponsesAPI(pre, m) && pre.Conv != nil && !pre.Conv.IsClassifier && continuationStateKey != "" {
+		prevSession, sessionErr := f.db.GetResponsesSession(continuationStateKey)
+		if sessionErr != nil {
+			return nil, fmt.Errorf("读取 Responses 续传状态失败: %w", sessionErr)
+		}
 		var prevState *converter.ResponsesContinuationState
 		if prevSession != nil && prevSession.ResponseID != "" {
 			prevState = &converter.ResponsesContinuationState{
-				ConversationID: prevSession.ConversationID,
-				ResponseID:     prevSession.ResponseID,
-				InputJSON:      prevSession.InputJSON,
-				ItemCount:      prevSession.ItemCount,
+				ResponseID: prevSession.ResponseID,
+				InputJSON:  prevSession.InputJSON,
+				ItemCount:  prevSession.ItemCount,
 			}
 		}
 		contResult, err = converter.ApplyResponsesContinuation(upstreamBody, prevState)
@@ -143,7 +151,9 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 		bodyStr := string(body)
 		if shouldRetryWithoutContinuation(bodyStr) {
 			logger.Warn("forwarder", fmt.Sprintf("续传请求被上游拒绝，清理状态并回退全量: %s", truncate(bodyStr, 200)))
-			f.db.DeleteResponsesSession(pre.Conv.ConversationID)
+			if deleteErr := f.db.DeleteResponsesSession(continuationStateKey); deleteErr != nil {
+				logger.Error("forwarder", fmt.Sprintf("清理 Responses 续传状态失败: %v", deleteErr))
+			}
 			upstreamBody = contResult.FallbackBody
 			contResult.UsedContinuation = false
 			resp, err = f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID, pre.usage)
@@ -171,8 +181,13 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 
 // sendWithRetry 发送请求，失败重试
 func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
-	var lastErr error
+	lastErr := context.DeadlineExceeded
+	deadline := time.Now().Add(retryBudget)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
 		if attempt > 0 {
 			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
 			logger.Warn("forwarder", fmt.Sprintf("重试 %d/%d，等待 %v", attempt, maxRetries, delay))
@@ -180,6 +195,10 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 			case <-time.After(delay):
 			case <-ctx.Done():
 				return nil, ctx.Err()
+			}
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				break
 			}
 		}
 
@@ -193,7 +212,7 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 			continue
 		}
 
-		if resp.StatusCode >= 500 && attempt < maxRetries {
+		if shouldRetryUpstreamStatus(resp.StatusCode) && attempt < maxRetries {
 			if resp.ContentLength >= 0 && resp.ContentLength <= 32*1024 {
 				_, _ = io.Copy(io.Discard, resp.Body)
 			}
@@ -204,6 +223,10 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 		return resp, nil
 	}
 	return nil, fmt.Errorf("上游失败（重试 %d 次）: %w", maxRetries, lastErr)
+}
+
+func shouldRetryUpstreamStatus(status int) bool {
+	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 }
 
 func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *store.Model, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
@@ -281,6 +304,35 @@ func truncate(s string, max int) string {
 	return s[:max] + "..."
 }
 
+func responsesContinuationStateKey(conv *converter.ParsedConversation) string {
+	if conv == nil {
+		return ""
+	}
+	if conv.ContinuationStateKey != "" {
+		return conv.ContinuationStateKey
+	}
+	return conv.ConversationID
+}
+
+func responsesContinuationStateKeyFor(pre *Preflight, model *store.Model, reasoningEffort string) string {
+	base := ""
+	if pre != nil {
+		base = responsesContinuationStateKey(pre.Conv)
+	}
+	if base == "" {
+		return ""
+	}
+
+	modelKey := ""
+	if model != nil {
+		modelKey = strings.TrimSpace(model.ID)
+		if modelKey == "" {
+			modelKey = strings.TrimSpace(model.ModelID)
+		}
+	}
+	return strings.Join([]string{base, modelKey, strings.TrimSpace(reasoningEffort)}, "|")
+}
+
 func isPreviousResponseRejected(body string) bool {
 	lower := strings.ToLower(body)
 	if !strings.Contains(lower, "previous_response") && !strings.Contains(lower, "previous response") {
@@ -342,10 +394,64 @@ func logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body 
 		inputItems = contResult.InputItemCount
 	}
 
+	api := "chat"
+	if useResponsesAPI(pre, m) {
+		api = "responses"
+	}
+	openAICache := m.Provider != "anthropic" && m.Provider != "gemini"
+	providerToolsHash := ""
+	toolReport := converter.ToolConversionReport{}
+	toolResultReport := converter.ToolResultConversionReportForAudit(pre.Conv)
+	if openAICache {
+		providerToolsHash = converter.ProviderToolsHashForAudit(pre.Conv.RawTools)
+		toolReport = converter.ToolConversionReportForAudit(pre.Conv.RawTools, true)
+	}
+	actualCacheKey := ""
+	expectedCacheKey := ""
+	providerInputHash := inputHash
+	providerInputItems := inputItems
+	previousResponseID := ""
+	var auditBody struct {
+		PromptCacheKey     string          `json:"prompt_cache_key"`
+		Input              json.RawMessage `json:"input"`
+		Messages           json.RawMessage `json:"messages"`
+		Tools              json.RawMessage `json:"tools"`
+		PreviousResponseID string          `json:"previous_response_id"`
+	}
+	if openAICache && json.Unmarshal(body, &auditBody) == nil {
+		actualCacheKey = auditBody.PromptCacheKey
+		previousResponseID = auditBody.PreviousResponseID
+		if len(auditBody.Input) > 0 {
+			api = "responses"
+		}
+		if providerInputHash == "" {
+			prefix := auditBody.Input
+			if len(prefix) == 0 {
+				prefix = auditBody.Messages
+			}
+			if len(prefix) > 0 {
+				providerInputHash = converter.HashInput(string(prefix))
+				var items []json.RawMessage
+				if json.Unmarshal(prefix, &items) == nil {
+					providerInputItems = len(items)
+				}
+			}
+		}
+	}
+	if openAICache {
+		expectedCacheKey = converter.PromptCacheKeyForAuditWithProviderToolsHash(
+			pre.Conv,
+			m.ModelID,
+			api,
+			providerToolsHash,
+		)
+	}
+
 	logger.Info("cache", fmt.Sprintf(
-		"prefix_audit: model=%s endpoint=%s conv=%s body=%d system_static=%d system_dynamic=%d env=%d question=%d history=%d tools=%d tools_hash=%s input_items=%d input_hash=%s continuation=%v",
+		"prefix_audit: model=%s endpoint=%s api=%s conv=%s body=%d system_static=%d system_dynamic=%d env=%d question=%d history=%d tools=%d raw_tools_hash=%s provider_tools_hash=%s tool_invalid=%d tool_schema_invalid=%d tool_websearch_filtered=%d tool_desc_truncated=%d tool_over_limit=%d tool_results=%d tool_blocks=%d tool_nontext_blocks=%d cache_key=%s expected_key=%s provider_input_items=%d provider_input_hash=%s previous_response=%v continuation=%v",
 		statsModelID(m),
 		m.Endpoint,
+		api,
 		pre.Conv.ConversationID,
 		len(body),
 		len(staticSystem),
@@ -355,8 +461,20 @@ func logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body 
 		len(pre.Conv.History),
 		len(pre.Conv.RawTools),
 		pre.Conv.ToolsHash,
-		inputItems,
-		inputHash,
+		providerToolsHash,
+		toolReport.InvalidTools,
+		toolReport.InvalidSchemas,
+		toolReport.FilteredWebSearchTools,
+		toolReport.DescriptionTruncations,
+		toolReport.OverLimitTools,
+		toolResultReport.Results,
+		toolResultReport.Blocks,
+		toolResultReport.NonTextBlocks,
+		actualCacheKey,
+		expectedCacheKey,
+		providerInputItems,
+		providerInputHash,
+		previousResponseID != "",
 		contResult != nil && contResult.UsedContinuation,
 	))
 }

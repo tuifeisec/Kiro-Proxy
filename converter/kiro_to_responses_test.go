@@ -134,6 +134,38 @@ func TestResponses_BasicFormat(t *testing.T) {
 	}
 }
 
+func TestResponses_GPT56OmitsUnsupportedCacheControls(t *testing.T) {
+	conv := &ParsedConversation{
+		ModelID:        "gpt-5.6",
+		ConversationID: "conv-gpt56-responses",
+		SystemText:     "stable developer prompt",
+		History:        []ParsedHistoryEntry{{IsSystem: true, UserContent: "stable developer prompt"}},
+		CurrentContent: "current question",
+	}
+	body, err := KiroToResponses(conv, "gpt-5.6", "")
+	if err != nil {
+		t.Fatalf("转换失败: %v", err)
+	}
+
+	var req struct {
+		Input []struct {
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("解析请求失败: %v", err)
+	}
+	if strings.Contains(string(body), "prompt_cache_options") || strings.Contains(string(body), "prompt_cache_breakpoint") {
+		t.Fatalf("Responses request contains relay-incompatible cache extensions: %s", body)
+	}
+	var developer string
+	if len(req.Input) == 0 || json.Unmarshal(req.Input[0].Content, &developer) != nil || developer != "stable developer prompt" {
+		t.Fatalf("developer content shape changed: %s", req.Input[0].Content)
+	}
+}
+
 // ── 验收测试 2：内容完整性 - 不能因为缓存优化丢弃内容 ──────────────
 
 func TestResponses_ContentIntegrity_NoLoss(t *testing.T) {
@@ -592,9 +624,9 @@ You MUST call the subagentResponse tool as your final action.
 	}
 }
 
-// ── 验收测试 7：EnvironmentContext 拆分后两部分都保留 ──────────────
+// ── 验收测试 7：EnvironmentContext 保持在原始 current 消息中 ──────
 
-func TestResponses_EnvironmentContextSplit(t *testing.T) {
+func TestResponses_EnvironmentContextPreservesCurrentMessage(t *testing.T) {
 	conv := &ParsedConversation{
 		ModelID:        "gpt-5.5",
 		ConversationID: "conv-007",
@@ -629,10 +661,13 @@ func TestResponses_EnvironmentContextSplit(t *testing.T) {
 		t.Error("丢失 EnvironmentContext 中的活跃文件")
 	}
 
-	// EnvironmentContext 应该和用户问题分开（作为不同的 user 消息）
+	// current 必须保持为一个 user item，下一轮进入 history 后结构才不会变化。
 	userMsgs := findInputByRole(req.Input, "user")
-	if len(userMsgs) < 2 {
-		t.Errorf("EnvironmentContext 应该被拆分为独立消息, user msgs count = %d", len(userMsgs))
+	if len(userMsgs) != 1 {
+		t.Fatalf("current 应保持为一个 user item, count = %d", len(userMsgs))
+	}
+	if got := inputContentStr(userMsgs[0]); got != conv.CurrentContent {
+		t.Fatalf("current 内容发生变化: %q", got)
 	}
 }
 
@@ -723,6 +758,63 @@ Here is the last user message:
 }
 
 // ── 验收测试 9：大量工具结果的完整性 ──────────────────────────────
+
+func TestResponses_ContinuousHistoryPrefix(t *testing.T) {
+	system := "stable Kiro system prompt"
+	tools := []json.RawMessage{
+		json.RawMessage(`{"toolSpecification":{"name":"read_file","description":"Read a file","inputSchema":{"json":{"type":"object"}}}}`),
+	}
+	first := &ParsedConversation{
+		ModelID:        "gpt-5.6",
+		ConversationID: "conv-prefix",
+		SystemText:     system,
+		History: []ParsedHistoryEntry{
+			{IsSystem: true, UserContent: system},
+			{UserContent: "question one", HasAssistant: true, AssistantContent: "answer one"},
+		},
+		CurrentContent: "question two",
+		RawTools:       tools,
+		ToolsHash:      hashTools(tools),
+	}
+	second := &ParsedConversation{
+		ModelID:        "gpt-5.6",
+		ConversationID: "conv-prefix",
+		SystemText:     system,
+		History: []ParsedHistoryEntry{
+			{IsSystem: true, UserContent: system},
+			{UserContent: "question one", HasAssistant: true, AssistantContent: "answer one"},
+			{UserContent: "question two", HasAssistant: true, AssistantContent: "answer two"},
+		},
+		CurrentContent: "question three",
+		RawTools:       tools,
+		ToolsHash:      hashTools(tools),
+	}
+
+	firstReq := parseResponsesReq(t, mustResponsesBody(t, first))
+	secondReq := parseResponsesReq(t, mustResponsesBody(t, second))
+	if len(firstReq.Input) < 4 || len(secondReq.Input) < len(firstReq.Input) {
+		t.Fatalf("continuous input too short: first=%d second=%d", len(firstReq.Input), len(secondReq.Input))
+	}
+	for i := 0; i < len(firstReq.Input)-1; i++ {
+		firstJSON, _ := json.Marshal(firstReq.Input[i])
+		secondJSON, _ := json.Marshal(secondReq.Input[i])
+		if string(firstJSON) != string(secondJSON) {
+			t.Fatalf("history prefix changed at input[%d]: %s != %s", i, firstJSON, secondJSON)
+		}
+	}
+	if firstReq.PromptCacheKey != secondReq.PromptCacheKey {
+		t.Fatalf("continuous history changed prompt cache key: %q != %q", firstReq.PromptCacheKey, secondReq.PromptCacheKey)
+	}
+}
+
+func mustResponsesBody(t *testing.T, conv *ParsedConversation) []byte {
+	t.Helper()
+	body, err := KiroToResponses(conv, "gpt-5.6", "")
+	if err != nil {
+		t.Fatalf("Responses conversion failed: %v", err)
+	}
+	return body
+}
 
 func TestResponses_ManyToolResults(t *testing.T) {
 	conv := &ParsedConversation{
@@ -1102,5 +1194,96 @@ func TestResponses_ImageOnlyCurrentMessage(t *testing.T) {
 	}
 	if part["image_url"] != "data:image/webp;base64,b25seS1pbWFnZQ==" {
 		t.Errorf("image_url = %v", part["image_url"])
+	}
+}
+
+func TestToolResultTextBlocksKeepExistingStringPath(t *testing.T) {
+	result := ParsedToolResult{
+		Content: "firstsecond",
+		Blocks: []ParsedToolResultBlock{
+			{Kind: "text", Text: "first"},
+			{Kind: "text", Text: "second"},
+		},
+	}
+
+	if got := serializeToolResultForProvider(result); got != result.Content {
+		t.Fatalf("text-only tool result changed: got %q, want %q", got, result.Content)
+	}
+}
+
+func TestToolResultMixedBlocksArePreserved(t *testing.T) {
+	var textBlock, jsonBlock KiroToolContent
+	if err := json.Unmarshal([]byte(`{"text":"hello"}`), &textBlock); err != nil {
+		t.Fatalf("unmarshal text block: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"type":"json","value":{"answer":42}}`), &jsonBlock); err != nil {
+		t.Fatalf("unmarshal json block: %v", err)
+	}
+
+	results := parseToolResults([]KiroToolResult{{
+		ToolUseID: "call_mixed",
+		Content:   []KiroToolContent{textBlock, jsonBlock},
+		Status:    "success",
+	}})
+	if len(results) != 1 || len(results[0].Blocks) != 2 {
+		t.Fatalf("parsed block count = %#v", results)
+	}
+	if results[0].Blocks[0].Kind != "text" || results[0].Blocks[1].Kind != "json" {
+		t.Fatalf("parsed block kinds = %#v", results[0].Blocks)
+	}
+
+	encoded := serializeToolResultForProvider(results[0])
+	if !strings.Contains(encoded, `"_kiro_content_blocks"`) ||
+		!strings.Contains(encoded, `"value":{"answer":42}`) ||
+		!strings.Contains(encoded, `"_kiro_text":"hello"`) {
+		t.Fatalf("mixed tool result lost content: %s", encoded)
+	}
+}
+
+func TestResponsesCacheOptimizedInputPreservesMixedToolBlocks(t *testing.T) {
+	conv := &ParsedConversation{
+		ModelID: "gpt-5.6",
+		CurrentToolResults: []ParsedToolResult{{
+			ToolUseID: "call_mixed",
+			Content:   "hello",
+			Blocks: []ParsedToolResultBlock{
+				{Kind: "text", Text: "hello"},
+				{Kind: "json", Raw: json.RawMessage(`{"type":"json","value":{"answer":42}}`)},
+			},
+		}},
+	}
+
+	body, err := KiroToResponses(conv, "gpt-5.6", "")
+	if err != nil {
+		t.Fatalf("convert Responses request: %v", err)
+	}
+	req := parseResponsesReq(t, body)
+	if len(req.Input) != 1 || req.Input[0].Type != "function_call_output" || req.Input[0].Output == nil {
+		t.Fatalf("unexpected function output input: %+v", req.Input)
+	}
+	if !strings.Contains(*req.Input[0].Output, `"_kiro_content_blocks"`) ||
+		!strings.Contains(*req.Input[0].Output, `"answer":42`) {
+		t.Fatalf("mixed tool blocks were lost in cache-optimized Responses input: %s", *req.Input[0].Output)
+	}
+}
+
+func TestParseKiroRetainsMetadataAndUnknownToolBlocks(t *testing.T) {
+	body := []byte(`{"agentMode":"context-gatherer","profileArn":"profile-1","conversationState":{"chatTriggerType":"manual","conversationId":"conv-1","agentContinuationId":"branch-1","agentTaskType":"task","currentMessage":{"userInputMessage":{"modelId":"gpt-test","origin":"ide","content":"","userInputMessageContext":{"toolResults":[{"toolUseId":"call-1","content":[{"type":"json","value":{"ok":true}}],"status":"success"}]}}},"history":[]}}`)
+
+	conv, err := ParseKiroRequest(body)
+	if err != nil {
+		t.Fatalf("parse Kiro request: %v", err)
+	}
+	if conv.ProfileArn != "profile-1" || conv.ChatTriggerType != "manual" ||
+		conv.AgentTaskType != "task" || conv.AgentMode != "context-gatherer" ||
+		conv.AgentContinuationID != "branch-1" || conv.Origin != "ide" {
+		t.Fatalf("metadata was not retained: %+v", conv)
+	}
+	if len(conv.CurrentToolResults) != 1 || len(conv.CurrentToolResults[0].Blocks) != 1 {
+		t.Fatalf("tool blocks were not retained: %+v", conv.CurrentToolResults)
+	}
+	block := conv.CurrentToolResults[0].Blocks[0]
+	if block.Kind != "json" || !strings.Contains(string(block.Raw), `"value":{"ok":true}`) {
+		t.Fatalf("unknown tool block was not retained: %+v", block)
 	}
 }

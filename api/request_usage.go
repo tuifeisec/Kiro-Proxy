@@ -1,6 +1,7 @@
 package api
 
 import (
+	"kiro-proxy/store"
 	"net/http"
 	"strconv"
 	"time"
@@ -30,13 +31,33 @@ func (s *Server) handleRequestUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit, _ := strconv.Atoi(query.Get("limit"))
-	items, summary, err := s.db.QueryRequestUsage(startDate, endDate, limit)
+	page, _ := strconv.Atoi(query.Get("page"))
+	pageSizeValue := query.Get("page_size")
+	if pageSizeValue == "" {
+		pageSizeValue = query.Get("limit")
+	}
+	pageSize, _ := strconv.Atoi(pageSizeValue)
+	result, err := s.db.QueryRequestUsagePage(store.RequestUsageQuery{
+		StartDate: startDate,
+		EndDate:   endDate,
+		Keyword:   query.Get("q"),
+		Provider:  query.Get("provider"),
+		Status:    query.Get("status"),
+		Page:      page,
+		PageSize:  pageSize,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeOK(w, map[string]interface{}{
-		"items": items, "summary": summary, "start": startDate, "end": endDate,
+		"items":       result.Items,
+		"summary":     result.Summary,
+		"start":       startDate,
+		"end":         endDate,
+		"page":        result.Page,
+		"page_size":   result.PageSize,
+		"total":       result.Total,
+		"total_pages": result.TotalPages,
 	})
 }

@@ -33,15 +33,16 @@ type Client struct {
 }
 
 type CheckResult struct {
-	Authorized   bool     `json:"authorized"`
-	Registered   bool     `json:"registered"`
-	Tampered     bool     `json:"tampered"`
-	VersionValid bool     `json:"version_valid"`
-	TrafficLogs  bool     `json:"traffic_logs"`
-	MachineCode  string   `json:"machine_code"`
-	Version      string   `json:"version"`
-	Latest       Release  `json:"latest"`
-	Branding     Branding `json:"branding"`
+	Authorized      bool     `json:"authorized"`
+	Registered      bool     `json:"registered"`
+	Tampered        bool     `json:"tampered"`
+	VersionValid    bool     `json:"version_valid"`
+	TrafficLogs     bool     `json:"traffic_logs"`
+	DevelopmentMode bool     `json:"development_mode,omitempty"`
+	MachineCode     string   `json:"machine_code"`
+	Version         string   `json:"version"`
+	Latest          Release  `json:"latest"`
+	Branding        Branding `json:"branding"`
 }
 
 type Branding struct {
@@ -124,7 +125,7 @@ func (c *Client) checkRemote() (CheckResult, error) {
 	if err := c.postJSON("/api/license/check", payload, &out); err != nil {
 		return CheckResult{}, err
 	}
-	return out, nil
+	return applyBuildLicensePolicy(out), nil
 }
 
 func (c *Client) Ads() ([]Advertisement, error) {

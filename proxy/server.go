@@ -33,23 +33,25 @@ var upgrader = websocket.Upgrader{
 
 // Server 代理服务器（MITM + Web UI）
 type Server struct {
-	cfg                *rules.Config
-	proxy              *goproxy.ProxyHttpServer
-	hub                *Hub
-	logger             *TrafficLogger
-	router             *router.Router
-	forwarder          *Forwarder
-	stats              *store.Stats
-	db                 *store.DB
-	apiServer          *api.Server
-	staticFS           fs.FS // 嵌入的前端静态文件
-	uiServer           *http.Server
-	mitmServer         *http.Server
-	classifierMu       sync.RWMutex
-	conversationModels map[string]string
-	lastMainModel      string
-	licenseClient      *license.Client
-	closeOnce          sync.Once
+	cfg                 *rules.Config
+	proxy               *goproxy.ProxyHttpServer
+	hub                 *Hub
+	logger              *TrafficLogger
+	router              *router.Router
+	forwarder           *Forwarder
+	stats               *store.Stats
+	db                  *store.DB
+	apiServer           *api.Server
+	staticFS            fs.FS // 嵌入的前端静态文件
+	uiServer            *http.Server
+	mitmServer          *http.Server
+	classifierMu        sync.RWMutex
+	conversationModels  map[string]string
+	lastMainModel       string
+	licenseClient       *license.Client
+	responsesFallbackMu sync.Mutex
+	responsesFallback   map[string]fallbackResponseState
+	closeOnce           sync.Once
 }
 
 // NewServer 创建并初始化代理服务器
@@ -96,6 +98,7 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
 		staticFS:           staticFS,
 		conversationModels: make(map[string]string),
 		licenseClient:      license.NewClient(os.Getenv("KIRO_LICENSE_SERVER")),
+		responsesFallback:  make(map[string]fallbackResponseState),
 	}
 
 	// 注册拦截器（在 interceptor.go 中实现）

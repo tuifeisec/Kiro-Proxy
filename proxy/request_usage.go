@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
+	"kiro-proxy/converter"
 	"kiro-proxy/store"
 	"log"
 	"net/http"
@@ -37,9 +38,17 @@ func newRequestUsageRecorder(db *store.DB, start time.Time, model *store.Model, 
 		item.ModelID = statsModelID(model)
 		item.Provider = model.Provider
 		item.Endpoint = model.Endpoint
+		item.ReasoningEffort, _ = converter.NormalizeReasoningEffort(model.ReasoningEffort)
 		item.ServiceTier = model.ServiceTier
 	}
 	return &requestUsageRecorder{db: db, item: item, model: model, start: start}
+}
+
+func (r *requestUsageRecorder) setReasoningEffort(value string) {
+	if r == nil {
+		return
+	}
+	r.item.ReasoningEffort = value
 }
 
 type requestTraceMetrics struct {

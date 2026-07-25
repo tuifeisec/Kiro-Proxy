@@ -36,6 +36,7 @@ type GeminiStreamConverter struct {
 	outputTokens int
 	cacheRead    int
 	outputChars  int
+	toolUsed     bool
 	done         chan struct{}
 
 	// 工具调用计数器（用于生成确定性 ID）
@@ -101,6 +102,7 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 	defer c.pw.Close()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
+	c.write(InitialResponseFrame(""))
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -122,6 +124,10 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 	c.mu.Lock()
 	in, out := c.inputTokens, c.outputTokens
 	cacheR := c.cacheRead
+	stopReason := "END_TURN"
+	if c.toolUsed {
+		stopReason = "TOOL_USE"
+	}
 	if out == 0 && c.outputChars > 0 {
 		out = c.outputChars / 4
 		if out == 0 {
@@ -131,7 +137,7 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 	}
 	c.mu.Unlock()
 
-	c.write(MetadataFrame(in, out, cacheR, 0))
+	c.write(MetadataStopFrame(stopReason))
 	c.write(ContextUsageFrame(in+out, c.maxTokens))
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, 0, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
@@ -184,6 +190,9 @@ func (c *GeminiStreamConverter) handleLine(line string) {
 
 		// 工具调用
 		if part.FunctionCall != nil {
+			c.mu.Lock()
+			c.toolUsed = true
+			c.mu.Unlock()
 			c.toolCallIndex++
 			callID := fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, c.toolCallIndex)
 

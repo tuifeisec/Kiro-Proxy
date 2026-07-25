@@ -1,53 +1,70 @@
-# IDE
+# IDE and local agent state
 .kiro/
 .vscode/
+.idea/
+.codegraph/*
+!.codegraph/.gitignore
 
-# Build output
-build/
+# Go build and test output
 *.exe
+*.exe~
 *.syso
+*.test
+*.out
+coverage.out
+.gocache/
 
-# Database
+# Keep Windows resource source files; ignore generated build output.
+build/*
+!build/windows/
+build/windows/*
+!build/windows/kiro-proxy.rc
+!build/windows/kiro-proxy.ico
+
+# Runtime data
 *.db
-
-# Logs
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
 *.log
 log/
 
-# Certificates (private keys)
+# Local secrets and configuration
+config.yaml
+.env
+.env.*
+!.env.example
 certs/
 
-# Config with secrets
-config.yaml
-
-# Debug notes and capture logs (Chinese-named files)
-*.txt
-*.json
-!package.json
-!package-lock.json
-!vite.config.js
-
-# Frontend build artifacts and dependencies
+# Frontend dependencies and generated assets
 frontend/node_modules/
 frontend/dist/
 frontend-inspector/node_modules/
 frontend-inspector/dist/
+go/web/admin/node_modules/
+go/web/admin/dist/
+.vben-template/node_modules/
 
-# Doc subfolder with build cache (keep doc/*.md)
+# Generated documentation/cache directories
 doc/ai-proxy/
 doc/openai/
 
-# OS files
+# Temporary and operating-system files
+*.tmp
+*.temp
+*.bak
 Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Test scripts
+# Local debug captures and scratch files
+*.prof
+*.coverprofile
+
+# Keep source/configuration JSON files trackable. Ignore only known captures.
+jilu/*.json
+
+# One-off local scripts
 test_sse.ps1
 install-ca.ps1
-
-.codegraph
-
-# Node dependencies in admin scaffold
-go/web/admin/node_modules/
-.vben-template/node_modules/

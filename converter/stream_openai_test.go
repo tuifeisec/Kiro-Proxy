@@ -51,3 +51,18 @@ data: [DONE]
 		t.Fatalf("usage mismatch: in=%d out=%d cache=%d", in, out, cacheRead)
 	}
 }
+
+func TestOpenAIStream_OpenAICacheWriteTokens(t *testing.T) {
+	sse := `data: {"choices":[],"usage":{"prompt_tokens":1400,"completion_tokens":8,"prompt_tokens_details":{"cached_tokens":200,"cache_write_tokens":1000}}}
+
+data: [DONE]
+
+`
+	sc := runOpenAIPipeline(sse)
+	in, out := sc.Usage()
+	cacheRead, cacheWrite := sc.CacheTokens()
+
+	if in != 1400 || out != 8 || cacheRead != 200 || cacheWrite != 1000 {
+		t.Fatalf("usage mismatch: in=%d out=%d cache_read=%d cache_write=%d", in, out, cacheRead, cacheWrite)
+	}
+}

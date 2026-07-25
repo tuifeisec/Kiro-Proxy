@@ -36,6 +36,7 @@ type OpenAIStreamConverter struct {
 	cacheRead    int // prompt_tokens_details.cached_tokens
 	cacheWrite   int
 	outputChars  int // 输出字符累计，用于上游无 usage 时估算
+	toolUsed     bool
 	done         chan struct{}
 
 	// 工具调用状态跟踪
@@ -116,6 +117,7 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 	defer c.pw.Close()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
+	c.write(InitialResponseFrame(""))
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -137,6 +139,10 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 	c.mu.Lock()
 	in, out := c.inputTokens, c.outputTokens
 	cacheR, cacheW := c.cacheRead, c.cacheWrite
+	stopReason := "END_TURN"
+	if c.toolUsed {
+		stopReason = "TOOL_USE"
+	}
 	// 上游未返回 usage 时用字符数估算（约 4 字符/token）
 	if out == 0 && c.outputChars > 0 {
 		out = c.outputChars / 4
@@ -148,7 +154,7 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 	c.mu.Unlock()
 
 	// 始终发送 metadata 帧（Kiro 需要 token 信息，含缓存命中数据）
-	c.write(MetadataFrame(in, out, cacheR, cacheW))
+	c.write(MetadataStopFrame(stopReason))
 	c.write(ContextUsageFrame(in+out, c.maxTokens))
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
@@ -182,7 +188,12 @@ func (c *OpenAIStreamConverter) handleLine(line string) {
 		}
 		// OpenAI: prompt_tokens_details.cached_tokens
 		if chunk.Usage.PromptTokensDetails != nil {
-			c.cacheRead = chunk.Usage.PromptTokensDetails.CachedTokens
+			if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
+				c.cacheRead = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
+			if chunk.Usage.PromptTokensDetails.CacheWriteTokens > 0 {
+				c.cacheWrite = chunk.Usage.PromptTokensDetails.CacheWriteTokens
+			}
 		}
 		// DeepSeek/OpenAI-compatible: prompt_cache_hit_tokens / miss_tokens
 		if chunk.Usage.PromptCacheHitTokens > 0 {
@@ -191,9 +202,10 @@ func (c *OpenAIStreamConverter) handleLine(line string) {
 				c.inputTokens = chunk.Usage.PromptCacheHitTokens + chunk.Usage.PromptCacheMissTokens
 			}
 		}
-		if c.cacheRead > c.inputTokens && c.inputTokens > 0 {
-			log.Printf("[stream_openai] cache_read(%d) > input_tokens(%d)，已按 input_tokens 限制", c.cacheRead, c.inputTokens)
-			c.cacheRead = c.inputTokens
+		if c.inputTokens > 0 && c.cacheRead+c.cacheWrite > c.inputTokens {
+			log.Printf("[stream_openai] cache_read(%d) + cache_write(%d) > input_tokens(%d)，已按 input_tokens 限制", c.cacheRead, c.cacheWrite, c.inputTokens)
+			c.cacheRead = min(c.cacheRead, c.inputTokens)
+			c.cacheWrite = min(c.cacheWrite, c.inputTokens-c.cacheRead)
 		}
 		c.mu.Unlock()
 	}
@@ -231,6 +243,9 @@ func (c *OpenAIStreamConverter) handleToolCalls(tcs []openAIToolCallDelta) {
 
 		// 首次出现该 index：记录 id/name，发送开始帧
 		if tc.ID != "" || tc.Function.Name != "" {
+			c.mu.Lock()
+			c.toolUsed = true
+			c.mu.Unlock()
 			state := &toolCallState{id: tc.ID, name: tc.Function.Name}
 			c.activeTools[idx] = state
 			c.write(ToolUseStartFrame(tc.ID, tc.Function.Name))
@@ -305,7 +320,8 @@ type openAIUsage struct {
 }
 
 type openAIPromptTokenDetail struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     int `json:"cached_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
 // calcCredits 根据 token 用量和每百万 token 单价计算 credit 消耗。
@@ -320,7 +336,7 @@ func calcCredits(inputTokens, outputTokens, cacheRead, cacheWrite int, inputPric
 		cacheInputPrice = 0.5
 	}
 	if cacheOutputPrice <= 0 {
-		cacheOutputPrice = outputPrice
+		cacheOutputPrice = inputPrice * 1.25
 	}
 	regularInput := inputTokens - cacheRead - cacheWrite
 	if regularInput < 0 {

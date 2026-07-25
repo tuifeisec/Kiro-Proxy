@@ -84,6 +84,7 @@ func (db *DB) migrate() error {
 		{"request_usage", "stream_wait_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "retry_count", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "reused_connection", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "reasoning_effort", "TEXT NOT NULL DEFAULT ''"},
 		{"request_usage", "service_tier", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range columns {
@@ -212,12 +213,14 @@ CREATE TABLE IF NOT EXISTS request_usage (
     upstream_wait_ms   INTEGER NOT NULL DEFAULT 0,
     response_header_ms INTEGER NOT NULL DEFAULT 0,
     stream_wait_ms     INTEGER NOT NULL DEFAULT 0,
-    retry_count        INTEGER NOT NULL DEFAULT 0,
-    reused_connection  INTEGER NOT NULL DEFAULT 0,
-    service_tier       TEXT NOT NULL DEFAULT '',
+		retry_count        INTEGER NOT NULL DEFAULT 0,
+		reused_connection  INTEGER NOT NULL DEFAULT 0,
+	reasoning_effort   TEXT NOT NULL DEFAULT '',
+	service_tier       TEXT NOT NULL DEFAULT '',
     error_message      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_usage_date_id ON request_usage(request_date, id DESC);
+CREATE INDEX IF NOT EXISTS idx_request_usage_created_at ON request_usage(created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS responses_sessions (
     conversation_id TEXT PRIMARY KEY,

@@ -83,7 +83,7 @@ func buildGeminiContents(conv *ParsedConversation, dynamicSystemTail string) []G
 				parts = append(parts, GeminiPart{
 					FunctionResponse: &GeminiFunctionResp{
 						Name:     name,
-						Response: map[string]string{"result": tr.Content},
+						Response: geminiToolResultResponse(tr),
 					},
 				})
 			}
@@ -114,24 +114,20 @@ func buildGeminiContents(conv *ParsedConversation, dynamicSystemTail string) []G
 			parts = append(parts, GeminiPart{
 				FunctionResponse: &GeminiFunctionResp{
 					Name:     name,
-					Response: map[string]string{"result": tr.Content},
+					Response: geminiToolResultResponse(tr),
 				},
 			})
 		}
 		raw = append(raw, GeminiContent{Role: "user", Parts: parts})
 	}
 
-	// 当前用户消息（含动态系统尾部和 EnvironmentContext）
-	userQuestion, envContext := optimizeCurrentContentForCache(conv.CurrentContent)
+	// 当前 user 保持原始文本；只重排 current 会破坏下一轮 history 的结构稳定性。
 	var currentParts []GeminiPart
 	if dynamicSystemTail != "" {
 		currentParts = append(currentParts, GeminiPart{Text: dynamicSystemTail})
 	}
-	if envContext != "" {
-		currentParts = append(currentParts, GeminiPart{Text: envContext})
-	}
-	if userQuestion != "" {
-		currentParts = append(currentParts, GeminiPart{Text: userQuestion})
+	if conv.CurrentContent != "" {
+		currentParts = append(currentParts, GeminiPart{Text: conv.CurrentContent})
 	}
 	for _, img := range conv.CurrentImages {
 		currentParts = append(currentParts, GeminiPart{
@@ -165,6 +161,21 @@ func mergeAdjacentRoles(contents []GeminiContent) []GeminiContent {
 		}
 	}
 	return merged
+}
+
+// geminiToolResultResponse keeps text-only results as strings. Mixed or
+// unknown Kiro blocks use the stable envelope as a structured JSON value.
+func geminiToolResultResponse(result ParsedToolResult) map[string]interface{} {
+	serialized := serializeToolResultForProvider(result)
+	if !toolResultHasNonText(result) {
+		return map[string]interface{}{"result": serialized}
+	}
+
+	var value interface{}
+	if err := json.Unmarshal([]byte(serialized), &value); err != nil {
+		return map[string]interface{}{"result": serialized}
+	}
+	return map[string]interface{}{"result": value}
 }
 
 func buildGeminiUserContent(content string, images []KiroImage) GeminiContent {
@@ -208,7 +219,7 @@ func buildGeminiModelContent(content string, toolUses []ParsedToolUse) *GeminiCo
 
 // toGeminiTools 将 Kiro 原始工具定义转换为 Gemini functionDeclarations
 func toGeminiTools(rawTools []json.RawMessage) []GeminiFuncDecl {
-	specs := sortedToolSpecs(rawTools, false)
+	specs := sortedToolSpecs(rawTools, true)
 	result := make([]GeminiFuncDecl, 0, len(specs))
 	for _, spec := range specs {
 		var params interface{}

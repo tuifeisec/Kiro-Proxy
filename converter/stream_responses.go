@@ -36,7 +36,9 @@ type ResponsesStreamConverter struct {
 	inputTokens  int
 	outputTokens int
 	cacheRead    int
+	cacheWrite   int
 	outputChars  int
+	toolUsed     bool
 	responseID   string // 上游返回的 response ID（用于续传）
 	completed    bool
 	failed       bool
@@ -101,7 +103,7 @@ func (c *ResponsesStreamConverter) CacheTokens() (cacheRead, cacheWrite int) {
 	<-c.done
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.cacheRead, 0
+	return c.cacheRead, c.cacheWrite
 }
 
 // ResponseID 返回上游的 response ID（用于 previous_response_id 续传）
@@ -131,6 +133,7 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 	defer c.pw.Close()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
+	c.write(InitialResponseFrame(""))
 	var currentEventType string
 
 	for {
@@ -164,6 +167,10 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 	c.mu.Lock()
 	in, out := c.inputTokens, c.outputTokens
 	cacheR := c.cacheRead
+	stopReason := "END_TURN"
+	if c.toolUsed {
+		stopReason = "TOOL_USE"
+	}
 	if out == 0 && c.outputChars > 0 {
 		out = c.outputChars / 4
 		if out == 0 {
@@ -173,7 +180,7 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 	}
 	c.mu.Unlock()
 
-	c.write(MetadataFrame(in, out, cacheR, 0))
+	c.write(MetadataStopFrame(stopReason))
 	c.write(ContextUsageFrame(in+out, c.maxTokens))
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, 0, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
@@ -211,6 +218,9 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		if ev.Item.CallID != "" {
 			c.toolsByCall[ev.Item.CallID] = st
 		}
+		c.mu.Lock()
+		c.toolUsed = true
+		c.mu.Unlock()
 		c.toolOrder = append(c.toolOrder, st)
 		c.write(ToolUseStartFrame(ev.Item.CallID, ev.Item.Name))
 		// 个别上游在 added 时即给出完整 arguments（非增量），直接透传
@@ -277,7 +287,8 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 					PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
 					PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
 					InputTokensDetails    struct {
-						CachedTokens int `json:"cached_tokens"`
+						CachedTokens     int `json:"cached_tokens"`
+						CacheWriteTokens int `json:"cache_write_tokens"`
 					} `json:"input_tokens_details"`
 				} `json:"usage"`
 			} `json:"response"`
@@ -298,6 +309,9 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			if ev.Response.Usage.InputTokensDetails.CachedTokens > 0 {
 				c.cacheRead = ev.Response.Usage.InputTokensDetails.CachedTokens
 			}
+			if ev.Response.Usage.InputTokensDetails.CacheWriteTokens > 0 {
+				c.cacheWrite = ev.Response.Usage.InputTokensDetails.CacheWriteTokens
+			}
 			// DeepSeek/OpenAI-compatible usage fields.
 			if ev.Response.Usage.PromptCacheHitTokens > 0 {
 				c.cacheRead = ev.Response.Usage.PromptCacheHitTokens
@@ -305,9 +319,10 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 					c.inputTokens = ev.Response.Usage.PromptCacheHitTokens + ev.Response.Usage.PromptCacheMissTokens
 				}
 			}
-			if c.cacheRead > c.inputTokens && c.inputTokens > 0 {
-				log.Printf("[stream_responses] cache_read(%d) > input_tokens(%d)，已按 input_tokens 限制", c.cacheRead, c.inputTokens)
-				c.cacheRead = c.inputTokens
+			if c.inputTokens > 0 && c.cacheRead+c.cacheWrite > c.inputTokens {
+				log.Printf("[stream_responses] cache_read(%d) + cache_write(%d) > input_tokens(%d)，已按 input_tokens 限制", c.cacheRead, c.cacheWrite, c.inputTokens)
+				c.cacheRead = min(c.cacheRead, c.inputTokens)
+				c.cacheWrite = min(c.cacheWrite, c.inputTokens-c.cacheRead)
 			}
 			if ev.Response.ID != "" {
 				c.responseID = ev.Response.ID

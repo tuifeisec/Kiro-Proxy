@@ -31,21 +31,22 @@ func KiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort 
 	}
 	req.Temperature = conv.Temperature
 	req.TopP = conv.TopP
-
-	// 会话 ID：通过 HTTP header 传递（中转站用 session_id 关联缓存）
-	// prompt_cache_key 放在 body 里帮助中转站关联同一会话（sub2api 会提取为 session_id header）
-	if conv.ConversationID != "" && !conv.IsClassifier {
-		req.PromptCacheKey = conv.ConversationID
-		// user 参数影响 OpenAI 缓存路由：相同 user 值的请求更可能路由到同一机器，
-		// 从而命中该机器上的 KV cache。对同一会话使用稳定的 user 值可避免
-		// 5 分钟内因路由到不同机器而丢失缓存。
-		req.User = conv.ConversationID
+	if supportsPromptCacheBreakpoints(model) {
+		req.PromptCacheOpts = openAIPromptCacheOptions()
+		markOpenAIStablePrefixBreakpoint(req.Messages)
 	}
 
+	// 相同模型、静态 system 和 tools 复用同一个 key，提高跨会话的缓存路由命中率。
 	// 工具定义（走缓存）
+	var openaiTools []OpenAITool
 	if len(conv.RawTools) > 0 {
-		openaiTools, _ := globalToolCache.GetOrConvert(conv.ToolsHash, conv.RawTools)
+		openaiTools, _ = globalToolCache.GetOrConvert(conv.ToolsHash, conv.RawTools)
 		req.Tools = openaiTools
+	}
+	if !conv.IsClassifier {
+		if cacheKey := promptCacheKeyWithProviderTools(conv, model, "chat", openaiTools); cacheKey != "" {
+			req.PromptCacheKey = cacheKey
+		}
 	}
 
 	return json.Marshal(req)
@@ -71,7 +72,7 @@ func buildOpenAIMessages(conv *ParsedConversation) []OpenAIMessage {
 			msgs = append(msgs, OpenAIMessage{
 				Role:       "tool",
 				ToolCallID: tr.ToolUseID,
-				Content:    tr.Content,
+				Content:    serializeToolResultForProvider(tr),
 			})
 		}
 
@@ -93,7 +94,7 @@ func buildOpenAIMessages(conv *ParsedConversation) []OpenAIMessage {
 		msgs = append(msgs, OpenAIMessage{
 			Role:       "tool",
 			ToolCallID: tr.ToolUseID,
-			Content:    tr.Content,
+			Content:    serializeToolResultForProvider(tr),
 		})
 	}
 
@@ -103,7 +104,7 @@ func buildOpenAIMessages(conv *ParsedConversation) []OpenAIMessage {
 	}
 
 	// 应用 OpenAI prompt cache 优化：拆分 system 里的动态尾部
-	msgs = applyOpenAICacheOptimization(msgs)
+	msgs = applyOpenAICacheOptimization(msgs, conv.CurrentContent != "" || len(conv.CurrentImages) > 0)
 
 	return msgs
 }

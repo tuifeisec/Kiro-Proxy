@@ -90,6 +90,29 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 
 	clientWantsStream := requestMeta.Stream != nil && *requestMeta.Stream
 	upstreamBody := replaceModelInBody(body, m.ModelID)
+	responsesFallback := api == localCompatResponses && responsesNeedsChatFallback(m)
+	var fallbackState *fallbackResponseState
+	if api == localCompatResponses {
+		var cacheErr error
+		upstreamBody, _, cacheErr = ensureResponsesPromptCacheKey(upstreamBody, m.ModelID)
+		if cacheErr != nil {
+			writeLocalCompatError(w, http.StatusBadRequest, cacheErr.Error())
+			return
+		}
+	}
+	if responsesFallback {
+		previousMessages, previousErr := s.fallbackMessages(responsesPreviousResponseID(upstreamBody))
+		if previousErr != nil {
+			writeLocalCompatError(w, http.StatusBadRequest, previousErr.Error())
+			return
+		}
+		var convertErr error
+		upstreamBody, fallbackState, convertErr = responsesToChatFallbackWithPrevious(upstreamBody, m.ModelID, previousMessages)
+		if convertErr != nil {
+			writeLocalCompatError(w, http.StatusBadRequest, convertErr.Error())
+			return
+		}
+	}
 	aggregateCodex := api == localCompatResponses && m.Provider == "codex" && !clientWantsStream
 	if api == localCompatResponses && m.Provider == "codex" {
 		upstreamBody = codex.NewRequestBodyFromResponses(upstreamBody, m.ServiceTier)
@@ -116,6 +139,8 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 
 	var usage localCompatUsage
 	var writeErr error
+	var fallbackResponseID string
+	var fallbackAssistant map[string]interface{}
 	status := resp.StatusCode
 	if aggregateCodex && status < http.StatusBadRequest {
 		var responseBody []byte
@@ -129,11 +154,36 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			w.WriteHeader(status)
 			_, writeErr = w.Write(responseBody)
 		}
+	} else if responsesFallback && status < http.StatusBadRequest {
+		writeLocalCORSHeaders(w)
+		if clientWantsStream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.WriteHeader(status)
+			usage, fallbackResponseID, fallbackAssistant, writeErr = copyChatStreamAsResponsesWithState(w, resp.Body)
+		} else {
+			responseBody, convertedUsage, convertErr := readAndConvertChatResponse(resp.Body)
+			usage = convertedUsage
+			if convertErr != nil {
+				status = http.StatusBadGateway
+				writeLocalCompatError(w, status, convertErr.Error())
+				writeErr = convertErr
+			} else {
+				fallbackResponseID, fallbackAssistant = fallbackAssistantFromResponses(responseBody)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, writeErr = w.Write(responseBody)
+			}
+		}
 	} else {
 		copyLocalCompatHeaders(w.Header(), resp.Header)
 		writeLocalCORSHeaders(w)
 		w.WriteHeader(status)
 		usage, writeErr = copyLocalCompatResponse(w, resp.Body, api)
+	}
+	if responsesFallback && status < http.StatusBadRequest && writeErr == nil {
+		s.saveFallbackResponse(fallbackResponseID, fallbackState, fallbackAssistant)
 	}
 
 	isError := status >= http.StatusBadRequest || writeErr != nil
@@ -226,6 +276,8 @@ func localCompatUpstreamURL(api localCompatAPI, m *store.Model) (string, error) 
 			endpoint = strings.Replace(endpoint, "/responses", "/chat/completions", 1)
 		}
 	case localCompatResponses:
+		// OpenAI exposes both native endpoints. Derive /responses from a
+		// chat-configured model so both local SDK entry points remain native.
 		if strings.Contains(endpoint, "/chat/completions") {
 			endpoint = strings.Replace(endpoint, "/chat/completions", "/responses", 1)
 		}
@@ -373,10 +425,12 @@ func mergeUsageObject(dst *localCompatUsage, raw json.RawMessage) {
 		PromptCacheHitTokens     int `json:"prompt_cache_hit_tokens"`
 		PromptCacheMissTokens    int `json:"prompt_cache_miss_tokens"`
 		PromptTokensDetails      struct {
-			CachedTokens int `json:"cached_tokens"`
+			CachedTokens     int `json:"cached_tokens"`
+			CacheWriteTokens int `json:"cache_write_tokens"`
 		} `json:"prompt_tokens_details"`
 		InputTokensDetails struct {
-			CachedTokens int `json:"cached_tokens"`
+			CachedTokens     int `json:"cached_tokens"`
+			CacheWriteTokens int `json:"cache_write_tokens"`
 		} `json:"input_tokens_details"`
 		CacheCreation struct {
 			Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
@@ -392,7 +446,7 @@ func mergeUsageObject(dst *localCompatUsage, raw json.RawMessage) {
 	}
 	output := maxInt(usage.CompletionTokens, usage.OutputTokens)
 	cacheRead := maxInt(usage.CacheReadInputTokens, usage.PromptTokensDetails.CachedTokens, usage.InputTokensDetails.CachedTokens, usage.PromptCacheHitTokens)
-	cacheWrite := maxInt(usage.CacheCreationInputTokens, usage.CacheCreation.Ephemeral5mInputTokens+usage.CacheCreation.Ephemeral1hInputTokens)
+	cacheWrite := maxInt(usage.CacheCreationInputTokens, usage.CacheCreation.Ephemeral5mInputTokens+usage.CacheCreation.Ephemeral1hInputTokens, usage.PromptTokensDetails.CacheWriteTokens, usage.InputTokensDetails.CacheWriteTokens)
 	dst.InputTokens = maxInt(dst.InputTokens, input)
 	dst.OutputTokens = maxInt(dst.OutputTokens, output)
 	dst.CacheReadTokens = maxInt(dst.CacheReadTokens, cacheRead)

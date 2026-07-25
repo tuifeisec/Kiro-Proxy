@@ -169,13 +169,13 @@ func TestResponses_PlainText(t *testing.T) {
 		t.Fatalf("missing tail frames: %+v", frames)
 	}
 	// 缂撳瓨鍛戒腑搴斾綋鐜板湪 metadata
-	hasCache := false
+	hasMetadata := false
 	for _, f := range frames {
-		if f.eventType == "messageMetadataEvent" && strings.Contains(f.payload, "cacheReadInputTokens") {
-			hasCache = true
+		if f.eventType == "metadataEvent" && strings.Contains(f.payload, `"stopReason":"END_TURN"`) {
+			hasMetadata = true
 		}
 	}
-	if !hasCache {
+	if !hasMetadata {
 		t.Errorf("test assertion failed: %v", frames)
 	}
 }
@@ -410,5 +410,21 @@ data: {"type":"response.completed","response":{"id":"resp_ds","usage":{"prompt_c
 	}
 	if cacheRead != 777 || cacheWrite != 0 {
 		t.Fatalf("cache tokens = (%d,%d), want (777,0)", cacheRead, cacheWrite)
+	}
+}
+
+func TestResponsesStream_OpenAICacheWriteTokens(t *testing.T) {
+	sse := `event: response.completed
+
+data: {"type":"response.completed","response":{"id":"resp_cache_write","usage":{"input_tokens":1400,"output_tokens":9,"input_tokens_details":{"cached_tokens":200,"cache_write_tokens":1000}}}}
+
+`
+	sc := NewResponsesStreamConverter(io.NopCloser(strings.NewReader(sse)), "gpt-5.6", 200000, 5, 30, 0.5, 6.25, 1)
+	_, _ = io.ReadAll(sc)
+	in, out := sc.Usage()
+	cacheRead, cacheWrite := sc.CacheTokens()
+
+	if in != 1400 || out != 9 || cacheRead != 200 || cacheWrite != 1000 {
+		t.Fatalf("usage mismatch: in=%d out=%d cache_read=%d cache_write=%d", in, out, cacheRead, cacheWrite)
 	}
 }

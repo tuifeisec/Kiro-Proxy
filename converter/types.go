@@ -6,9 +6,15 @@ import json "github.com/goccy/go-json"
 
 // KiroRequest 是 Kiro generateAssistantResponse 的完整请求体
 type KiroRequest struct {
-	ConversationState KiroConversationState `json:"conversationState"`
-	ProfileArn        string                `json:"profileArn,omitempty"`
-	InferenceConfig   *KiroInferenceConfig  `json:"inferenceConfig,omitempty"`
+	ConversationState            KiroConversationState             `json:"conversationState"`
+	AgentMode                    string                            `json:"agentMode,omitempty"`
+	ProfileArn                   string                            `json:"profileArn,omitempty"`
+	InferenceConfig              *KiroInferenceConfig              `json:"inferenceConfig,omitempty"`
+	AdditionalModelRequestFields *KiroAdditionalModelRequestFields `json:"additionalModelRequestFields,omitempty"`
+}
+
+type KiroAdditionalModelRequestFields struct {
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
 type KiroConversationState struct {
@@ -60,7 +66,23 @@ type KiroToolResult struct {
 }
 
 type KiroToolContent struct {
-	Text string `json:"text"`
+	Text string          `json:"text,omitempty"`
+	Raw  json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON keeps the original block so provider adapters can preserve
+// non-text tool output without changing the existing text fast path.
+func (c *KiroToolContent) UnmarshalJSON(data []byte) error {
+	c.Raw = append(c.Raw[:0], data...)
+	c.Text = ""
+
+	var value struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(data, &value); err == nil {
+		c.Text = value.Text
+	}
+	return nil
 }
 
 type KiroImage struct {
@@ -88,10 +110,18 @@ type KiroReasoningConfig struct {
 
 // ParsedConversation 是一次解析后的结构化会话，后续所有转换都基于此
 type ParsedConversation struct {
-	ModelID        string
-	ConversationID string
-	IsClassifier   bool   // intent-classification 请求
-	SystemText     string // 从 history[0] 提取的系统提示
+	ModelID              string
+	ConversationID       string
+	ProfileArn           string
+	ChatTriggerType      string
+	AgentTaskType        string
+	AgentMode            string
+	AgentContinuationID  string
+	Origin               string
+	PromptAffinityKey    string
+	ContinuationStateKey string
+	IsClassifier         bool   // intent-classification 请求
+	SystemText           string // 从 history[0] 提取的系统提示
 
 	// 当前消息
 	CurrentContent     string
@@ -106,9 +136,10 @@ type ParsedConversation struct {
 	ToolsHash string // sha256(tools_json)，用于缓存命中
 
 	// 推理配置
-	MaxTokens   int
-	Temperature *float64
-	TopP        *float64
+	MaxTokens       int
+	Temperature     *float64
+	TopP            *float64
+	ReasoningEffort string
 }
 
 type ParsedHistoryEntry struct {
@@ -127,7 +158,16 @@ type ParsedHistoryEntry struct {
 type ParsedToolResult struct {
 	ToolUseID string
 	Content   string
+	Blocks    []ParsedToolResultBlock
 	IsError   bool
+}
+
+// ParsedToolResultBlock is the provider-neutral representation of one Kiro
+// tool-result block. Raw is retained for non-text blocks and unknown fields.
+type ParsedToolResultBlock struct {
+	Kind string
+	Text string
+	Raw  json.RawMessage
 }
 
 type ParsedToolUse struct {
@@ -139,17 +179,18 @@ type ParsedToolUse struct {
 // ── OpenAI 格式 ──────────────────────────────────────────────────
 
 type OpenAIRequest struct {
-	Model           string            `json:"model"`
-	Messages        []OpenAIMessage   `json:"messages"`
-	Tools           []OpenAITool      `json:"tools,omitempty"`
-	Stream          bool              `json:"stream"`
-	StreamOptions   *OpenAIStreamOpts `json:"stream_options,omitempty"`
-	MaxTokens       int               `json:"max_tokens,omitempty"`
-	Temperature     *float64          `json:"temperature,omitempty"`
-	TopP            *float64          `json:"top_p,omitempty"`
-	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
-	PromptCacheKey  string            `json:"prompt_cache_key,omitempty"`
-	User            string            `json:"user,omitempty"`
+	Model           string              `json:"model"`
+	Messages        []OpenAIMessage     `json:"messages"`
+	Tools           []OpenAITool        `json:"tools,omitempty"`
+	Stream          bool                `json:"stream"`
+	StreamOptions   *OpenAIStreamOpts   `json:"stream_options,omitempty"`
+	MaxTokens       int                 `json:"max_tokens,omitempty"`
+	Temperature     *float64            `json:"temperature,omitempty"`
+	TopP            *float64            `json:"top_p,omitempty"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+	PromptCacheKey  string              `json:"prompt_cache_key,omitempty"`
+	PromptCacheOpts *PromptCacheOptions `json:"prompt_cache_options,omitempty"`
+	User            string              `json:"user,omitempty"`
 }
 
 type OpenAIReasoning struct {
@@ -158,6 +199,15 @@ type OpenAIReasoning struct {
 
 type OpenAIStreamOpts struct {
 	IncludeUsage bool `json:"include_usage"`
+}
+
+type PromptCacheOptions struct {
+	Mode string `json:"mode"`
+	TTL  string `json:"ttl"`
+}
+
+type PromptCacheBreakpoint struct {
+	Mode string `json:"mode"`
 }
 
 type OpenAIMessage struct {
@@ -169,9 +219,10 @@ type OpenAIMessage struct {
 }
 
 type OpenAIContentPart struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	ImageURL *OpenAIImageURL `json:"image_url,omitempty"`
+	Type                  string                 `json:"type"`
+	Text                  string                 `json:"text,omitempty"`
+	ImageURL              *OpenAIImageURL        `json:"image_url,omitempty"`
+	PromptCacheBreakpoint *PromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 type OpenAIImageURL struct {

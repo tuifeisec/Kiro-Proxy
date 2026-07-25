@@ -70,27 +70,20 @@ func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 	req := ResponsesRequest{
 		Model:  model,
 		Stream: true,
-		Store:  true, // 必须 true，否则中转站无法缓存 prompt（previous_response_id 续传依赖此字段）
+		Store:  true, // previous_response_id 续传依赖已存储的响应；Prompt Caching 与该字段独立。
 	}
 	if reasoningEffort = strings.TrimSpace(reasoningEffort); reasoningEffort != "" {
 		req.Reasoning = &OpenAIReasoning{Effort: reasoningEffort}
 	}
 
-	// prompt_cache_key 帮助中转站关联同一会话的请求，用于缓存调度
-	if conv.ConversationID != "" {
-		req.PromptCacheKey = conv.ConversationID
-		// user 参数影响 OpenAI 缓存路由：相同 user 值的请求路由到同一机器，
-		// 提高该机器上 KV cache 的命中率，避免 5 分钟超时丢缓存。
-		req.User = conv.ConversationID
-	}
-
+	// 相同模型、静态 system 和 tools 复用同一个 key，提高跨会话的缓存路由命中率。
 	// 构建 input 数组（带缓存优化）
 	input := buildResponsesInputCacheOptimized(conv)
 	req.Input = input
-
 	// 工具定义
+	var openaiTools []OpenAITool
 	if len(conv.RawTools) > 0 {
-		openaiTools, _ := globalToolCache.GetOrConvert(conv.ToolsHash, conv.RawTools)
+		openaiTools, _ = globalToolCache.GetOrConvert(conv.ToolsHash, conv.RawTools)
 		tools := make([]ReqTool, 0, len(openaiTools))
 		for _, t := range openaiTools {
 			tools = append(tools, ReqTool{
@@ -101,6 +94,12 @@ func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 			})
 		}
 		req.Tools = tools
+	}
+
+	if !conv.IsClassifier {
+		if cacheKey := promptCacheKeyWithProviderTools(conv, model, "responses", openaiTools); cacheKey != "" {
+			req.PromptCacheKey = cacheKey
+		}
 	}
 
 	return json.Marshal(req)
@@ -125,7 +124,7 @@ func buildResponsesInput(conv *ParsedConversation) []ReqInput {
 		}
 
 		for _, tr := range entry.ToolResults {
-			input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
+			input = append(input, buildResponsesToolOutput(tr.ToolUseID, serializeToolResultForProvider(tr)))
 		}
 
 		if entry.UserContent != "" || len(entry.Images) > 0 {
@@ -152,7 +151,7 @@ func buildResponsesInput(conv *ParsedConversation) []ReqInput {
 	}
 
 	for _, tr := range conv.CurrentToolResults {
-		input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
+		input = append(input, buildResponsesToolOutput(tr.ToolUseID, serializeToolResultForProvider(tr)))
 	}
 
 	if conv.CurrentContent != "" || len(conv.CurrentImages) > 0 {
@@ -195,9 +194,8 @@ func buildResponsesUserMsg(content string, images []KiroImage) ReqInput {
 // 优化策略：
 //   - system prompt 中的静态部分作为 developer 消息放在最前面（稳定前缀）
 //   - system prompt 中的动态尾部（"Here is the last user message:\n..."）分离到末尾
-//   - EnvironmentContext（每轮可能变化）从用户消息中分离到末尾
 //   - 历史对话保持原序（老消息不变，天然可缓存）
-//   - 当前用户消息（每次必变）放在最后
+//   - 当前用户消息保持原始结构，确保下一轮进入 history 后仍可作为严格前缀
 func buildResponsesInputCacheOptimized(conv *ParsedConversation) []ReqInput {
 	input := make([]ReqInput, 0, len(conv.History)*2+6)
 
@@ -224,7 +222,10 @@ func buildResponsesInputCacheOptimized(conv *ParsedConversation) []ReqInput {
 
 		// 工具结果 → function_call_output
 		for _, tr := range entry.ToolResults {
-			input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
+			input = append(input, buildResponsesToolOutput(
+				tr.ToolUseID,
+				serializeToolResultForProvider(tr),
+			))
 		}
 
 		// 用户消息
@@ -257,7 +258,10 @@ func buildResponsesInputCacheOptimized(conv *ParsedConversation) []ReqInput {
 
 	// 当前工具结果
 	for _, tr := range conv.CurrentToolResults {
-		input = append(input, buildResponsesToolOutput(tr.ToolUseID, tr.Content))
+		input = append(input, buildResponsesToolOutput(
+			tr.ToolUseID,
+			serializeToolResultForProvider(tr),
+		))
 	}
 
 	// system prompt 的动态尾部
@@ -269,21 +273,9 @@ func buildResponsesInputCacheOptimized(conv *ParsedConversation) []ReqInput {
 		})
 	}
 
-	// 当前用户消息（分离 EnvironmentContext）
+	// 当前用户消息保持原始结构；只拆 current 会破坏下一轮 history 的严格前缀。
 	if conv.CurrentContent != "" || len(conv.CurrentImages) > 0 {
-		userQuestion, envContext := optimizeCurrentContentForCache(conv.CurrentContent)
-
-		if envContext != "" {
-			input = append(input, ReqInput{
-				Type:    "message",
-				Role:    "user",
-				Content: envContext,
-			})
-		}
-
-		if userQuestion != "" || len(conv.CurrentImages) > 0 {
-			input = append(input, buildResponsesUserMsg(userQuestion, conv.CurrentImages))
-		}
+		input = append(input, buildResponsesUserMsg(conv.CurrentContent, conv.CurrentImages))
 	}
 
 	return input
