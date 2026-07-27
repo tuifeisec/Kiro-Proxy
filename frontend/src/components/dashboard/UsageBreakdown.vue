@@ -1,29 +1,42 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useDailyStats } from '../../composables/useStats.js'
+import IconRefresh from '../icons/IconRefresh.vue'
+import { ALL_STATS_START_DATE, daysAgo } from '../../utils/date.js'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
-  days: { type: Number, default: 7 },
+  days: { type: Number, default: -1 },
 })
+const emit = defineEmits(['summary', 'range-change'])
 const { rows, loading, error, range, load } = useDailyStats()
+const validationError = ref('')
+const isAllRange = computed(() => props.days < 0)
 
-function daysAgo(n) {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d.toISOString().slice(0, 10)
-}
-
-const startDate = ref(daysAgo(props.days))
-const endDate = ref(daysAgo(0))
+const startDate = ref('')
+const endDate = ref('')
 
 function applyDaysRange() {
-  startDate.value = daysAgo(props.days)
+  startDate.value = isAllRange.value ? ALL_STATS_START_DATE : daysAgo(props.days)
   endDate.value = daysAgo(0)
 }
 
+applyDaysRange()
+
 async function refresh() {
+  if (startDate.value && endDate.value && startDate.value > endDate.value) {
+    validationError.value = '开始日期不能晚于结束日期'
+    return
+  }
+  validationError.value = ''
   await load(startDate.value, endDate.value)
+  if (!error.value) {
+    emit('range-change', {
+      all: isAllRange.value,
+      start: range.value.start || startDate.value,
+      end: range.value.end || endDate.value,
+    })
+  }
 }
 
 onMounted(refresh)
@@ -81,6 +94,32 @@ const byModel = computed(() => {
   return Array.from(map.values()).sort((a, b) => (b.input_tokens + b.output_tokens) - (a.input_tokens + a.output_tokens))
 })
 
+const summary = computed(() => byModel.value.reduce((total, row) => {
+  total.total_requests += Number(row.requests || 0)
+  total.total_errors += Number(row.errors || 0)
+  total.input_tokens += Number(row.input_tokens || 0)
+  total.output_tokens += Number(row.output_tokens || 0)
+  total.cache_read_tokens += Number(row.cache_hit_tokens || 0)
+  total.cache_write_tokens += Number(row.cache_write_tokens || 0)
+  total.credits += Number(row.credits || 0)
+  return total
+}, {
+  total_requests: 0,
+  total_errors: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_read_tokens: 0,
+  cache_write_tokens: 0,
+  credits: 0,
+}))
+
+watch(summary, (value) => {
+  emit('summary', {
+    ...value,
+    total_tokens: value.input_tokens + value.output_tokens,
+  })
+}, { immediate: true })
+
 function cacheHitRate(row) {
   const totalIn = row.input_tokens || 0
   const cached = Math.min(row.cache_hit_tokens ?? cacheHitTokens(row), totalIn)
@@ -96,28 +135,31 @@ function formatCredits(n) {
 </script>
 
 <template>
-  <div class="rounded-xl border border-[#e8edf5] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-    <div class="flex items-center justify-between border-b border-[#edf0f5] px-3 py-2">
-      <div>
+  <div class="ui-card">
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[#edf0f5] px-3 py-2">
+      <div class="min-w-0">
         <h3 class="text-[14px] font-semibold text-[#0f172a]">用量明细</h3>
         <p class="mt-0.5 text-[12px] text-[#64748b]">按模型聚合 token、Credits 和缓存命中</p>
       </div>
-      <div class="flex items-center gap-2">
-        <input v-model="startDate" type="date" class="h-8 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569]" />
-        <span class="text-[12px] text-[#94a3b8]">至</span>
-        <input v-model="endDate" type="date" class="h-8 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569]" />
+      <div class="flex flex-wrap items-center gap-2">
+        <template v-if="!isAllRange">
+          <input v-model="startDate" type="date" class="h-8 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569]" />
+          <span class="text-[12px] text-[#94a3b8]">至</span>
+          <input v-model="endDate" type="date" class="h-8 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569]" />
+        </template>
+        <span v-else class="inline-flex h-8 items-center rounded-lg border border-[#e2e8f0] bg-[#f8fafc] px-3 text-[12px] text-[#64748b]">全部历史数据</span>
         <button
           class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e2e8f0] bg-white px-3 text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
           :disabled="loading"
           @click="refresh"
         >
-          <span :class="{ 'animate-spin': loading }">↻</span>
+          <IconRefresh class="h-3.5 w-3.5" :class="{ 'animate-spin': loading }" />
           {{ loading ? '加载中' : '刷新' }}
         </button>
       </div>
     </div>
 
-    <div v-if="error" class="mx-4 mt-3 rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">{{ error }}</div>
+    <div v-if="validationError || error" class="mx-4 mt-3 rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">{{ validationError || error }}</div>
 
     <div v-if="rows.length === 0 && !loading" class="py-12 text-center text-[13px] text-[#64748b]">该时间段无数据</div>
 

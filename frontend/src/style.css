@@ -1,10 +1,115 @@
 @import "tailwindcss";
 
+/* ── 语义化设计 token ─────────────────────────────────────── */
+:root {
+  /* 表面 / 背景 */
+  --ui-bg: #f8fafc;
+  --ui-surface: #ffffff;
+  --ui-surface-subtle: #f8fafc;
+
+  /* 边框 */
+  --ui-border: #e5e7eb;
+  --ui-border-subtle: #edf0f5;
+
+  /* 文字 */
+  --ui-text: #111827;
+  --ui-text-secondary: #475569;
+  --ui-text-muted: #64748b;
+  --ui-text-tertiary: #94a3b8;
+
+  /* 语义色：蓝仅用于主操作/链接，绿/橙/红仅表示状态 */
+  --ui-primary: #2563eb;
+  --ui-primary-hover: #1d4ed8;
+  --ui-success: #059669;
+  --ui-warning: #d97706;
+  --ui-danger: #dc2626;
+
+  /* 圆角 */
+  --ui-radius-control: 6px;   /* 输入框、按钮 */
+  --ui-radius-card: 8px;      /* 普通卡片 */
+  --ui-radius-modal: 12px;    /* 弹窗 */
+
+  /* 阴影 */
+  --ui-shadow-card: 0 1px 2px rgb(15 23 42 / 0.05);
+  --ui-shadow-popover: 0 8px 24px rgb(15 23 42 / 0.12);
+  --ui-page-max: 1320px;
+  --ui-page-gutter: 12px;
+  --ui-section-gap: 12px;
+  --ui-control-height: 32px;
+  --ui-primary-height: 36px;
+  --ui-table-control-height: 28px;
+}
+
 html, body, #app { width: 100%; height: 100%; overflow: hidden; }
-body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "SF Pro Text", "PingFang SC",
+    "Noto Sans SC", "Segoe UI", sans-serif;
+  color: var(--ui-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .titlebar { -webkit-app-region: drag; }
 .titlebar button, .titlebar-controls { -webkit-app-region: no-drag; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #f5f5f5; }
-::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #999; }
+::-webkit-scrollbar-track { background: var(--ui-surface-subtle); }
+::-webkit-scrollbar-thumb { background: var(--ui-text-tertiary); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ui-text-muted); }
+
+/* ── 公共视觉类 ───────────────────────────────────────────── */
+@layer components {
+  .ui-page-shell {
+  min-height: 100%;
+  background: var(--ui-bg);
+  padding: var(--ui-page-gutter);
+  }
+
+  .ui-page-inner {
+  width: min(100%, var(--ui-page-max));
+  margin-inline: auto;
+  }
+
+  .ui-control-h { height: var(--ui-control-height); }
+  .ui-primary-h { height: var(--ui-primary-height); }
+  .ui-table-control-h { height: var(--ui-table-control-height); }
+
+  .ui-page-inner input:not([type='checkbox']),
+  .ui-page-inner select,
+  .ui-page-inner button.h-8,
+  .ui-page-inner button.h-9,
+  .ui-page-inner button.ui-control-h,
+  .ui-page-inner button.ui-primary-h {
+  border-radius: var(--ui-radius-control) !important;
+  }
+
+  .ui-card {
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-card);
+  }
+
+  .ui-popover {
+  border-radius: var(--ui-radius-modal);
+  box-shadow: var(--ui-shadow-popover);
+  }
+
+  .ui-control {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface);
+  }
+
+  .ui-primary-button {
+  background: var(--ui-primary);
+  color: white;
+  border-radius: var(--ui-radius-control);
+  }
+  .ui-primary-button:hover { background: var(--ui-primary-hover); }
+
+  .ui-status-success { color: var(--ui-success); background: #ecfdf5; }
+  .ui-status-warning { color: var(--ui-warning); background: #fffbeb; }
+  .ui-status-danger  { color: var(--ui-danger);  background: #fef2f2; }
+}

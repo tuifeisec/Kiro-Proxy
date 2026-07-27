@@ -6,28 +6,25 @@ import IconUsage from '../components/icons/IconUsage.vue'
 import IconDashboard from '../components/icons/IconDashboard.vue'
 import IconWifi from '../components/icons/IconWifi.vue'
 import IconArrowRight from '../components/icons/IconArrowRight.vue'
+import IconRefresh from '../components/icons/IconRefresh.vue'
+import { daysAgo } from '../utils/date.js'
 
 const { rows, loading, error, range, load } = useDailyStats()
 
 const activeRange = ref('7d')
-const startDate = ref(daysAgo(7))
+const startDate = ref(daysAgo(6))
 const endDate = ref(daysAgo(0))
 const selectedDate = ref('')
 const selectedDateLogs = ref([])
 const logsLoading = ref(false)
 const logsError = ref('')
+const validationError = ref('')
 
 const quickRanges = [
   { key: 'today', label: '今天', days: 0 },
-  { key: '7d', label: '最近 7 天', days: 7 },
-  { key: '30d', label: '最近 30 天', days: 30 },
+  { key: '7d', label: '最近 7 天', days: 6 },
+  { key: '30d', label: '最近 30 天', days: 29 },
 ]
-
-function daysAgo(n) {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d.toISOString().slice(0, 10)
-}
 
 function formatNum(n) {
   const value = Number(n || 0)
@@ -66,6 +63,7 @@ function resetSelectedDate() {
 }
 
 function applyQuickRange(option) {
+  validationError.value = ''
   activeRange.value = option.key
   startDate.value = daysAgo(option.days)
   endDate.value = daysAgo(0)
@@ -74,6 +72,11 @@ function applyQuickRange(option) {
 }
 
 async function refresh() {
+  if (startDate.value && endDate.value && startDate.value > endDate.value) {
+    validationError.value = '开始日期不能晚于结束日期'
+    return
+  }
+  validationError.value = ''
   resetSelectedDate()
   await load(startDate.value, endDate.value)
 }
@@ -219,42 +222,42 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto bg-[#fbfbfc] px-3 py-3">
-    <div class="mx-auto max-w-[1320px] space-y-3">
-      <header class="flex items-center justify-between gap-3">
+  <div class="ui-page-shell h-full overflow-y-auto">
+    <div class="ui-page-inner space-y-3">
+      <header class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-[22px] font-semibold tracking-tight text-[#0f172a]">用量明细</h1>
           <p class="mt-0.5 text-[12px] text-[#64748b]">查看每日、模型维度的请求量、Token、缓存命中和 Credits 消耗。</p>
         </div>
-        <div class="inline-flex items-center gap-1 rounded-xl border border-[#e8edf5] bg-white p-1 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div class="inline-flex items-center gap-1 ui-card p-1">
           <button
             v-for="option in quickRanges"
             :key="option.key"
-            class="h-7 rounded-lg px-2.5 text-[12px] font-medium transition"
+            class="ui-control-h rounded-md px-2.5 text-[12px] font-medium transition"
             :class="activeRange === option.key ? 'bg-[#1677ff] text-white shadow-sm' : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#0f172a]'"
             @click="applyQuickRange(option)"
           >
             {{ option.label }}
           </button>
           <span class="mx-1 h-4 w-px bg-[#e2e8f0]"></span>
-          <input v-model="startDate" type="date" class="h-7 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569] outline-none focus:border-[#93c5fd]" @change="activeRange = 'custom'" />
+          <input v-model="startDate" type="date" class="ui-control-h ui-control px-2 text-[12px] text-[#475569] outline-none focus:border-[#93c5fd]" @change="activeRange = 'custom'" />
           <span class="text-[12px] text-[#94a3b8]">至</span>
-          <input v-model="endDate" type="date" class="h-7 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569] outline-none focus:border-[#93c5fd]" @change="activeRange = 'custom'" />
+          <input v-model="endDate" type="date" class="ui-control-h ui-control px-2 text-[12px] text-[#475569] outline-none focus:border-[#93c5fd]" @change="activeRange = 'custom'" />
           <button
-            class="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#e2e8f0] bg-white px-2.5 text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
+            class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
             :disabled="loading"
             @click="refresh"
           >
-            <span :class="{ 'animate-spin': loading }">↻</span>
+            <IconRefresh class="h-3.5 w-3.5" :class="{ 'animate-spin': loading }" />
             {{ loading ? '加载中' : '刷新' }}
           </button>
         </div>
       </header>
 
-      <p v-if="error" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">用量明细加载失败：{{ error }}</p>
+      <p v-if="validationError || error" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">用量明细加载失败：{{ validationError || error }}</p>
 
-      <section class="grid grid-cols-4 gap-2.5">
-        <div v-for="card in summaryCards" :key="card.label" class="rounded-xl border border-[#edf0f5] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.035)]">
+      <section class="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+        <div v-for="card in summaryCards" :key="card.label" class="ui-card px-4 py-3">
           <div class="grid h-[58px] grid-cols-[34px_minmax(0,1fr)] items-center gap-3">
             <div class="flex h-8 w-8 items-center justify-center rounded-lg border" :class="toneMap[card.tone]">
               <component :is="card.icon" class="h-4 w-4" />
@@ -268,7 +271,7 @@ onMounted(refresh)
         </div>
       </section>
 
-      <section class="relative overflow-hidden rounded-xl border border-[#e8edf5] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+      <section class="relative overflow-hidden ui-card">
         <div class="flex items-center justify-between border-b border-[#edf0f5] bg-[#fbfdff] px-3 py-2">
           <div>
             <h2 class="text-[14px] font-semibold text-[#0f172a]">每日明细</h2>
@@ -285,7 +288,7 @@ onMounted(refresh)
           <table class="w-full min-w-[900px] text-[12px]">
             <thead>
               <tr class="border-b border-[#edf0f5] bg-[#fbfdff] text-left text-[#64748b]">
-                <th class="py-2 pr-3 font-medium">日期</th>
+                <th class="sticky left-0 z-[1] bg-[#fbfdff] py-2 pr-3 font-medium">日期</th>
                 <th class="py-2 pr-3 text-right font-medium">模型数</th>
                 <th class="py-2 pr-3 text-right font-medium">请求数</th>
                 <th class="py-2 pr-3 text-right font-medium">错误</th>
@@ -300,11 +303,11 @@ onMounted(refresh)
               <tr
                 v-for="row in dailyRows"
                 :key="row.date"
-                class="cursor-pointer border-b border-[#f1f5f9] last:border-b-0 hover:bg-[#fbfdff]"
+                class="cursor-pointer border-b border-[#f1f5f9] bg-white last:border-b-0 hover:bg-[#fbfdff]"
                 :class="selectedDate === row.date ? 'bg-[#eff6ff]' : ''"
                 @click="selectDate(row.date)"
               >
-                <td class="py-2 pr-3 font-medium text-[#0f172a]"><span class="rounded-md px-2 py-1 font-mono text-[11px] ring-1" :class="selectedDate === row.date ? 'bg-[#1677ff] text-white ring-[#1677ff]' : 'bg-[#f8fafc] ring-[#e2e8f0]'">{{ row.date }}</span></td>
+                <td class="sticky left-0 z-[1] bg-inherit py-2 pr-3 font-medium text-[#0f172a]"><span class="rounded-md px-2 py-1 font-mono text-[11px] ring-1" :class="selectedDate === row.date ? 'bg-[#1677ff] text-white ring-[#1677ff]' : 'bg-[#f8fafc] ring-[#e2e8f0]'">{{ row.date }}</span></td>
                 <td class="py-2 pr-3 text-right text-[#334155]"><span class="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[11px]">{{ row.models.size }}</span></td>
                 <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ row.requests.toLocaleString() }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#f8fafc] text-[#94a3b8]'">{{ row.errors }}</span></td>
@@ -319,7 +322,7 @@ onMounted(refresh)
         </div>
       </section>
 
-      <section v-if="selectedDate" class="overflow-hidden rounded-xl border border-[#bfdbfe] bg-white shadow-[0_1px_3px_rgba(37,99,235,0.08)]">
+      <section v-if="selectedDate" class="overflow-hidden ui-card border-[#bfdbfe]">
         <div class="flex items-center justify-between border-b border-[#dbeafe] bg-[#eff6ff] px-3 py-2">
           <div>
             <h2 class="text-[14px] font-semibold text-[#1d4ed8]">{{ selectedDate }} 日志详情</h2>
@@ -336,7 +339,7 @@ onMounted(refresh)
             <table class="w-full min-w-[820px] text-[12px]">
               <thead>
                 <tr class="border-b border-[#dbeafe] bg-white text-left text-[#64748b]">
-                  <th class="py-2 pl-3 pr-3 font-medium">模型</th>
+                  <th class="sticky left-0 z-[1] bg-white py-2 pl-3 pr-3 font-medium">模型</th>
                   <th class="py-2 pr-3 text-right font-medium">请求数</th>
                   <th class="py-2 pr-3 text-right font-medium">错误</th>
                   <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
@@ -347,8 +350,8 @@ onMounted(refresh)
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in selectedDateRows" :key="row.model" class="border-b border-[#f1f5f9] last:border-b-0 hover:bg-[#fbfdff]">
-                  <td class="max-w-[320px] truncate py-2 pl-3 pr-3 font-medium text-[#0f172a]"><span class="rounded-md bg-white px-2 py-1 font-mono text-[11px] ring-1 ring-[#dbeafe]">{{ row.model }}</span></td>
+                <tr v-for="row in selectedDateRows" :key="row.model" class="border-b border-[#f1f5f9] bg-white last:border-b-0 hover:bg-[#fbfdff]">
+                  <td class="sticky left-0 z-[1] max-w-[320px] truncate bg-inherit py-2 pl-3 pr-3 font-medium text-[#0f172a]"><span class="rounded-md bg-white px-2 py-1 font-mono text-[11px] ring-1 ring-[#dbeafe]">{{ row.model }}</span></td>
                   <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ row.requests.toLocaleString() }}</td>
                   <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#f8fafc] text-[#94a3b8]'">{{ row.errors }}</span></td>
                   <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.input) }}</td>
@@ -401,7 +404,7 @@ onMounted(refresh)
         </div>
       </section>
 
-      <section class="overflow-hidden rounded-xl border border-[#e8edf5] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+      <section class="overflow-hidden ui-card">
         <div class="border-b border-[#edf0f5] bg-[#fbfdff] px-3 py-2">
           <h2 class="text-[14px] font-semibold text-[#0f172a]">模型汇总</h2>
           <p class="mt-0.5 text-[12px] text-[#64748b]">按模型聚合当前时间范围内的用量</p>
@@ -410,7 +413,7 @@ onMounted(refresh)
           <table class="w-full min-w-[900px] text-[12px]">
             <thead>
               <tr class="border-b border-[#edf0f5] bg-[#fbfdff] text-left text-[#64748b]">
-                <th class="py-2 pr-3 font-medium">模型</th>
+                <th class="sticky left-0 z-[1] bg-[#fbfdff] py-2 pr-3 font-medium">模型</th>
                 <th class="py-2 pr-3 text-right font-medium">天数</th>
                 <th class="py-2 pr-3 text-right font-medium">请求数</th>
                 <th class="py-2 pr-3 text-right font-medium">错误</th>
@@ -422,8 +425,8 @@ onMounted(refresh)
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in modelRows" :key="row.model" class="border-b border-[#f1f5f9] last:border-b-0 hover:bg-[#fbfdff]">
-                <td class="max-w-[280px] truncate py-2 pr-3 font-medium text-[#0f172a]"><span class="rounded-md bg-[#f8fafc] px-2 py-1 font-mono text-[11px] ring-1 ring-[#e2e8f0]">{{ row.model }}</span></td>
+              <tr v-for="row in modelRows" :key="row.model" class="border-b border-[#f1f5f9] bg-white last:border-b-0 hover:bg-[#fbfdff]">
+                <td class="sticky left-0 z-[1] max-w-[280px] truncate bg-inherit py-2 pr-3 font-medium text-[#0f172a]"><span class="rounded-md bg-[#f8fafc] px-2 py-1 font-mono text-[11px] ring-1 ring-[#e2e8f0]">{{ row.model }}</span></td>
                 <td class="py-2 pr-3 text-right text-[#334155]"><span class="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[11px]">{{ row.days.size }}</span></td>
                 <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ row.requests.toLocaleString() }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#f8fafc] text-[#94a3b8]'">{{ row.errors }}</span></td>

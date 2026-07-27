@@ -24,7 +24,9 @@ async function copyToClipboard(text, type = 'manual') {
       copied.value = true
       setTimeout(() => { copied.value = false }, 1500)
     }
-  } catch {}
+  } catch {
+    // 剪贴板 API 不可用或权限被拒时静默失败，不影响主流程
+  }
 }
 
 async function fetchProxyAccessMode() {
@@ -32,14 +34,18 @@ async function fetchProxyAccessMode() {
     const r = await fetch('/api/proxy-access-mode')
     if (!r.ok) return
     accessMode.value = await r.json()
-  } catch {}
+  } catch {
+    // 诊断类请求，失败时保持默认值，不影响主流程
+  }
 }
 
 async function fetchKiroStatus() {
   try {
     const r = await fetch('/api/kiro-proxy')
     kiroStatus.value = await r.json()
-  } catch {}
+  } catch {
+    // 诊断类请求，失败时保持默认值，不影响主流程
+  }
 }
 
 async function configureKiro() {
@@ -93,38 +99,38 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="rounded-xl border border-[#e8edf5] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+  <div class="ui-card min-w-0 p-3">
     <div class="mb-2 flex items-center justify-between">
       <h3 class="text-[14px] font-semibold text-[#0f172a]">Kiro 代理配置</h3>
-      <span class="inline-flex items-center gap-1.5 rounded-full bg-[#ecfdf5] px-2 py-0.5 text-[12px] font-medium text-[#059669]" v-if="kiroStatus?.configured">
+      <span class="inline-flex items-center gap-1.5 rounded-full ui-status-success px-2 py-0.5 text-[12px] font-medium" v-if="kiroStatus?.configured">
         <span class="h-1.5 w-1.5 rounded-full bg-[#22c55e]"></span>
         已接管 Kiro 代理
       </span>
     </div>
 
-    <div class="mb-2 rounded-xl border border-[#dcfce7] bg-[#f0fdf4] px-3 py-2" v-if="kiroStatus?.configured">
+    <div class="mb-2 rounded-lg border border-[#dcfce7] bg-[#f0fdf4] px-3 py-2" v-if="kiroStatus?.configured">
       <div class="mb-1.5 flex items-center gap-2 text-[12px] font-medium text-[#059669]">
-        <span>♡</span>
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
         <span>已接管 Kiro 代理</span>
       </div>
       <div class="text-[12px] text-[#64748b]">目标代理地址</div>
       <div class="mt-1 flex items-center gap-2">
-        <span class="font-mono text-[13px] text-[#0f172a]">{{ kiroStatus.current_proxy || proxyURL }}</span>
-        <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(kiroStatus.current_proxy || proxyURL, 'proxy')">
+        <span class="min-w-0 flex-1 truncate font-mono text-[13px] text-[#0f172a]">{{ kiroStatus.current_proxy || proxyURL }}</span>
+        <button class="text-[#64748b] hover:text-[#0f172a]" aria-label="复制代理地址" @click="copyToClipboard(kiroStatus.current_proxy || proxyURL, 'proxy')">
           <IconCheck v-if="copiedProxy" class="text-[#059669]" />
           <IconCopy v-else />
         </button>
       </div>
     </div>
 
-    <div v-else class="mb-2 rounded-xl border border-[#e8edf5] bg-[#fbfdff] px-3 py-2 text-[12px] text-[#64748b]">
+    <div v-else class="mb-2 rounded-lg border border-[#e8edf5] bg-[#fbfdff] px-3 py-2 text-[12px] text-[#64748b]">
       当前未接管 Kiro 代理，可一键写入代理配置。
     </div>
 
     <div class="grid grid-cols-2 gap-2">
       <button
         v-if="!kiroStatus?.configured"
-        class="col-span-2 h-8 rounded-lg bg-[#1677ff] text-[12px] font-semibold text-white shadow-sm hover:bg-[#0958d9] disabled:cursor-not-allowed disabled:opacity-60"
+        class="col-span-2 h-8 ui-primary-button text-[12px] font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="loading || restartLoading"
         @click="configureKiro"
       >
@@ -132,14 +138,14 @@ onMounted(() => {
       </button>
       <button
         v-else
-        class="h-8 rounded-lg border border-[#e2e8f0] bg-white text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
+        class="h-8 ui-control bg-white text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
         :disabled="loading || restartLoading"
         @click="restoreKiro"
       >
         {{ loading ? '还原中...' : '还原原始代理' }}
       </button>
       <button
-        class="h-8 rounded-lg border border-[#e2e8f0] bg-white text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
+        class="h-8 ui-control bg-white text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
         :disabled="loading || restartLoading"
         @click="restartKiro"
       >
@@ -151,9 +157,9 @@ onMounted(() => {
       {{ result }}
     </div>
 
-    <div class="mt-2 flex items-center gap-2 rounded-lg border border-[#e8edf5] bg-[#fbfdff] px-3 py-1.5 font-mono text-[12px]">
+    <div v-if="!kiroStatus?.configured" class="mt-2 flex items-center gap-2 rounded-lg border border-[#e8edf5] bg-[#fbfdff] px-3 py-1.5 font-mono text-[12px]">
       <span class="flex-1 truncate text-[#059669]">{{ proxyURL }}</span>
-      <button class="text-[#64748b] hover:text-[#0f172a]" @click="copyToClipboard(proxyURL)">
+      <button class="text-[#64748b] hover:text-[#0f172a]" aria-label="复制代理地址" @click="copyToClipboard(proxyURL)">
         <IconCheck v-if="copied" class="text-[#059669]" />
         <IconCopy v-else />
       </button>

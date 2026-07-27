@@ -25,8 +25,8 @@ const trendStroke = {
 </script>
 
 <template>
-  <div class="group overflow-hidden rounded-xl border border-[#edf0f5] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.035)] transition hover:border-[#dbe3ef] hover:shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
-    <div class="grid h-[58px] grid-cols-[34px_minmax(0,1fr)_58px] items-center gap-3">
+  <div class="stats-card ui-card group relative px-4 py-3 transition hover:shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
+    <div class="stats-card-layout grid h-[58px] items-center gap-3">
       <div class="flex h-8 w-8 items-center justify-center rounded-lg border" :class="toneMap[tone] || toneMap.blue">
         <component v-if="icon" :is="icon" class="h-4 w-4" />
       </div>
@@ -43,7 +43,7 @@ const trendStroke = {
         </div>
       </div>
 
-      <div class="flex h-full items-end justify-end pb-1">
+      <div class="stats-card-trend pointer-events-none absolute right-3 top-2.5 z-0">
         <svg class="h-7 w-[58px] opacity-90" viewBox="0 0 96 40" fill="none" aria-hidden="true">
           <rect x="5" y="29" width="7" height="8" rx="3.5" :fill="trendStroke[tone] || trendStroke.blue" opacity="0.16" />
           <rect x="18" y="24" width="7" height="13" rx="3.5" :fill="trendStroke[tone] || trendStroke.blue" opacity="0.24" />
@@ -57,3 +57,19 @@ const trendStroke = {
     </div>
   </div>
 </template>
+
+<style scoped>
+.stats-card {
+  container-type: inline-size;
+}
+
+.stats-card-layout {
+  grid-template-columns: 34px minmax(0, 1fr);
+  position: relative;
+  z-index: 1;
+}
+
+.stats-card-trend {
+  display: flex;
+}
+</style>

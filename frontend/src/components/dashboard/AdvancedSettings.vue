@@ -28,7 +28,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="rounded-xl border border-[#e8edf5] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+  <div class="ui-card p-3">
     <div class="mb-3 flex items-center justify-between">
       <h3 class="text-[14px] font-semibold text-[#0f172a]">高级设置</h3>
       <span v-if="saved" class="inline-flex items-center gap-1.5 rounded-full bg-[#ecfdf5] px-2 py-0.5 text-[12px] font-medium text-[#059669]">✓ 已保存</span>
@@ -42,7 +42,7 @@ onMounted(load)
         </div>
         <select
           v-model="classifierModelId"
-          class="h-9 w-full rounded-lg border border-[#e2e8f0] bg-white px-3 text-[12px] text-[#0f172a] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#dbeafe]"
+          class="ui-control-h ui-control w-full px-3 text-[12px] text-[#0f172a] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#dbeafe]"
         >
           <option value="">跟随主模型</option>
           <option :value="CLASSIFIER_DISABLED_VALUE">不使用 Classifier</option>

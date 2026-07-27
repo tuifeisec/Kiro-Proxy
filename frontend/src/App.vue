@@ -4,6 +4,7 @@ import StatusBar from './components/layout/StatusBar.vue'
 import TitleBar from './components/layout/TitleBar.vue'
 import ConfirmDialog from './components/common/ConfirmDialog.vue'
 import AdvertisementList from './components/common/AdvertisementList.vue'
+import ToastHost from './components/common/ToastHost.vue'
 import { computed, onMounted, ref } from 'vue'
 import { getLicenseInfo, getUpdateInfo, openExternalURL } from './api/license.js'
 import { useHeartbeat } from './composables/useHeartbeat.js'
@@ -72,6 +73,7 @@ onMounted(() => {
 
 <template>
   <div class="flex h-screen flex-col overflow-hidden bg-white">
+    <ToastHost />
     <TitleBar />
 
     <div v-if="licenseLoaded && !isAuthorized" class="relative flex flex-1 flex-col bg-[#fbfbfc]">

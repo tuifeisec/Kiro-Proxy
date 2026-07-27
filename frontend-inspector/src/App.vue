@@ -306,7 +306,9 @@ async function fetchCAStatus() {
   try {
     const r = await fetch(`http://${location.hostname}:18082/api/ca-status`)
     caStatus.value = await r.json()
-  } catch {}
+  } catch {
+    // 诊断类请求，失败时保持默认值，不影响主流程
+  }
 }
 
 async function installCA() {
@@ -331,10 +333,14 @@ async function installCA() {
   }
 }
 
-// 页面加载时查一次，之后每 5 秒轮询
+// 页面加载时查一次，之后每 5 秒轮询；卸载时清理
+let caTimer = null
 onMounted(() => {
   fetchCAStatus()
-  setInterval(fetchCAStatus, 5000)
+  caTimer = setInterval(fetchCAStatus, 5000)
+})
+onUnmounted(() => {
+  clearInterval(caTimer)
 })
 
 // ── 过滤 ──────────────────────────────────────────────────────────

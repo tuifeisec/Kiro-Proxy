@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdvertisementList from '../components/common/AdvertisementList.vue'
 import { useStats } from '../composables/useStats.js'
 import StatsCard from '../components/dashboard/StatsCard.vue'
@@ -13,36 +13,58 @@ import IconLogs from '../components/icons/IconLogs.vue'
 import IconDashboard from '../components/icons/IconDashboard.vue'
 import IconWifi from '../components/icons/IconWifi.vue'
 import IconArrowRight from '../components/icons/IconArrowRight.vue'
+import IconMore from '../components/icons/IconMore.vue'
+import { useToast } from '../composables/useToast.js'
+import { daysAgo } from '../utils/date.js'
 
 const { stats, loading, error, clearStats, refresh } = useStats()
+const { showToast } = useToast()
 const usageRefreshKey = ref(0)
 const clearStatsBusy = ref(false)
 const showClearStatsModal = ref(false)
 const clearStatsError = ref('')
 const showRangeMenu = ref(false)
 const showMoreMenu = ref(false)
-const selectedRangeLabel = ref('今天')
-const selectedRangeDays = ref(0)
+const rangeMenuRef = ref(null)
+const moreMenuRef = ref(null)
+const selectedRangeLabel = ref('全部')
+const selectedRangeDays = ref(-1)
+const rangeSummary = ref({
+  total_requests: 0,
+  total_errors: 0,
+  total_tokens: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_read_tokens: 0,
+  cache_write_tokens: 0,
+  credits: 0,
+})
 const proxyAccess = ref({ mode: 'local', host: '127.0.0.1' })
 const proxyAccessLoading = ref(false)
+const proxyAccessError = ref('')
 const showProxyAccessConfirm = ref(false)
 const pendingProxyAccessMode = ref('')
 
 const proxyAccessConfirmTitle = computed(() => pendingProxyAccessMode.value === 'lan' ? '切换到局域网代理？' : '切回本地代理？')
-const proxyAccessConfirmMessage = computed(() => pendingProxyAccessMode.value === 'lan'
-  ? '切换到局域网代理后，同一局域网内的其他设备可能访问你的代理端口。\n请确认当前网络可信，并确保不要暴露敏感流量。'
-  : '切换回本地代理后，仅本机使用 127.0.0.1 访问代理，局域网设备将无法继续使用。'
-)
+const proxyAccessConfirmMessage = computed(() => {
+  const message = pendingProxyAccessMode.value === 'lan'
+    ? '切换到局域网代理后，同一局域网内的其他设备可能访问你的代理端口。\n请确认当前网络可信，并确保不要暴露敏感流量。'
+    : '切换回本地代理后，仅本机使用 127.0.0.1 访问代理，局域网设备将无法继续使用。'
+  return proxyAccessError.value ? `${message}\n\n切换失败：${proxyAccessError.value}` : message
+})
 
 async function loadProxyAccess() {
   try {
     const r = await fetch('/api/proxy-access-mode')
     if (r.ok) proxyAccess.value = await r.json()
-  } catch {}
+  } catch {
+    // 诊断类请求，失败时保持默认值 local/127.0.0.1，不影响主流程
+  }
 }
 
 function toggleProxyAccess() {
   if (proxyAccessLoading.value) return
+  proxyAccessError.value = ''
   pendingProxyAccessMode.value = proxyAccess.value.mode === 'lan' ? 'local' : 'lan'
   showProxyAccessConfirm.value = true
 }
@@ -57,29 +79,46 @@ async function confirmProxyAccessToggle() {
       body: JSON.stringify({ mode: pendingProxyAccessMode.value })
     })
     const data = await r.json()
-    if (r.ok) proxyAccess.value = data
-  } catch {
-  } finally {
-    proxyAccessLoading.value = false
+    if (!r.ok) throw new Error(data.error || '切换失败')
+    proxyAccess.value = data
+    proxyAccessError.value = ''
     showProxyAccessConfirm.value = false
     pendingProxyAccessMode.value = ''
+    showToast(data.mode === 'lan' ? '已切换为局域网代理' : '已切换为本地代理')
+  } catch (e) {
+    proxyAccessError.value = e.message || '切换失败'
+    showToast(proxyAccessError.value, { tone: 'error' })
+  } finally {
+    proxyAccessLoading.value = false
   }
 }
 
 function cancelProxyAccessToggle() {
+  if (proxyAccessLoading.value) return
   showProxyAccessConfirm.value = false
   pendingProxyAccessMode.value = ''
+  proxyAccessError.value = ''
 }
 
 onMounted(() => {
   loadProxyAccess()
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
+  document.addEventListener('keydown', handleDocumentKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  document.removeEventListener('keydown', handleDocumentKeydown)
 })
 
 const rangeOptions = [
+  { label: '全部', days: -1 },
   { label: '今天', days: 0 },
-  { label: '最近 7 天', days: 7 },
-  { label: '最近 30 天', days: 30 },
+  { label: '最近 7 天', days: 6 },
+  { label: '最近 30 天', days: 29 },
 ]
+
+const displayedStats = computed(() => selectedRangeDays.value < 0 ? stats.value : rangeSummary.value)
 
 function formatTokens(n) {
   const value = Number(n || 0)
@@ -96,8 +135,8 @@ function formatCredits(n) {
 }
 
 const cacheHitRate = computed(() => {
-  const totalIn = Number(stats.value.input_tokens || 0)
-  const cached = Math.min(Number(stats.value.cache_read_tokens || 0), totalIn)
+  const totalIn = Number(displayedStats.value.input_tokens || 0)
+  const cached = Math.min(Number(displayedStats.value.cache_read_tokens || 0), totalIn)
   if (totalIn === 0) return 0
   return (cached / totalIn) * 100
 })
@@ -105,29 +144,29 @@ const cacheHitRate = computed(() => {
 const cards = computed(() => [
   {
     label: '总请求数',
-    value: Number(stats.value.total_requests || 0).toLocaleString(),
-    sub: `错误 ${stats.value.total_errors || 0} · 今日 +${Number(stats.value.today_requests || 0).toLocaleString()}`,
-    subTone: stats.value.total_errors ? 'danger' : 'neutral',
+    value: Number(displayedStats.value.total_requests || 0).toLocaleString(),
+    sub: `错误 ${displayedStats.value.total_errors || 0} · ${selectedRangeLabel.value}`,
+    subTone: displayedStats.value.total_errors ? 'danger' : 'neutral',
     icon: IconLogs,
     tone: 'blue',
   },
   {
     label: '总 Token',
-    value: formatTokens(stats.value.total_tokens),
-    sub: `今日 ${formatTokens(stats.value.today_total_tokens)} · 输入 ${formatTokens(stats.value.input_tokens)}`,
+    value: formatTokens(displayedStats.value.total_tokens),
+    sub: `输入 ${formatTokens(displayedStats.value.input_tokens)} · 输出 ${formatTokens(displayedStats.value.output_tokens)}`,
     icon: IconDashboard,
     tone: 'green',
   },
   {
     label: '缓存命中',
     value: cacheHitRate.value ? cacheHitRate.value.toFixed(1) + '%' : '—',
-    sub: `命中 ${formatTokens(stats.value.cache_read_tokens)} · 写入 ${formatTokens(stats.value.cache_write_tokens)}`,
+    sub: `命中 ${formatTokens(displayedStats.value.cache_read_tokens)} · 写入 ${formatTokens(displayedStats.value.cache_write_tokens)}`,
     icon: IconWifi,
     tone: 'purple',
   },
   {
     label: 'Credits',
-    value: formatCredits(stats.value.credits),
+    value: formatCredits(displayedStats.value.credits),
     sub: '按模型价格累计',
     icon: IconArrowRight,
     tone: 'amber',
@@ -140,9 +179,26 @@ async function handleRefresh() {
 }
 
 function selectRange(option) {
+  const daysChanged = selectedRangeDays.value !== option.days
   selectedRangeLabel.value = option.label
   selectedRangeDays.value = option.days
+  if (!daysChanged) usageRefreshKey.value++
   showRangeMenu.value = false
+}
+
+function handleUsageSummary(summary) {
+  rangeSummary.value = summary
+}
+
+function handleUsageRangeChange(value) {
+  if (value.all) {
+    selectedRangeLabel.value = '全部'
+    selectedRangeDays.value = -1
+    return
+  }
+  const matched = rangeOptions.find((option) => value.start === daysAgo(option.days) && value.end === daysAgo(0))
+  selectedRangeLabel.value = matched?.label || '自定义'
+  if (matched) selectedRangeDays.value = matched.days
 }
 
 function toggleRangeMenu() {
@@ -153,6 +209,17 @@ function toggleRangeMenu() {
 function toggleMoreMenu() {
   showMoreMenu.value = !showMoreMenu.value
   showRangeMenu.value = false
+}
+
+function handleDocumentPointerDown(event) {
+  if (showRangeMenu.value && !rangeMenuRef.value?.contains(event.target)) showRangeMenu.value = false
+  if (showMoreMenu.value && !moreMenuRef.value?.contains(event.target)) showMoreMenu.value = false
+}
+
+function handleDocumentKeydown(event) {
+  if (event.key !== 'Escape') return
+  showRangeMenu.value = false
+  showMoreMenu.value = false
 }
 
 function handleClearStats() {
@@ -177,6 +244,7 @@ async function confirmClearStats() {
     await refresh()
     usageRefreshKey.value++
     showClearStatsModal.value = false
+    showToast('统计数据已清空')
   } catch (e) {
     clearStatsError.value = e?.message || '清空统计失败，请稍后重试'
   } finally {
@@ -186,9 +254,9 @@ async function confirmClearStats() {
 </script>
 
 <template>
-  <div class="min-h-full bg-[#fbfbfc] px-3 py-3">
-    <div class="mx-auto max-w-[1320px] space-y-3">
-      <header class="flex items-center justify-between gap-3">
+  <div class="ui-page-shell">
+    <div class="ui-page-inner space-y-3">
+      <header class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-2.5">
           <h1 class="text-[22px] font-semibold tracking-tight text-[#0f172a]">仪表盘</h1>
           <span class="text-[12px] text-[#64748b]">Kiro Proxy 运行状态总览</span>
@@ -207,7 +275,7 @@ async function confirmClearStats() {
 
         <div class="flex items-center gap-2">
           <button
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e2e8f0] bg-white px-2.5 text-[12px] font-medium text-[#475569] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98] disabled:opacity-60"
+            class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-[#475569] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98] disabled:opacity-60"
             :disabled="loading"
             @click="handleRefresh"
           >
@@ -220,9 +288,11 @@ async function confirmClearStats() {
             {{ loading ? '刷新中' : '刷新' }}
           </button>
 
-          <div class="relative">
+          <div ref="rangeMenuRef" class="relative">
             <button
-              class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e2e8f0] bg-white px-2.5 text-[12px] font-medium text-[#475569] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98]"
+              class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-[#475569] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98]"
+              :aria-expanded="showRangeMenu"
+              aria-haspopup="menu"
               @click="toggleRangeMenu"
             >
               {{ selectedRangeLabel }}
@@ -249,19 +319,25 @@ async function confirmClearStats() {
             </div>
           </div>
 
-          <span class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#dcfce7] bg-white px-2.5 text-[12px] font-medium text-[#059669] shadow-sm">
-            <span class="h-1.5 w-1.5 rounded-full bg-[#22c55e]"></span>
-            运行中
+          <span
+            class="inline-flex ui-control-h ui-control items-center gap-1.5 bg-white px-2.5 text-[12px] font-medium shadow-sm"
+            :class="error ? 'border-[#fecaca] text-[#dc2626]' : loading ? 'border-[#bfdbfe] text-[#2563eb]' : 'border-[#dcfce7] text-[#059669]'"
+          >
+            <span class="h-1.5 w-1.5 rounded-full" :class="error ? 'bg-[#ef4444]' : loading ? 'animate-pulse bg-[#3b82f6]' : 'bg-[#22c55e]'"></span>
+            {{ error ? '状态异常' : loading ? '检查中' : '运行中' }}
           </span>
 
-          <div class="relative">
+          <div ref="moreMenuRef" class="relative">
             <button
-              class="flex h-8 w-8 items-center justify-center rounded-lg border border-[#e2e8f0] bg-white text-[#64748b] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98]"
+              class="flex h-8 w-8 items-center justify-center ui-control bg-white text-[#64748b] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98]"
+              aria-label="更多操作"
+              :aria-expanded="showMoreMenu"
+              aria-haspopup="menu"
               @click="toggleMoreMenu"
             >
-              ···
+              <IconMore class="h-4 w-4" />
             </button>
-            <div v-if="showMoreMenu" class="absolute right-0 top-9 z-20 w-28 overflow-hidden rounded-lg border border-[#e2e8f0] bg-white py-1 text-[12px] shadow-lg">
+            <div v-if="showMoreMenu" class="absolute right-0 top-9 z-20 w-28 overflow-hidden ui-control bg-white py-1 text-[12px] shadow-lg">
               <button class="block w-full px-3 py-1.5 text-left text-[#475569] hover:bg-[#f8fafc]" @click="handleRefresh">刷新数据</button>
               <button class="block w-full px-3 py-1.5 text-left text-[#dc2626] hover:bg-[#fef2f2]" @click="handleClearStats">清空统计</button>
             </div>
@@ -273,26 +349,32 @@ async function confirmClearStats() {
         <AdvertisementList />
       </section>
 
-      <p v-if="error" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">统计加载失败：{{ error }}</p>
+      <p v-if="error" class="ui-status-danger rounded-lg border border-[#fecaca] px-3 py-2 text-[12px]">统计加载失败：{{ error }}</p>
+      <p v-if="proxyAccessError" class="ui-status-danger rounded-lg border border-[#fecaca] px-3 py-2 text-[12px]">代理模式切换失败：{{ proxyAccessError }}</p>
 
-      <section class="grid grid-cols-4 gap-2.5">
+      <section class="dashboard-stats-grid grid gap-2.5">
         <StatsCard v-for="card in cards" :key="card.label" v-bind="card" />
       </section>
 
-      <section class="grid grid-cols-[1fr_320px] gap-3">
-        <div class="space-y-3">
-          <div class="grid grid-cols-3 gap-3">
+      <section class="grid min-w-0 grid-cols-1 gap-3 min-[1240px]:grid-cols-[minmax(0,1fr)_280px]">
+        <div class="min-w-0 space-y-3">
+          <div class="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3">
             <ServiceStatus />
             <CAStatus />
             <ProxyConfig />
           </div>
-          <UsageBreakdown :refresh-key="usageRefreshKey" :days="selectedRangeDays" />
+          <UsageBreakdown
+            :refresh-key="usageRefreshKey"
+            :days="selectedRangeDays"
+            @summary="handleUsageSummary"
+            @range-change="handleUsageRangeChange"
+          />
         </div>
 
-        <aside class="space-y-3">
+        <aside class="min-w-0 space-y-3">
           <AdvancedSettings />
 
-          <div class="rounded-xl border border-[#fecaca] bg-[#fffafa] p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <div class="ui-card bg-[#fffafa] p-3">
             <div class="mb-2.5 flex items-center gap-2 text-[#dc2626]">
               <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none">
                 <path d="M10 6v4.5m0 3h.01M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -301,7 +383,7 @@ async function confirmClearStats() {
             </div>
             <p class="mb-3 text-[12px] leading-4 text-[#7f1d1d]">此操作不可逆，请谨慎操作。</p>
             <button
-              class="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-[#fecaca] bg-white text-[12px] font-semibold text-[#dc2626] transition hover:bg-[#fef2f2] disabled:cursor-not-allowed disabled:opacity-60"
+              class="inline-flex ui-control-h ui-control w-full items-center justify-center gap-2 border-[#fecaca] bg-white text-[12px] font-semibold text-[#dc2626] transition hover:bg-[#fef2f2] disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="loading || clearStatsBusy"
               @click="handleClearStats"
             >
@@ -336,7 +418,7 @@ async function confirmClearStats() {
             <h2 class="text-base font-semibold text-[#111827]">确认清空统计？</h2>
             <p class="mt-1 text-xs leading-5 text-[#6b7280]">此操作会清空请求、Token、Credits 和用量明细。清空后历史统计无法恢复。</p>
           </div>
-          <button class="ml-auto text-[#94a3b8] hover:text-[#475569]" :disabled="clearStatsBusy" @click="closeClearStatsModal">×</button>
+          <button class="ml-auto text-[#94a3b8] hover:text-[#475569]" aria-label="关闭确认窗口" :disabled="clearStatsBusy" @click="closeClearStatsModal">×</button>
         </div>
 
         <div class="space-y-2 p-4">
@@ -375,7 +457,26 @@ async function confirmClearStats() {
     :confirm-text="pendingProxyAccessMode === 'lan' ? '确认切换' : '确认切回'"
     cancel-text="取消"
     :tone="pendingProxyAccessMode === 'lan' ? 'danger' : 'primary'"
+    :busy="proxyAccessLoading"
     @confirm="confirmProxyAccessToggle"
     @cancel="cancelProxyAccessToggle"
   />
 </template>
+
+<style scoped>
+.dashboard-stats-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .dashboard-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1180px) {
+  .dashboard-stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+</style>

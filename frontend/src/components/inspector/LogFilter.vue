@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
+import IconSearch from '../icons/IconSearch.vue'
 
 defineProps({
   total: { type: Number, default: 0 },
@@ -19,7 +20,7 @@ watch([search, level, includeDetail], () => {
 <template>
   <div class="flex shrink-0 items-center gap-2 border-b border-[#e5e7eb] bg-white px-3 py-2">
     <div class="relative min-w-0 flex-1">
-      <span class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[#9ca3af]">⌕</span>
+      <IconSearch class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#9ca3af]" />
       <input
         v-model="search"
         class="h-8 w-full rounded-lg border border-[#e5e7eb] bg-[#f9fafb] pl-7 pr-3 text-xs text-[#111827] outline-none transition-colors placeholder:text-[#9ca3af] focus:border-[#93c5fd] focus:bg-white focus:ring-2 focus:ring-[#dbeafe]"

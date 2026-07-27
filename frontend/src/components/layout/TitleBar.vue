@@ -23,6 +23,7 @@ function startDrag(event) {
     <div class="titlebar-controls h-full flex items-center pr-1 gap-1">
       <button
         class="w-8 h-8 flex items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#111827] transition-colors"
+        aria-label="隐藏到后台"
         title="隐藏到后台"
         @click="callDesktop('desktopWindowMinimize')"
       >
@@ -32,6 +33,7 @@ function startDrag(event) {
       </button>
       <button
         class="w-8 h-8 flex items-center justify-center rounded-md text-[#6b7280] hover:bg-[#fee2e2] hover:text-[#dc2626] transition-colors"
+        aria-label="关闭到后台"
         title="关闭到后台"
         @click="callDesktop('desktopWindowClose')"
       >

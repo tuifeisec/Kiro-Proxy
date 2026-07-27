@@ -5,6 +5,8 @@ import ModelRow from '../components/models/ModelRow.vue'
 import ModelForm from '../components/models/ModelForm.vue'
 import IconPlus from '../components/icons/IconPlus.vue'
 import IconModels from '../components/icons/IconModels.vue'
+import IconSearch from '../components/icons/IconSearch.vue'
+import { useToast } from '../composables/useToast.js'
 
 const models = ref([])
 const showForm = ref(false)
@@ -24,6 +26,7 @@ const searchText = ref('')
 const providerFilter = ref('all')
 const statusFilter = ref('all')
 const hidePrivateInfo = ref(false)
+const { showToast } = useToast()
 
 const providerOptions = [
   { value: 'all', label: '全部 Provider' },
@@ -163,6 +166,8 @@ function openEdit(m) {
 }
 
 async function handleSave(form) {
+  if (saving.value) return
+  const updating = Boolean(editingModel.value?.id)
   saving.value = true
   errorMessage.value = ''
   try {
@@ -173,8 +178,10 @@ async function handleSave(form) {
     }
     showForm.value = false
     await loadModels()
+    showToast(updating ? '模型配置已保存' : '模型已添加')
   } catch (e) {
     errorMessage.value = e?.message || '保存失败'
+    showToast(errorMessage.value, { tone: 'error' })
   } finally {
     saving.value = false
   }
@@ -203,8 +210,10 @@ async function confirmDelete() {
     showDeleteModal.value = false
     deleteTarget.value = null
     await loadModels()
+    showToast('模型已删除')
   } catch (e) {
     deleteError.value = e?.message || '删除失败'
+    showToast(deleteError.value, { tone: 'error' })
   } finally {
     deletingModel.value = false
   }
@@ -219,8 +228,10 @@ async function handleToggleEnabled(m) {
     await updateModel(m.id, { ...m, enabled: nextEnabled })
     m.enabled = nextEnabled
     await loadModels()
+    showToast(nextEnabled ? '模型已启用' : '模型已禁用')
   } catch (e) {
     errorMessage.value = e?.message || '切换启用状态失败'
+    showToast(errorMessage.value, { tone: 'error' })
   } finally {
     togglingEnabledIds.value[m.id] = false
   }
@@ -232,9 +243,11 @@ async function handleTest(m) {
     const result = await testModel(m.id, m.model_id)
     testResults.value[m.id] = { ...result, tested_at: new Date().toISOString() }
     persistTestResults()
+    showToast(result.ok ? '模型连接测试成功' : (result.error || '模型连接测试失败'), { tone: result.ok ? 'success' : 'error' })
   } catch (e) {
     testResults.value[m.id] = { ok: false, error: e.message, tested_at: new Date().toISOString() }
     persistTestResults()
+    showToast(e.message || '模型连接测试失败', { tone: 'error' })
   } finally {
     testingIds.value[m.id] = false
   }
@@ -246,8 +259,10 @@ async function handleRefreshCodex(m) {
   try {
     await refreshCodexModel(m.id)
     await loadModels()
+    showToast('Codex 账户信息已刷新')
   } catch (e) {
     errorMessage.value = e?.message || '刷新 Codex 信息失败'
+    showToast(errorMessage.value, { tone: 'error' })
   } finally {
     refreshingCodexIds.value[m.id] = false
   }
@@ -261,8 +276,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto bg-[#fbfbfc] px-3 py-3">
-    <div class="mx-auto max-w-[1320px] space-y-3">
+  <div class="ui-page-shell h-full overflow-y-auto">
+    <div class="ui-page-inner space-y-3">
       <header class="flex items-start justify-between gap-4 px-1 pt-1">
         <div class="min-w-0">
           <h1 class="text-[22px] font-semibold leading-7 tracking-tight text-[#111827]">模型配置</h1>
@@ -273,23 +288,23 @@ onMounted(() => {
           <div class="relative">
             <input
               v-model="searchText"
-              class="h-9 w-[280px] rounded-lg border border-[#edf0f5] bg-white pl-9 pr-10 text-[12px] text-[#111827] shadow-sm outline-none transition focus:border-[#bfdbfe] focus:ring-2 focus:ring-[#eff6ff] lg:w-[330px]"
+              class="ui-control-h ui-control w-[280px] pl-9 pr-10 text-[12px] text-[#111827] shadow-sm outline-none transition focus:border-[#bfdbfe] focus:ring-2 focus:ring-[#eff6ff] lg:w-[330px]"
               placeholder="搜索模型名称、ID 或 Provider..."
             />
-            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-[#9ca3af]">⌕</span>
+            <IconSearch class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9ca3af]" />
             <span class="absolute right-3 top-1/2 -translate-y-1/2 rounded border border-[#edf0f5] px-1.5 py-[1px] text-[10px] text-[#9ca3af]">Ctrl K</span>
           </div>
 
           <select
             v-model="providerFilter"
-            class="h-9 rounded-lg border border-[#edf0f5] bg-white px-3 text-[12px] text-[#374151] shadow-sm outline-none"
+            class="ui-control-h ui-control px-3 text-[12px] text-[#374151] shadow-sm outline-none"
           >
             <option v-for="option in providerOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
 
           <select
             v-model="statusFilter"
-            class="h-9 rounded-lg border border-[#edf0f5] bg-white px-3 text-[12px] text-[#374151] shadow-sm outline-none"
+            class="ui-control-h ui-control px-3 text-[12px] text-[#374151] shadow-sm outline-none"
           >
             <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
@@ -308,7 +323,8 @@ onMounted(() => {
           </button>
 
           <button
-            class="flex h-9 w-9 items-center justify-center rounded-xl border border-[#e6ebf2] bg-white text-[#475569] shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#111827] disabled:cursor-not-allowed disabled:opacity-70"
+            class="ui-control-h flex w-8 items-center justify-center ui-control border-[#e6ebf2] bg-white text-[#475569] shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#111827] disabled:cursor-not-allowed disabled:opacity-70"
+            :aria-label="loadingModels ? '刷新中' : '刷新模型列表'"
             :title="loadingModels ? '刷新中...' : '刷新模型列表'"
             :disabled="loadingModels"
             @click="loadModels"
@@ -331,7 +347,7 @@ onMounted(() => {
           </button>
 
           <button
-            class="flex h-9 items-center gap-2 rounded-xl bg-[#1677ff] px-4 text-[13px] font-semibold leading-none text-white shadow-[0_6px_14px_rgba(22,119,255,0.24)] transition hover:bg-[#0958d9] hover:shadow-[0_8px_18px_rgba(22,119,255,0.28)] active:scale-[0.98]"
+            class="ui-primary-h flex items-center gap-2 ui-primary-button px-4 text-[13px] font-semibold leading-none shadow-[0_6px_14px_rgba(22,119,255,0.24)] transition hover:shadow-[0_8px_18px_rgba(22,119,255,0.28)] active:scale-[0.98]"
             @click="openAdd"
           >
             <IconPlus class="h-4 w-4" />
@@ -340,7 +356,7 @@ onMounted(() => {
         </div>
       </header>
 
-      <section class="grid grid-cols-5 overflow-hidden rounded-xl border border-[#edf0f5] bg-white shadow-sm">
+      <section class="ui-card grid grid-cols-2 overflow-hidden sm:grid-cols-3 lg:grid-cols-5">
         <div
           v-for="(item, index) in summaryItems"
           :key="item.label"
@@ -388,7 +404,7 @@ onMounted(() => {
         {{ errorMessage }}
       </div>
 
-      <section v-if="models.length > 0" class="overflow-hidden rounded-xl border border-[#edf0f5] bg-white shadow-sm">
+      <section v-if="models.length > 0" class="overflow-hidden ui-card">
         <div class="overflow-x-auto">
           <div class="grid min-w-[1153px] grid-cols-[48px_205px_400px_225px_133px_142px] border-b border-[#edf0f5] bg-[#f8fafc] text-[13px] font-medium leading-5 text-[#64748b]">
             <div class="px-3 py-2.5 text-center"> </div>

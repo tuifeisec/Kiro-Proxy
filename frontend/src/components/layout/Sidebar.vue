@@ -49,11 +49,15 @@ onMounted(async () => {
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
-        class="w-10 h-10 flex items-center justify-center rounded-lg text-[#6b7280] hover:text-[#111827] hover:bg-[#e5e7eb] transition-colors"
+        class="group relative flex h-10 w-10 items-center justify-center rounded-lg text-[#6b7280] transition-colors hover:bg-[#e5e7eb] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#93c5fd]"
         :class="{ 'text-[#10b981] bg-[#ecfdf5]': route.path === item.path }"
+        :aria-label="item.label"
         :title="item.label"
       >
         <component :is="item.icon" />
+        <span class="pointer-events-none absolute left-12 z-50 whitespace-nowrap rounded-md bg-[#0f172a] px-2 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+          {{ item.label }}
+        </span>
       </router-link>
     </nav>
 

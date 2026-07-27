@@ -180,6 +180,7 @@ function usedText(row) {
           :class="isEnabled
             ? 'border-[#bfdbfe] bg-[#eff6ff] text-[#1677ff] shadow-[0_1px_2px_rgba(22,119,255,0.16)] hover:border-[#93c5fd] hover:bg-[#dbeafe]'
             : 'border-[#e5e7eb] bg-white text-[#94a3b8] hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#64748b]'"
+          :aria-label="togglingEnabled ? '切换中' : (isEnabled ? '禁用模型' : '启用模型')"
           :title="togglingEnabled ? '切换中...' : (isEnabled ? '点击禁用模型' : '点击启用模型')"
           :disabled="togglingEnabled"
           @click="emit('toggle-enabled')"
@@ -254,24 +255,24 @@ function usedText(row) {
 
       <div class="flex items-center justify-start gap-1.5 px-1 whitespace-nowrap">
         <button
-          class="inline-flex h-[30px] min-w-[62px] shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#e5e7eb] bg-white px-2 text-[12px] font-medium leading-none text-[#374151] hover:border-[#bfdbfe] hover:bg-[#eff6ff] hover:text-[#2563eb] disabled:opacity-50"
+          class="inline-flex h-[30px] min-w-[62px] shrink-0 items-center justify-center gap-1 ui-control bg-white px-2 text-[12px] font-medium leading-none text-[#374151] hover:border-[#bfdbfe] hover:bg-[#eff6ff] hover:text-[#2563eb] disabled:opacity-50"
           :disabled="testing || !isEnabled"
           @click="emit('test')"
         >
           <IconPlay class="h-3 w-3 shrink-0" />
           <span>{{ testing ? '测试中' : '测试' }}</span>
         </button>
-        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[6px] border border-[#e5e7eb] bg-white text-[#64748b] hover:bg-[#f8fafc] hover:text-[#111827]" title="编辑" @click="emit('edit')">
+        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center ui-control bg-white text-[#64748b] hover:bg-[#f8fafc] hover:text-[#111827]" title="编辑" aria-label="编辑" @click="emit('edit')">
           <IconEdit class="h-3.5 w-3.5" />
         </button>
-        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[6px] border border-[#e5e7eb] bg-white text-[#64748b] hover:border-[#fecaca] hover:bg-[#fef2f2] hover:text-[#ef4444]" title="删除" @click="emit('delete')">
+        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center ui-control bg-white text-[#64748b] hover:border-[#fecaca] hover:bg-[#fef2f2] hover:text-[#ef4444]" title="删除" aria-label="删除" @click="emit('delete')">
           <IconTrash class="h-3.5 w-3.5" />
         </button>
       </div>
     </div>
 
     <div v-if="provider === 'codex'" class="min-w-[1153px] px-4 pb-4">
-      <div class="ml-[48px] grid grid-cols-[245px_1fr_170px_165px] overflow-hidden rounded-xl border border-[#edf0f5] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div class="ml-[48px] grid grid-cols-[245px_1fr_170px_165px] overflow-hidden ui-card bg-white">
         <div class="border-r border-[#edf0f5] px-4 py-4 text-[12px]">
           <div class="mb-3 font-semibold text-[#111827]">账户信息</div>
           <div class="grid grid-cols-[70px_minmax(0,1fr)] gap-y-2 leading-4">
@@ -316,11 +317,12 @@ function usedText(row) {
           <div class="mb-2 font-semibold text-[#111827]">最新状态</div>
           <div class="mb-4 flex items-center gap-1.5 text-[#059669]"><span class="h-[7px] w-[7px] rounded-full bg-[#10b981]"></span>成功</div>
           <button
-            class="inline-flex h-[30px] items-center gap-1 rounded-[6px] border border-[#dbeafe] bg-white px-3 text-[12px] font-medium text-[#2563eb] hover:bg-[#eff6ff] disabled:opacity-50"
+            class="inline-flex h-[30px] items-center gap-1 ui-control px-3 text-[12px] font-medium text-[#2563eb] hover:bg-[#eff6ff] disabled:opacity-50"
             :disabled="refreshingCodex"
             @click="emit('refresh-codex')"
           >
-            ↻ {{ refreshingCodex ? '刷新中...' : '刷新信息' }}
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+            {{ refreshingCodex ? '刷新中...' : '刷新信息' }}
           </button>
         </div>
       </div>

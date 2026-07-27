@@ -1,8 +1,9 @@
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { startCodexOAuth, exchangeCodexOAuth } from '../../api/models.js'
 import IconEye from '../icons/IconEye.vue'
 import IconEyeOff from '../icons/IconEyeOff.vue'
+import ConfirmDialog from '../common/ConfirmDialog.vue'
 
 const props = defineProps({
   model: { type: Object, default: null },
@@ -43,9 +44,16 @@ const oauthLoading = ref(false)
 const oauthAuthUrl = ref('')
 const oauthCallbackUrl = ref('')
 const oauthError = ref('')
+const modalRef = ref(null)
+const initialSnapshot = ref('')
+const discardConfirmVisible = ref(false)
+let lastFocused = null
+
+const isDirty = computed(() => Boolean(initialSnapshot.value) && JSON.stringify(form.value) !== initialSnapshot.value)
 
 watch(() => props.visible, (val) => {
   if (val) {
+    lastFocused = document.activeElement
     loadingModel.value = true
     if (props.model) {
       form.value = { ...defaultForm(), ...props.model }
@@ -57,8 +65,61 @@ watch(() => props.visible, (val) => {
     oauthCallbackUrl.value = ''
     oauthError.value = ''
     loadingModel.value = false
+    document.addEventListener('keydown', onKeydown)
+    nextTick(() => {
+      initialSnapshot.value = JSON.stringify(form.value)
+      modalRef.value?.querySelector('input, select, textarea')?.focus()
+    })
+  } else {
+    document.removeEventListener('keydown', onKeydown)
+    discardConfirmVisible.value = false
+    initialSnapshot.value = ''
+    lastFocused?.focus?.()
   }
 })
+
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
+
+function trapFocus(event) {
+  if (event.key !== 'Tab' || !modalRef.value) return
+  const focusables = Array.from(modalRef.value.querySelectorAll(
+    'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+  )).filter((element) => element.offsetParent !== null)
+  if (!focusables.length) return
+  const first = focusables[0]
+  const last = focusables[focusables.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function onKeydown(event) {
+  if (discardConfirmVisible.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    requestCancel()
+    return
+  }
+  trapFocus(event)
+}
+
+function closeForm() {
+  discardConfirmVisible.value = false
+  emit('cancel')
+}
+
+function requestCancel() {
+  if (props.saving) return
+  if (isDirty.value) {
+    discardConfirmVisible.value = true
+    return
+  }
+  closeForm()
+}
 
 watch(() => form.value.provider, (val) => {
   const options = val === 'anthropic'
@@ -220,12 +281,12 @@ async function handleExchangeOAuth() {
 <template>
   <Teleport to="body">
     <div v-if="visible" class="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4 py-6">
-      <div class="absolute inset-0" @click="emit('cancel')"></div>
+      <div class="absolute inset-0" @click="requestCancel"></div>
 
-      <div class="relative flex max-h-[86vh] w-full max-w-[900px] flex-col overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-xl">
+      <div ref="modalRef" role="dialog" aria-modal="true" aria-labelledby="model-form-title" class="relative flex max-h-[86vh] w-full max-w-[900px] flex-col overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-xl">
         <div class="flex shrink-0 items-center justify-between px-4 py-3">
           <div class="flex items-center gap-3">
-            <h2 class="text-lg font-semibold text-[#111827]">
+            <h2 id="model-form-title" class="text-lg font-semibold text-[#111827]">
               {{ model ? '编辑模型' : '新增模型' }}
             </h2>
             <span class="rounded-md bg-[#eef2ff] px-2 py-0.5 text-[11px] font-medium text-[#64748b]">配置上游通道</span>
@@ -235,7 +296,7 @@ async function handleExchangeOAuth() {
             class="flex h-7 w-7 items-center justify-center rounded-full text-xl leading-none text-[#111827] hover:bg-[#f3f4f6] disabled:opacity-50"
             :disabled="saving"
             aria-label="关闭"
-            @click="emit('cancel')"
+            @click="requestCancel"
           >×</button>
         </div>
 
@@ -332,7 +393,7 @@ async function handleExchangeOAuth() {
                   <div v-if="oauthAuthUrl" class="space-y-2">
                     <a :href="oauthAuthUrl" target="_blank" rel="noopener noreferrer" class="inline-flex text-xs text-[#2563eb] hover:underline">打开授权链接</a>
                     <input :value="oauthAuthUrl" readonly
-                      class="w-full rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#6b7280] focus:outline-none" />
+                      class="w-full rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#6b7280] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]" />
                   </div>
 
                   <div class="space-y-2">
@@ -529,11 +590,22 @@ async function handleExchangeOAuth() {
             </div>
           </div>
           <button type="button" class="h-9 rounded-md border border-[#e5e7eb] bg-white px-7 text-xs text-[#374151] shadow-sm hover:bg-[#f9fafb] disabled:opacity-50"
-            :disabled="saving" @click="emit('cancel')">取消</button>
+            :disabled="saving" @click="requestCancel">取消</button>
           <button type="button" class="h-9 rounded-md bg-[#2563eb] px-7 text-xs font-medium text-white shadow-sm hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</button>
         </div>
       </div>
     </div>
   </Teleport>
+
+  <ConfirmDialog
+    :visible="discardConfirmVisible"
+    title="放弃未保存的修改？"
+    message="当前表单内容尚未保存，关闭后这些修改将丢失。"
+    confirm-text="放弃修改"
+    cancel-text="继续编辑"
+    tone="danger"
+    @confirm="closeForm"
+    @cancel="discardConfirmVisible = false"
+  />
 </template>
