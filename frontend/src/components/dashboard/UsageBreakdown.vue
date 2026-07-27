@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useDailyStats } from '../../composables/useStats.js'
 import IconRefresh from '../icons/IconRefresh.vue'
-import { ALL_STATS_START_DATE, daysAgo } from '../../utils/date.js'
+import { ALL_STATS_START_DATE, statsDaysAgo } from '../../utils/date.js'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -17,8 +17,8 @@ const startDate = ref('')
 const endDate = ref('')
 
 function applyDaysRange() {
-  startDate.value = isAllRange.value ? ALL_STATS_START_DATE : daysAgo(props.days)
-  endDate.value = daysAgo(0)
+  startDate.value = isAllRange.value ? ALL_STATS_START_DATE : statsDaysAgo(props.days)
+  endDate.value = statsDaysAgo(0)
 }
 
 applyDaysRange()

@@ -7,13 +7,13 @@ import IconDashboard from '../components/icons/IconDashboard.vue'
 import IconWifi from '../components/icons/IconWifi.vue'
 import IconArrowRight from '../components/icons/IconArrowRight.vue'
 import IconRefresh from '../components/icons/IconRefresh.vue'
-import { daysAgo } from '../utils/date.js'
+import { statsDaysAgo } from '../utils/date.js'
 
 const { rows, loading, error, range, load } = useDailyStats()
 
 const activeRange = ref('7d')
-const startDate = ref(daysAgo(6))
-const endDate = ref(daysAgo(0))
+const startDate = ref(statsDaysAgo(6))
+const endDate = ref(statsDaysAgo(0))
 const selectedDate = ref('')
 const selectedDateLogs = ref([])
 const logsLoading = ref(false)
@@ -65,8 +65,8 @@ function resetSelectedDate() {
 function applyQuickRange(option) {
   validationError.value = ''
   activeRange.value = option.key
-  startDate.value = daysAgo(option.days)
-  endDate.value = daysAgo(0)
+  startDate.value = statsDaysAgo(option.days)
+  endDate.value = statsDaysAgo(0)
   resetSelectedDate()
   refresh()
 }

@@ -68,3 +68,6 @@ jilu/*.json
 # One-off local scripts
 test_sse.ps1
 install-ca.ps1
+
+# Cloned external study project (juhe-ai) — do not push to GitHub
+xuexi/

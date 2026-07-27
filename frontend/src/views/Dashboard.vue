@@ -15,7 +15,7 @@ import IconWifi from '../components/icons/IconWifi.vue'
 import IconArrowRight from '../components/icons/IconArrowRight.vue'
 import IconMore from '../components/icons/IconMore.vue'
 import { useToast } from '../composables/useToast.js'
-import { daysAgo } from '../utils/date.js'
+import { statsDaysAgo } from '../utils/date.js'
 
 const { stats, loading, error, clearStats, refresh } = useStats()
 const { showToast } = useToast()
@@ -196,7 +196,7 @@ function handleUsageRangeChange(value) {
     selectedRangeDays.value = -1
     return
   }
-  const matched = rangeOptions.find((option) => value.start === daysAgo(option.days) && value.end === daysAgo(0))
+  const matched = rangeOptions.find((option) => value.start === statsDaysAgo(option.days) && value.end === statsDaysAgo(0))
   selectedRangeLabel.value = matched?.label || '自定义'
   if (matched) selectedRangeDays.value = matched.days
 }
