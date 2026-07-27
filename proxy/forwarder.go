@@ -16,6 +16,7 @@ import (
 	"kiro-proxy/upstreamproxy"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,9 +25,12 @@ import (
 )
 
 const (
-	maxRetries     = 1
-	retryBaseDelay = 200 * time.Millisecond
-	// 两次请求各允许等待 60 秒，并预留重试间隔和少量调度开销。
+	maxRetries           = 3
+	maxTransportRetries  = 1
+	transportRetryDelay  = 200 * time.Millisecond
+	statusRetryBaseDelay = time.Second
+	maxRetryDelay        = 10 * time.Second
+	// 网络异常仍只重试一次；快速返回的 502/503/504 最多重试三次。
 	retryBudget      = 125 * time.Second
 	defaultMaxTokens = 200000
 )
@@ -183,13 +187,16 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
 	lastErr := context.DeadlineExceeded
 	deadline := time.Now().Add(retryBudget)
+	transportRetries := 0
+	statusRetries := 0
+	nextRetryDelay := time.Duration(0)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
 		if attempt > 0 {
-			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
+			delay := nextRetryDelay
 			logger.Warn("forwarder", fmt.Sprintf("重试 %d/%d，等待 %v", attempt, maxRetries, delay))
 			select {
 			case <-time.After(delay):
@@ -209,15 +216,23 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 				return nil, ctx.Err()
 			}
 			logger.Error("forwarder", fmt.Sprintf("请求失败 (attempt %d): %v", attempt, err))
+			transportRetries++
+			if transportRetries > maxTransportRetries {
+				return nil, fmt.Errorf("上游失败（网络重试 %d 次）: %w", maxTransportRetries, lastErr)
+			}
+			nextRetryDelay = transportRetryDelay
 			continue
 		}
 
 		if shouldRetryUpstreamStatus(resp.StatusCode) && attempt < maxRetries {
+			statusRetries++
+			nextRetryDelay = upstreamStatusRetryDelay(statusRetries, resp.Header.Get("Retry-After"))
 			if resp.ContentLength >= 0 && resp.ContentLength <= 32*1024 {
 				_, _ = io.Copy(io.Discard, resp.Body)
 			}
 			resp.Body.Close()
 			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
+			logger.Warn("forwarder", fmt.Sprintf("上游返回 %d（第 %d/%d 次请求），准备重试", resp.StatusCode, attempt+1, maxRetries+1))
 			continue
 		}
 		return resp, nil
@@ -227,6 +242,32 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 
 func shouldRetryUpstreamStatus(status int) bool {
 	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func upstreamStatusRetryDelay(retryNumber int, retryAfter string) time.Duration {
+	retryAfter = strings.TrimSpace(retryAfter)
+	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+		return minRetryDelay(time.Duration(seconds) * time.Second)
+	}
+	if retryAt, err := http.ParseTime(retryAfter); err == nil {
+		return minRetryDelay(time.Until(retryAt))
+	}
+
+	if retryNumber < 1 {
+		retryNumber = 1
+	}
+	delay := statusRetryBaseDelay * time.Duration(1<<(retryNumber-1))
+	return minRetryDelay(delay)
+}
+
+func minRetryDelay(delay time.Duration) time.Duration {
+	if delay < 0 {
+		return 0
+	}
+	if delay > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return delay
 }
 
 func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *store.Model, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
