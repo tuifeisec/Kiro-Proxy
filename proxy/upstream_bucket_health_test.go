@@ -1,12 +1,25 @@
 package proxy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"kiro-proxy/store"
 )
+
+func TestPrecommitFailureClassificationSeparatesProtocolAndTransport(t *testing.T) {
+	protocolErr := fmt.Errorf("probe: %w", errSSEPrecommitUpstream)
+	if !isUpstreamProtocolFailure(protocolErr) || isUpstreamTransportFailure(protocolErr) {
+		t.Fatalf("explicit upstream failure classified incorrectly: %v", protocolErr)
+	}
+
+	missingEventErr := fmt.Errorf("probe: %w", errSSEPrecommitMissingEvent)
+	if isUpstreamProtocolFailure(missingEventErr) || !isUpstreamTransportFailure(missingEventErr) {
+		t.Fatalf("truncated stream classified incorrectly: %v", missingEventErr)
+	}
+}
 
 func TestUpstreamBucketSingleModelFailureDoesNotOpen(t *testing.T) {
 	health := testUpstreamBucketHealth(8)

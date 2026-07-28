@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -84,5 +85,45 @@ func TestCopyChatStreamAsResponses(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "response.output_text.delta") || !strings.Contains(rr.Body.String(), "response.completed") {
 		t.Fatalf("missing Responses events: %s", rr.Body.String())
+	}
+}
+
+func TestCopyChatStreamAsResponsesRejectsMissingTerminal(t *testing.T) {
+	stream := "data: {\"id\":\"chatcmpl_2\",\"model\":\"gpt-5.6-sol\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+	rr := httptest.NewRecorder()
+
+	_, err := copyChatStreamAsResponses(rr, strings.NewReader(stream))
+	if err == nil {
+		t.Fatal("expected missing terminal error")
+	}
+	if !strings.Contains(rr.Body.String(), "response.failed") {
+		t.Fatalf("missing controlled failure event: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "response.completed") {
+		t.Fatalf("truncated Chat stream must not be completed: %s", rr.Body.String())
+	}
+}
+
+func TestAggregateResponsesSSERejectsFailureTerminal(t *testing.T) {
+	stream := "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_1\",\"status\":\"failed\"}}\n\n"
+
+	body, _, err := aggregateResponsesSSE(strings.NewReader(stream))
+	if err == nil {
+		t.Fatal("expected failed terminal error")
+	}
+	if !errors.Is(err, errLocalCompatStreamProtocol) {
+		t.Fatalf("error = %v, want protocol classification", err)
+	}
+	if body != nil {
+		t.Fatalf("failed stream returned a response body: %s", body)
+	}
+}
+
+func TestAggregateResponsesSSERequiresCompletedTerminal(t *testing.T) {
+	stream := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n\n"
+
+	_, _, err := aggregateResponsesSSE(strings.NewReader(stream))
+	if err == nil || !strings.Contains(err.Error(), "response.completed") {
+		t.Fatalf("expected missing response.completed error, got %v", err)
 	}
 }

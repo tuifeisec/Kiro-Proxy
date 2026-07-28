@@ -500,10 +500,13 @@ func (r *cancelReadCloser) Close() error {
 	return err
 }
 
+type responsePrecommitProbe func(context.Context, *http.Response, time.Duration) error
+
 func requestWithFirstByteTimeout(
 	parent context.Context,
 	timeout time.Duration,
 	send func(context.Context) (*http.Response, error),
+	probe responsePrecommitProbe,
 ) (*http.Response, time.Duration, error) {
 	if timeout <= 0 {
 		resp, err := send(parent)
@@ -551,9 +554,18 @@ func requestWithFirstByteTimeout(
 		_ = resp.Body.Close()
 		return nil, 0, errFirstByteTimeout
 	}
-	if err := waitForUpstreamFirstByte(resp, remaining); err != nil {
+	var waitErr error
+	if probe != nil {
+		waitErr = probe(attemptCtx, resp, remaining)
+	} else {
+		waitErr = waitForUpstreamFirstByte(resp, remaining)
+	}
+	if waitErr != nil {
 		_ = resp.Body.Close()
-		return nil, 0, err
+		if errors.Is(waitErr, errSSEPrecommitTimeout) {
+			return nil, 0, errFirstByteTimeout
+		}
+		return nil, 0, waitErr
 	}
 	return resp, time.Since(startedAt), nil
 }
@@ -644,12 +656,13 @@ func dispatchSelectionReason(route *router.Route, model *store.Model, affinityMo
 type observedUpstreamBody struct {
 	io.ReadCloser
 	once      sync.Once
+	ctx       context.Context
 	onFailure func(error)
 }
 
 func (b *observedUpstreamBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
-	if err != nil && err != io.EOF && b.onFailure != nil {
+	if err != nil && err != io.EOF && b.onFailure != nil && (b.ctx == nil || b.ctx.Err() == nil) {
 		b.once.Do(func() { b.onFailure(err) })
 	}
 	return n, err

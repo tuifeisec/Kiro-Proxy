@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/url"
 	"strings"
@@ -207,12 +208,19 @@ func isUpstreamTransportFailure(err error) bool {
 	if err == nil || errors.Is(err, errFirstByteTimeout) || errors.Is(err, context.Canceled) {
 		return false
 	}
+	if errors.Is(err, errSSEPrecommitMissingEvent) || errors.Is(err, io.ErrNoProgress) {
+		return true
+	}
 	var urlError *url.Error
 	if errors.As(err, &urlError) {
 		return true
 	}
 	var networkError net.Error
 	return errors.As(err, &networkError)
+}
+
+func isUpstreamProtocolFailure(err error) bool {
+	return errors.Is(err, errSSEPrecommitUpstream) || errors.Is(err, errSSEPrecommitBufferExceeded)
 }
 
 func (h *upstreamBucketHealth) avoidedLocked(key string, now time.Time) bool {

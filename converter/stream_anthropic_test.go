@@ -14,6 +14,9 @@ func TestAnthropicStreamReadsFinalUsageFromMessageDelta(t *testing.T) {
 		`event: message_delta`,
 		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":123,"output_tokens":4,"cache_read_input_tokens":700,"cache_creation_input_tokens":100}}`,
 		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
 	}, "\n")
 
 	converter := NewAnthropicStreamConverter(

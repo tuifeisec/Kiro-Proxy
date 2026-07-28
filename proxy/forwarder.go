@@ -212,7 +212,7 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 		}
 		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
 		route.Model = model
-		finalized, err := f.finalizeForwardResponse(resp, pre, model, logger, contResult)
+		finalized, err := f.finalizeForwardResponse(req.Context(), resp, pre, model, logger, contResult, nil)
 		if err != nil {
 			_ = resp.Body.Close()
 			return nil, err
@@ -336,6 +336,11 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			var forwardErr error
 			attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, false)
 			return attemptResp, forwardErr
+		}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
+			if !isSSEResponse(attemptResp) {
+				return waitForUpstreamFirstByte(attemptResp, remaining)
+			}
+			return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, model.Endpoint, remaining, 0)
 		})
 		if err != nil {
 			lease.release()
@@ -352,6 +357,12 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				if f.latency.isDegraded(model.ID, time.Now()) {
 					f.affinity.clear(route.Group.ID, conversationID, model.ID)
 				}
+			} else if isUpstreamProtocolFailure(err) {
+				failureClass = string(modelFailureUpstream)
+				f.health.failure(model, modelFailureUpstream, 0, time.Now())
+				f.upstream.neutral(model, time.Now())
+				f.affinity.clear(route.Group.ID, conversationID, model.ID)
+				markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
 			} else if isUpstreamTransportFailure(err) {
 				failureClass = string(modelFailureTransport)
 				f.health.failure(model, modelFailureTransport, 0, time.Now())
@@ -379,8 +390,6 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 		if firstByteDuration > 0 {
 			f.latency.record(model.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
 		}
-		f.upstream.recordSuccess(model, time.Now())
-
 		if shouldFailoverModelStatus(resp.StatusCode) {
 			bodyDetail := preserveResponseBody(resp)
 			failureClass := modelFailureForStatus(resp.StatusCode)
@@ -420,34 +429,68 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			lastResp.Body.Close()
 		}
 		if resp.StatusCode < http.StatusBadRequest {
-			f.health.success(model)
-			f.affinity.set(route.Group.ID, conversationID, model.ID, time.Now())
-			clearAvoidanceScopes(f.avoidance, scopes, model.ID)
-			resp.Body = &observedUpstreamBody{
-				ReadCloser: resp.Body,
-				onFailure: func(readErr error) {
-					f.health.failure(model, modelFailureTransport, 0, time.Now())
-					f.upstream.recordFailure(model, time.Now())
-					f.affinity.clear(route.Group.ID, conversationID, model.ID)
-					logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选响应流中断: group=%s model=%s error=%v", route.Group.Name, statsModelID(model), readErr), LogMeta{
-						Model: statsModelID(model),
-						Metadata: map[string]interface{}{
-							"group_id":      route.Group.ID,
-							"failure_class": string(modelFailureTransport),
-						},
-					})
-				},
+			if pre == nil || pre.Protocol != "kiro" {
+				f.upstream.recordSuccess(model, time.Now())
+				f.health.success(model)
+				f.affinity.set(route.Group.ID, conversationID, model.ID, time.Now())
+				clearAvoidanceScopes(f.avoidance, scopes, model.ID)
+				resp.Body = &observedUpstreamBody{
+					ReadCloser: resp.Body,
+					ctx:        req.Context(),
+					onFailure: func(readErr error) {
+						f.health.failure(model, modelFailureTransport, 0, time.Now())
+						f.upstream.recordFailure(model, time.Now())
+						f.affinity.clear(route.Group.ID, conversationID, model.ID)
+						logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选响应流中断: group=%s model=%s error=%v", route.Group.Name, statsModelID(model), readErr), LogMeta{
+							Model: statsModelID(model),
+							Metadata: map[string]interface{}{
+								"group_id":      route.Group.ID,
+								"failure_class": string(modelFailureTransport),
+							},
+						})
+					},
+				}
 			}
 		} else {
 			f.health.neutral(model)
 		}
-		return f.finalizeForwardResponse(resp, pre, model, logger, contResult)
+		return f.finalizeForwardResponse(req.Context(), resp, pre, model, logger, contResult, func(outcome converter.StreamOutcome) {
+			now := time.Now()
+			failureClass := modelFailureTransport
+			switch outcome {
+			case converter.StreamOutcomeCompleted:
+				f.upstream.recordSuccess(model, now)
+				f.health.success(model)
+				f.affinity.set(route.Group.ID, conversationID, model.ID, now)
+				clearAvoidanceScopes(f.avoidance, scopes, model.ID)
+				return
+			case converter.StreamOutcomeClientCanceled:
+				f.health.neutral(model)
+				f.upstream.neutral(model, now)
+				return
+			case converter.StreamOutcomeUpstreamProtocolFailure:
+				failureClass = modelFailureUpstream
+			case converter.StreamOutcomeMissingTerminal, converter.StreamOutcomeReadFailure:
+				f.upstream.recordFailure(model, now)
+			}
+			f.health.failure(model, failureClass, 0, now)
+			f.affinity.clear(route.Group.ID, conversationID, model.ID)
+			markAvoidanceScopes(f.avoidance, scopes, model.ID, now)
+			logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选流式终态异常: group=%s model=%s outcome=%s", route.Group.Name, statsModelID(model), outcome), LogMeta{
+				Model: statsModelID(model),
+				Metadata: map[string]interface{}{
+					"group_id":       route.Group.ID,
+					"failure_class":  string(failureClass),
+					"stream_outcome": string(outcome),
+				},
+			})
+		})
 	}
 
 	if lastResp != nil && lastModel != nil {
 		route.Model = lastModel
 		bindUsageModel(pre, lastModel)
-		return f.finalizeForwardResponse(lastResp, pre, lastModel, logger, lastContResult)
+		return f.finalizeForwardResponse(req.Context(), lastResp, pre, lastModel, logger, lastContResult, nil)
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("模型组 %s 请求失败: %w", route.Group.Name, lastErr)
@@ -586,14 +629,14 @@ func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body [
 	return f.doRequest(ctx, url, body, model, sessionID, usage)
 }
 
-func (f *Forwarder) finalizeForwardResponse(resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult) (*http.Response, error) {
+func (f *Forwarder) finalizeForwardResponse(ctx context.Context, resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult, onStreamOutcome func(converter.StreamOutcome)) (*http.Response, error) {
 	if pre != nil && pre.usage != nil {
 		pre.usage.wrapResponse(resp)
 	}
 	if pre == nil || pre.Protocol != "kiro" {
 		return resp, nil
 	}
-	return f.wrapKiroStream(resp, pre, model, logger, contResult)
+	return f.wrapKiroStream(ctx, resp, pre, model, logger, contResult, onStreamOutcome)
 }
 
 func bindUsageModel(pre *Preflight, model *store.Model) {
@@ -641,9 +684,11 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 			}
 		}
 
-		attemptCtx, cancelAttempt := context.WithDeadline(ctx, deadline)
+		attemptCtx, cancelAttempt := context.WithCancel(ctx)
+		budgetTimer := time.AfterFunc(remaining, cancelAttempt)
 		resp, err := f.doRequest(attemptCtx, url, body, m, sessionID, usage)
 		if err != nil {
+			budgetTimer.Stop()
 			cancelAttempt()
 			lastErr = err
 			if ctx.Err() != nil {
@@ -670,13 +715,75 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 				_, _ = io.Copy(io.Discard, resp.Body)
 			}
 			resp.Body.Close()
+			budgetTimer.Stop()
 			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
 			logger.Warn("forwarder", fmt.Sprintf("上游返回 %d（第 %d/%d 次请求），准备重试", resp.StatusCode, attempt+1, maxRetries+1))
 			continue
 		}
+		if shouldProbeSSEPrecommit(resp, body, m, url) {
+			probeErr := probeSSEPrecommit(attemptCtx, resp, m.Provider, url, time.Until(deadline), 0)
+			if probeErr != nil {
+				if resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				budgetTimer.Stop()
+				cancelAttempt()
+				lastErr = probeErr
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				if !time.Now().Before(deadline) {
+					lastErr = context.DeadlineExceeded
+					break
+				}
+				logger.Warn("forwarder", fmt.Sprintf("上游流在首个有效事件前失败 (attempt %d): %v", attempt, probeErr))
+				transportRetries++
+				if transportRetries > maxTransportRetries {
+					return nil, fmt.Errorf("上游失败（流式预提交重试 %d 次）: %w", maxTransportRetries, lastErr)
+				}
+				nextRetryDelay = transportRetryDelay
+				continue
+			}
+		}
+		if !budgetTimer.Stop() {
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			} else {
+				cancelAttempt()
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = context.DeadlineExceeded
+			break
+		}
 		return resp, nil
 	}
 	return nil, fmt.Errorf("上游失败（重试 %d 次）: %w", maxRetries, lastErr)
+}
+
+func shouldProbeSSEPrecommit(resp *http.Response, body []byte, model *store.Model, upstreamURL string) bool {
+	if resp == nil || resp.Body == nil || resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return false
+	}
+	if isSSEResponse(resp) {
+		return true
+	}
+	var request struct {
+		Stream bool `json:"stream"`
+	}
+	if json.Unmarshal(body, &request) == nil && request.Stream {
+		return true
+	}
+	provider := ""
+	if model != nil {
+		provider = strings.ToLower(strings.TrimSpace(model.Provider))
+	}
+	return provider == "codex" || provider == "gemini" && strings.Contains(strings.ToLower(upstreamURL), "streamgeneratecontent")
+}
+
+func isSSEResponse(resp *http.Response) bool {
+	return resp != nil && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 }
 
 func shouldRetryUpstreamStatus(status int) bool {

@@ -27,6 +27,7 @@ import (
 type OpenAIStreamConverter struct {
 	pr        *io.PipeReader
 	pw        *io.PipeWriter
+	source    io.ReadCloser
 	closeOnce sync.Once
 
 	// 统计（流结束后可读）
@@ -37,6 +38,9 @@ type OpenAIStreamConverter struct {
 	cacheWrite   int
 	outputChars  int // 输出字符累计，用于上游无 usage 时估算
 	toolUsed     bool
+	outcome      StreamOutcome
+	writeFailed  bool
+	doneReceived bool
 	done         chan struct{}
 
 	// 工具调用状态跟踪
@@ -64,6 +68,8 @@ func NewOpenAIStreamConverter(source io.ReadCloser, modelID string, maxTokens in
 	c := &OpenAIStreamConverter{
 		pr:               pr,
 		pw:               pw,
+		source:           source,
+		outcome:          StreamOutcomePending,
 		done:             make(chan struct{}),
 		activeTools:      make(map[int]*toolCallState, 4),
 		modelID:          modelID,
@@ -85,8 +91,35 @@ func (c *OpenAIStreamConverter) Read(p []byte) (int, error) {
 
 // Close 实现 io.Closer
 func (c *OpenAIStreamConverter) Close() error {
-	c.closeOnce.Do(func() { c.pr.Close() })
+	c.closeOnce.Do(func() {
+		select {
+		case <-c.done:
+		default:
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending {
+				c.outcome = StreamOutcomeClientCanceled
+			}
+			c.mu.Unlock()
+		}
+		_ = c.pr.Close()
+		_ = c.source.Close()
+	})
 	return nil
+}
+
+func (c *OpenAIStreamConverter) Outcome() StreamOutcome {
+	<-c.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.outcome
+}
+
+func (c *OpenAIStreamConverter) Succeeded() bool {
+	return c.Outcome() == StreamOutcomeCompleted
+}
+
+func (c *OpenAIStreamConverter) Error() error {
+	return streamOutcomeError(c.Outcome())
 }
 
 // Usage 等待流结束后返回 token 用量（阻塞直到 done）
@@ -107,17 +140,29 @@ func (c *OpenAIStreamConverter) CacheTokens() (cacheRead, cacheWrite int) {
 
 // process 在独立 goroutine 中运行，读取 SSE 并写入 pipe
 func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[stream_openai] panic recovered: %v", r)
-		}
-	}()
 	defer close(c.done)
 	defer source.Close()
 	defer c.pw.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[stream_openai] panic recovered: %v", r)
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+				c.outcome = StreamOutcomeReadFailure
+			}
+			outcome := c.outcome
+			c.mu.Unlock()
+			if outcome != StreamOutcomeClientCanceled {
+				c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+			}
+		}
+	}()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
-	c.write(InitialResponseFrame(""))
+	if !c.write(InitialResponseFrame("")) {
+		return
+	}
+	var readErr error
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -126,13 +171,35 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 		if line != "" {
 			c.handleLine(line)
 		}
+		c.mu.Lock()
+		writeFailed := c.writeFailed
+		terminalFailure := c.outcome == StreamOutcomeUpstreamProtocolFailure
+		doneReceived := c.doneReceived
+		c.mu.Unlock()
+		if writeFailed || terminalFailure || doneReceived {
+			break
+		}
 
 		if err != nil {
+			readErr = err
 			if err != io.EOF {
 				log.Printf("[stream_openai] 读取错误: %v", err)
 			}
 			break
 		}
+	}
+
+	c.mu.Lock()
+	if c.outcome == StreamOutcomePending {
+		c.outcome = streamOutcomeFromReadError(readErr)
+	}
+	outcome := c.outcome
+	c.mu.Unlock()
+	if outcome != StreamOutcomeCompleted {
+		if outcome != StreamOutcomeClientCanceled {
+			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+		}
+		return
 	}
 
 	// 流结束：写入 Kiro 必需的结尾帧
@@ -154,8 +221,12 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 	c.mu.Unlock()
 
 	// 始终发送 metadata 帧（Kiro 需要 token 信息，含缓存命中数据）
-	c.write(MetadataStopFrame(stopReason))
-	c.write(ContextUsageFrame(in+out, c.maxTokens))
+	if !c.write(MetadataStopFrame(stopReason)) {
+		return
+	}
+	if !c.write(ContextUsageFrame(in+out, c.maxTokens)) {
+		return
+	}
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
@@ -168,12 +239,30 @@ func (c *OpenAIStreamConverter) handleLine(line string) {
 		return
 	}
 	data := strings.TrimSpace(line[5:])
-	if len(data) == 0 || data == "[DONE]" {
+	if len(data) == 0 {
+		return
+	}
+	if data == "[DONE]" {
+		c.mu.Lock()
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeCompleted
+		}
+		c.doneReceived = true
+		c.mu.Unlock()
 		return
 	}
 
 	var chunk openAIChunk
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return
+	}
+	if chunk.Error != nil {
+		c.mu.Lock()
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeUpstreamProtocolFailure
+		}
+		c.mu.Unlock()
+		log.Printf("[stream_openai] upstream error: %s", data)
 		return
 	}
 
@@ -217,6 +306,13 @@ func (c *OpenAIStreamConverter) handleLine(line string) {
 	choice := chunk.Choices[0]
 	delta := choice.Delta
 	finishReason := choice.FinishReason
+	if finishReason != "" {
+		c.mu.Lock()
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeCompleted
+		}
+		c.mu.Unlock()
+	}
 
 	// 文本内容
 	if delta.Content != "" {
@@ -274,20 +370,33 @@ func (c *OpenAIStreamConverter) writeToolStopFrames() {
 	c.activeTools = make(map[int]*toolCallState)
 }
 
-func (c *OpenAIStreamConverter) write(frame []byte) {
+func (c *OpenAIStreamConverter) write(frame []byte) bool {
 	if len(frame) == 0 {
-		return
+		return true
 	}
 	if _, err := c.pw.Write(frame); err != nil {
-		log.Printf("[stream_openai] 写入帧失败: %v", err)
+		c.mu.Lock()
+		firstFailure := !c.writeFailed
+		c.writeFailed = true
+		if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+			c.outcome = StreamOutcomeClientCanceled
+		}
+		c.mu.Unlock()
+		if firstFailure {
+			log.Printf("[stream_openai] downstream closed: %v", err)
+		}
+		_ = c.source.Close()
+		return false
 	}
+	return true
 }
 
 // ── OpenAI SSE 数据结构 ───────────────────────────────────────────
 
 type openAIChunk struct {
-	Choices []openAIChoice `json:"choices"`
-	Usage   *openAIUsage   `json:"usage"`
+	Choices []openAIChoice  `json:"choices"`
+	Usage   *openAIUsage    `json:"usage"`
+	Error   json.RawMessage `json:"error"`
 }
 
 type openAIChoice struct {

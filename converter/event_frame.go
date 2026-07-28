@@ -119,6 +119,17 @@ func MetadataStopFrame(stopReason string) []byte {
 	return buildFrameFast(getCachedHeaders("metadataEvent"), buf)
 }
 
+// ExceptionFrame 在下游响应已提交后向 Kiro 发送受控流式错误。
+func ExceptionFrame(exceptionType, message string) []byte {
+	buf := make([]byte, 0, 64+len(exceptionType)+len(message)*2)
+	buf = append(buf, `{"exceptionType":`...)
+	buf = appendJSONString(buf, exceptionType)
+	buf = append(buf, `,"message":`...)
+	buf = appendJSONString(buf, message)
+	buf = append(buf, '}')
+	return buildFrameFast(getCachedHeaders("exceptionEvent"), buf)
+}
+
 // InitialResponseFrame is the first frame in a Kiro response stream.
 func InitialResponseFrame(conversationID string) []byte {
 	buf := make([]byte, 0, 32+len(conversationID)*2)

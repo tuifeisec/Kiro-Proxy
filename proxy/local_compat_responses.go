@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -495,11 +496,11 @@ func responsesUsage(usage localCompatUsage) map[string]interface{} {
 }
 
 func copyChatStreamAsResponses(w http.ResponseWriter, body io.Reader) (localCompatUsage, error) {
-	usage, _, _, err := copyChatStreamAsResponsesWithState(w, body)
+	usage, _, _, err := copyChatStreamAsResponsesWithState(context.Background(), w, body)
 	return usage, err
 }
 
-func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (localCompatUsage, string, map[string]interface{}, error) {
+func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWriter, body io.Reader) (localCompatUsage, string, map[string]interface{}, error) {
 	flusher, _ := w.(http.Flusher)
 	writer := bufio.NewWriter(w)
 	responseID := "resp_chat_fallback"
@@ -507,6 +508,7 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 	var text strings.Builder
 	usage := localCompatUsage{}
 	createdSent := false
+	terminalSeen := false
 	type streamTool struct {
 		ID        string
 		Name      string
@@ -519,10 +521,10 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 			return err
 		}
 		if _, err := fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event, payload); err != nil {
-			return err
+			return wrapLocalCompatDownstreamWriteError(err)
 		}
 		if err := writer.Flush(); err != nil {
-			return err
+			return wrapLocalCompatDownstreamWriteError(err)
 		}
 		if flusher != nil {
 			flusher.Flush()
@@ -544,14 +546,19 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 			continue
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
+		if data == "" {
+			continue
+		}
+		if data == "[DONE]" {
+			terminalSeen = true
 			continue
 		}
 		var chunk struct {
 			ID      string `json:"id"`
 			Model   string `json:"model"`
 			Choices []struct {
-				Delta struct {
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
 					Content   string `json:"content"`
 					ToolCalls []struct {
 						Index    int    `json:"index"`
@@ -563,6 +570,7 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Error json.RawMessage `json:"error"`
 			Usage json.RawMessage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(data), &chunk) != nil {
@@ -578,6 +586,13 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 		if err := ensureCreated(); err != nil {
 			return usage, responseID, nil, err
 		}
+		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+			err := fmt.Errorf("%w: chat stream reported failure", errLocalCompatStreamProtocol)
+			if writeErr := writeEvent("response.failed", responsesStreamFailure(responseID, model, err)); writeErr != nil {
+				return usage, responseID, nil, writeErr
+			}
+			return usage, responseID, nil, err
+		}
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 			delta := chunk.Choices[0].Delta.Content
 			text.WriteString(delta)
@@ -586,6 +601,9 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 			}
 		}
 		if len(chunk.Choices) > 0 {
+			if chunk.Choices[0].FinishReason != "" {
+				terminalSeen = true
+			}
 			for _, call := range chunk.Choices[0].Delta.ToolCalls {
 				tool := tools[call.Index]
 				if tool == nil {
@@ -620,9 +638,22 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if ctx == nil || ctx.Err() == nil {
+			_ = ensureCreated()
+			_ = writeEvent("response.failed", responsesStreamFailure(responseID, model, err))
+		}
 		return usage, responseID, nil, err
 	}
 	if err := ensureCreated(); err != nil {
+		return usage, responseID, nil, err
+	}
+	if !terminalSeen {
+		err := errLocalCompatStreamMissingTerminal
+		if ctx == nil || ctx.Err() == nil {
+			if writeErr := writeEvent("response.failed", responsesStreamFailure(responseID, model, err)); writeErr != nil {
+				return usage, responseID, nil, writeErr
+			}
+		}
 		return usage, responseID, nil, err
 	}
 	for _, tool := range tools {
@@ -656,6 +687,16 @@ func copyChatStreamAsResponsesWithState(w http.ResponseWriter, body io.Reader) (
 		return usage, responseID, nil, err
 	}
 	return usage, responseID, assistant, nil
+}
+
+func responsesStreamFailure(responseID, model string, cause error) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "response.failed",
+		"response": map[string]interface{}{
+			"id": responseID, "object": "response", "status": "failed", "model": model,
+			"error": map[string]string{"code": "upstream_stream_interrupted", "message": cause.Error()},
+		},
+	}
 }
 
 func fallbackAssistantFromResponses(body []byte) (string, map[string]interface{}) {

@@ -29,6 +29,7 @@ import (
 type GeminiStreamConverter struct {
 	pr        *io.PipeReader
 	pw        *io.PipeWriter
+	source    io.ReadCloser
 	closeOnce sync.Once
 
 	mu           sync.Mutex
@@ -37,6 +38,8 @@ type GeminiStreamConverter struct {
 	cacheRead    int
 	outputChars  int
 	toolUsed     bool
+	outcome      StreamOutcome
+	writeFailed  bool
 	done         chan struct{}
 
 	// 工具调用计数器（用于生成确定性 ID）
@@ -53,6 +56,8 @@ func NewGeminiStreamConverter(source io.ReadCloser, modelID string, maxTokens in
 	c := &GeminiStreamConverter{
 		pr:               pr,
 		pw:               pw,
+		source:           source,
+		outcome:          StreamOutcomePending,
 		done:             make(chan struct{}),
 		modelID:          modelID,
 		maxTokens:        maxTokens,
@@ -71,8 +76,35 @@ func (c *GeminiStreamConverter) Read(p []byte) (int, error) {
 }
 
 func (c *GeminiStreamConverter) Close() error {
-	c.closeOnce.Do(func() { c.pr.Close() })
+	c.closeOnce.Do(func() {
+		select {
+		case <-c.done:
+		default:
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending {
+				c.outcome = StreamOutcomeClientCanceled
+			}
+			c.mu.Unlock()
+		}
+		_ = c.pr.Close()
+		_ = c.source.Close()
+	})
 	return nil
+}
+
+func (c *GeminiStreamConverter) Outcome() StreamOutcome {
+	<-c.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.outcome
+}
+
+func (c *GeminiStreamConverter) Succeeded() bool {
+	return c.Outcome() == StreamOutcomeCompleted
+}
+
+func (c *GeminiStreamConverter) Error() error {
+	return streamOutcomeError(c.Outcome())
 }
 
 // Usage 等待流结束后返回 token 用量（阻塞直到 done）
@@ -92,17 +124,29 @@ func (c *GeminiStreamConverter) CacheTokens() (cacheRead, cacheWrite int) {
 }
 
 func (c *GeminiStreamConverter) process(source io.ReadCloser) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[stream_gemini] panic recovered: %v", r)
-		}
-	}()
 	defer close(c.done)
 	defer source.Close()
 	defer c.pw.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[stream_gemini] panic recovered: %v", r)
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+				c.outcome = StreamOutcomeReadFailure
+			}
+			outcome := c.outcome
+			c.mu.Unlock()
+			if outcome != StreamOutcomeClientCanceled {
+				c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+			}
+		}
+	}()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
-	c.write(InitialResponseFrame(""))
+	if !c.write(InitialResponseFrame("")) {
+		return
+	}
+	var readErr error
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -111,13 +155,34 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 		if line != "" {
 			c.handleLine(line)
 		}
+		c.mu.Lock()
+		writeFailed := c.writeFailed
+		terminal := c.outcome != StreamOutcomePending
+		c.mu.Unlock()
+		if writeFailed || terminal {
+			break
+		}
 
 		if err != nil {
+			readErr = err
 			if err != io.EOF {
 				log.Printf("[stream_gemini] 读取错误: %v", err)
 			}
 			break
 		}
+	}
+
+	c.mu.Lock()
+	if c.outcome == StreamOutcomePending {
+		c.outcome = streamOutcomeFromReadError(readErr)
+	}
+	outcome := c.outcome
+	c.mu.Unlock()
+	if outcome != StreamOutcomeCompleted {
+		if outcome != StreamOutcomeClientCanceled {
+			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+		}
+		return
 	}
 
 	// 流结束：写入 Kiro 必需的结尾帧
@@ -137,8 +202,12 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 	}
 	c.mu.Unlock()
 
-	c.write(MetadataStopFrame(stopReason))
-	c.write(ContextUsageFrame(in+out, c.maxTokens))
+	if !c.write(MetadataStopFrame(stopReason)) {
+		return
+	}
+	if !c.write(ContextUsageFrame(in+out, c.maxTokens)) {
+		return
+	}
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, 0, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
@@ -154,6 +223,15 @@ func (c *GeminiStreamConverter) handleLine(line string) {
 
 	var chunk geminiChunk
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return
+	}
+	if chunk.Error != nil {
+		c.mu.Lock()
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeUpstreamProtocolFailure
+		}
+		c.mu.Unlock()
+		log.Printf("[stream_gemini] upstream error: %s", data)
 		return
 	}
 
@@ -177,6 +255,13 @@ func (c *GeminiStreamConverter) handleLine(line string) {
 	}
 
 	candidate := chunk.Candidates[0]
+	if candidate.FinishReason != "" {
+		c.mu.Lock()
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeCompleted
+		}
+		c.mu.Unlock()
+	}
 	parts := candidate.Content.Parts
 
 	for _, part := range parts {
@@ -211,13 +296,25 @@ func (c *GeminiStreamConverter) handleLine(line string) {
 	}
 }
 
-func (c *GeminiStreamConverter) write(frame []byte) {
+func (c *GeminiStreamConverter) write(frame []byte) bool {
 	if len(frame) == 0 {
-		return
+		return true
 	}
 	if _, err := c.pw.Write(frame); err != nil {
-		log.Printf("[stream_gemini] 写入帧失败: %v", err)
+		c.mu.Lock()
+		firstFailure := !c.writeFailed
+		c.writeFailed = true
+		if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+			c.outcome = StreamOutcomeClientCanceled
+		}
+		c.mu.Unlock()
+		if firstFailure {
+			log.Printf("[stream_gemini] downstream closed: %v", err)
+		}
+		_ = c.source.Close()
+		return false
 	}
+	return true
 }
 
 // ── Gemini SSE 数据结构 ───────────────────────────────────────────
@@ -225,6 +322,7 @@ func (c *GeminiStreamConverter) write(frame []byte) {
 type geminiChunk struct {
 	Candidates    []geminiCandidate `json:"candidates"`
 	UsageMetadata *geminiUsageMeta  `json:"usageMetadata"`
+	Error         json.RawMessage   `json:"error"`
 }
 
 type geminiCandidate struct {

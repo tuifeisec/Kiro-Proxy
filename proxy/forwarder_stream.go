@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"kiro-proxy/converter"
@@ -14,7 +15,7 @@ import (
 )
 
 // wrapKiroStream 将上游 SSE 流包装为 Kiro AWS Event Stream
-func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult) (*http.Response, error) {
+func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre *Preflight, m *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult, onStreamOutcome func(converter.StreamOutcome)) (*http.Response, error) {
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -44,70 +45,25 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 	capture := newStreamCapture(logger.DetailLimit())
 	wrappedBody := capture.wrap(resp.Body)
 
-	var streamBody io.ReadCloser
+	var streamBody kiroStreamConverter
+	streamLabel := ""
+	var onCompleted func()
 	switch {
 	case m.Provider == "anthropic":
-		sc := converter.NewAnthropicStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
-		streamBody = sc
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[forwarder] panic in anthropic stats goroutine: %v", r)
-					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
-				}
-			}()
-			in, out := sc.Usage()
-			cacheR, cacheW := sc.CacheTokens()
-			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
-			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR, CacheWriteTokens: cacheW}, "")
-			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
-				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
-			})
-		}()
+		streamBody = converter.NewAnthropicStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 	case m.Provider == "gemini":
-		sc := converter.NewGeminiStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
-		streamBody = sc
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[forwarder] panic in gemini stats goroutine: %v", r)
-					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
-				}
-			}()
-			in, out := sc.Usage()
-			cacheR, _ := sc.CacheTokens()
-			credits := store.CalculateCredits(in, out, cacheR, 0, m)
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, 0, credits, statsModelID(m), false)
-			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR}, "")
-			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[gemini]: model=%s in=%d out=%d cache_read=%d", statsModelID(m), in, out, cacheR), streamLogMeta(pre, m, resp, in, out, cacheR, 0, credits), func(maxBytes int) string {
-				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, 0, maxBytes)
-			})
-		}()
+		streamLabel = "gemini"
+		streamBody = converter.NewGeminiStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 	case useResponsesAPI(pre, m) || m.Provider == "codex":
 		// responses SSE → Kiro Event Stream（一段式直转）
 		sc := converter.NewResponsesStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[forwarder] panic in responses stats goroutine: %v", r)
-					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
-				}
-			}()
-			in, out := sc.Usage()
-			cacheR, cacheW := sc.CacheTokens()
-			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
-			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR, CacheWriteTokens: cacheW}, "")
-			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成[responses]: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
-				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
-			})
-
+		streamLabel = "responses"
+		onCompleted = func() {
 			// 保存 response_id 用于下次续传；只有明确完成且无错误的流才能更新续传状态。
 			responseID := sc.ResponseID()
 			stateKey := responsesContinuationStateKeyFor(pre, m, resolveReasoningEffort(pre, m))
-			if responseID != "" && sc.Succeeded() && contResult != nil && stateKey != "" {
+			if responseID != "" && contResult != nil && stateKey != "" {
 				if err := f.db.UpsertResponsesSession(&store.ResponsesSession{
 					StateKey:   stateKey,
 					InputHash:  converter.HashInput(contResult.FullInputJSON),
@@ -129,25 +85,22 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 				}
 				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, stateScope=%s, responseId=%s", pre.Conv.ConversationID, stateScope, ridShort))
 			}
-		}()
+		}
 	default: // /v1/chat/completions（含 classifier）
-		sc := converter.NewOpenAIStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
-		streamBody = sc
+		streamBody = converter.NewOpenAIStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
+	}
+	observationDone := make(chan struct{})
+	go func() {
+		defer close(observationDone)
+		f.observeKiroStream(streamBody, streamLabel, resp, pre, m, logger, capture, onStreamOutcome, onCompleted)
+	}()
+	if ctx != nil {
 		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[forwarder] panic in openai stats goroutine: %v", r)
-					f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
-				}
-			}()
-			in, out := sc.Usage()
-			cacheR, cacheW := sc.CacheTokens()
-			credits := store.CalculateCredits(in, out, cacheR, cacheW, m)
-			f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(m), false)
-			pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR, CacheWriteTokens: cacheW}, "")
-			logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("流式完成: model=%s in=%d out=%d cache_read=%d cache_write=%d", statsModelID(m), in, out, cacheR, cacheW), streamLogMeta(pre, m, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
-				return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
-			})
+			select {
+			case <-ctx.Done():
+				_ = streamBody.Close()
+			case <-observationDone:
+			}
 		}()
 	}
 
@@ -160,6 +113,52 @@ func (f *Forwarder) wrapKiroStream(resp *http.Response, pre *Preflight, m *store
 	resp.Header.Set("Cache-Control", "no-cache")
 
 	return resp, nil
+}
+
+type kiroStreamConverter interface {
+	io.ReadCloser
+	Usage() (int, int)
+	CacheTokens() (int, int)
+	Outcome() converter.StreamOutcome
+	Error() error
+}
+
+func (f *Forwarder) observeKiroStream(sc kiroStreamConverter, label string, resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, capture *streamCapture, onOutcome func(converter.StreamOutcome), onCompleted func()) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("[forwarder] panic in stream stats goroutine: %v", recovered)
+			f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(model), true)
+		}
+	}()
+	in, out := sc.Usage()
+	cacheR, cacheW := sc.CacheTokens()
+	outcome := sc.Outcome()
+	credits := store.CalculateCredits(in, out, cacheR, cacheW, model)
+	isUpstreamError := outcome != converter.StreamOutcomeCompleted && outcome != converter.StreamOutcomeClientCanceled
+	f.stats.RecordRequestFullWithCredits(in, out, cacheR, cacheW, credits, statsModelID(model), isUpstreamError)
+	errorMessage := ""
+	if err := sc.Error(); err != nil && outcome != converter.StreamOutcomeClientCanceled {
+		errorMessage = err.Error()
+	}
+	pre.usage.finish(resp.StatusCode, localCompatUsage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheR, CacheWriteTokens: cacheW}, errorMessage)
+	if onOutcome != nil {
+		onOutcome(outcome)
+	}
+	prefix := "流式完成"
+	if outcome == converter.StreamOutcomeClientCanceled {
+		prefix = "流式取消"
+	} else if outcome != converter.StreamOutcomeCompleted {
+		prefix = "流式失败"
+	}
+	if label != "" {
+		prefix += "[" + label + "]"
+	}
+	logger.InfoWithMetaLazyDetail("forwarder", fmt.Sprintf("%s: model=%s outcome=%s in=%d out=%d cache_read=%d cache_write=%d", prefix, statsModelID(model), outcome, in, out, cacheR, cacheW), streamLogMeta(pre, model, resp, in, out, cacheR, cacheW, credits), func(maxBytes int) string {
+		return formatStreamCompletionDetail(resp, capture, in, out, cacheR, cacheW, maxBytes)
+	})
+	if outcome == converter.StreamOutcomeCompleted && onCompleted != nil {
+		onCompleted()
+	}
 }
 
 type streamCapture struct {

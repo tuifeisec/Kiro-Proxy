@@ -20,6 +20,12 @@ import (
 
 const localCompatBodyLimit = 32 << 20
 
+var (
+	errLocalCompatStreamProtocol        = errors.New("upstream stream protocol failure")
+	errLocalCompatStreamMissingTerminal = errors.New("upstream stream missing terminal event")
+	errLocalCompatDownstreamWrite       = errors.New("downstream response write failure")
+)
+
 type localCompatAPI string
 
 const (
@@ -202,6 +208,11 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			var firstByteDuration time.Duration
 			resp, firstByteDuration, err = requestWithFirstByteTimeout(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
 				return s.forwarder.doRequest(attemptCtx, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, "local-compat", usageRecord)
+			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
+				if !clientWantsStream || !isSSEResponse(attemptResp) {
+					return waitForUpstreamFirstByte(attemptResp, remaining)
+				}
+				return probeSSEPrecommit(attemptCtx, attemptResp, candidate.Provider, candidatePrepared.upstreamURL, remaining, 0)
 			})
 			if err == nil && firstByteDuration > 0 {
 				s.forwarder.latency.record(candidate.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
@@ -225,6 +236,12 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 				if s.forwarder.latency.isDegraded(candidate.ID, time.Now()) {
 					s.forwarder.affinity.clear(route.Group.ID, conversationID, candidate.ID)
 				}
+			} else if isUpstreamProtocolFailure(err) {
+				failureClass = string(modelFailureUpstream)
+				s.forwarder.health.failure(candidate, modelFailureUpstream, 0, time.Now())
+				s.forwarder.upstream.neutral(candidate, time.Now())
+				s.forwarder.affinity.clear(route.Group.ID, conversationID, candidate.ID)
+				markAvoidanceScopes(s.forwarder.avoidance, scopes, candidate.ID, time.Now())
 			} else if isUpstreamTransportFailure(err) {
 				failureClass = string(modelFailureTransport)
 				s.forwarder.health.failure(candidate, modelFailureTransport, 0, time.Now())
@@ -240,9 +257,6 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			continue
 		}
 		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
-		if grouped {
-			s.forwarder.upstream.recordSuccess(candidate, time.Now())
-		}
 
 		if grouped && shouldFailoverModelStatus(resp.StatusCode) {
 			detail := preserveResponseBody(resp)
@@ -273,19 +287,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		if lastResp != nil {
 			lastResp.Body.Close()
 		}
-		if route.Group != nil && resp.StatusCode < http.StatusBadRequest {
-			s.forwarder.health.success(candidate)
-			s.forwarder.affinity.set(route.Group.ID, conversationID, candidate.ID, time.Now())
-			clearAvoidanceScopes(s.forwarder.avoidance, scopes, candidate.ID)
-			resp.Body = &observedUpstreamBody{
-				ReadCloser: resp.Body,
-				onFailure: func(readErr error) {
-					s.forwarder.health.failure(candidate, modelFailureTransport, 0, time.Now())
-					s.forwarder.upstream.recordFailure(candidate, time.Now())
-					s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容候选响应流中断: group=%s model=%s error=%v", route.Group.Name, statsModelID(candidate), readErr))
-				},
-			}
-		} else if route.Group != nil {
+		if route.Group != nil && resp.StatusCode >= http.StatusBadRequest {
 			s.forwarder.health.neutral(candidate)
 		}
 		m = candidate
@@ -323,6 +325,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	var fallbackResponseID string
 	var fallbackAssistant map[string]interface{}
 	status := resp.StatusCode
+	upstreamSuccessfulStatus := status < http.StatusBadRequest
 	if aggregateCodex && status < http.StatusBadRequest {
 		var responseBody []byte
 		responseBody, usage, writeErr = aggregateResponsesSSE(resp.Body)
@@ -334,6 +337,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			writeLocalCORSHeaders(w)
 			w.WriteHeader(status)
 			_, writeErr = w.Write(responseBody)
+			writeErr = wrapLocalCompatDownstreamWriteError(writeErr)
 		}
 	} else if responsesFallback && status < http.StatusBadRequest {
 		writeLocalCORSHeaders(w)
@@ -342,7 +346,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Connection", "keep-alive")
 			w.WriteHeader(status)
-			usage, fallbackResponseID, fallbackAssistant, writeErr = copyChatStreamAsResponsesWithState(w, resp.Body)
+			usage, fallbackResponseID, fallbackAssistant, writeErr = copyChatStreamAsResponsesWithState(r.Context(), w, resp.Body)
 		} else {
 			responseBody, convertedUsage, convertErr := readAndConvertChatResponse(resp.Body)
 			usage = convertedUsage
@@ -355,24 +359,50 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(status)
 				_, writeErr = w.Write(responseBody)
+				writeErr = wrapLocalCompatDownstreamWriteError(writeErr)
 			}
 		}
 	} else {
 		copyLocalCompatHeaders(w.Header(), resp.Header)
 		writeLocalCORSHeaders(w)
 		w.WriteHeader(status)
-		usage, writeErr = copyLocalCompatResponse(w, resp.Body, api)
+		usage, writeErr = copyLocalCompatResponse(r.Context(), w, resp.Body, api)
 	}
 	if responsesFallback && status < http.StatusBadRequest && writeErr == nil {
 		s.saveFallbackResponse(fallbackResponseID, fallbackState, fallbackAssistant)
 	}
 
-	isError := status >= http.StatusBadRequest || writeErr != nil
+	clientCanceled := r.Context().Err() != nil || errors.Is(writeErr, errLocalCompatDownstreamWrite)
+	isError := status >= http.StatusBadRequest || writeErr != nil && !clientCanceled
 	errorMessage := ""
-	if writeErr != nil {
+	if writeErr != nil && !clientCanceled {
 		errorMessage = writeErr.Error()
 	} else if status >= http.StatusBadRequest {
 		errorMessage = fmt.Sprintf("HTTP %d", status)
+	}
+	if route.Group != nil && m != nil && upstreamSuccessfulStatus {
+		now := time.Now()
+		switch {
+		case clientCanceled:
+			s.forwarder.health.neutral(m)
+			s.forwarder.upstream.neutral(m, now)
+		case writeErr == nil:
+			s.forwarder.upstream.recordSuccess(m, now)
+			s.forwarder.health.success(m)
+			s.forwarder.affinity.set(route.Group.ID, conversationID, m.ID, now)
+			clearAvoidanceScopes(s.forwarder.avoidance, scopes, m.ID)
+		default:
+			failureClass := modelFailureTransport
+			if errors.Is(writeErr, errLocalCompatStreamProtocol) {
+				failureClass = modelFailureUpstream
+				s.forwarder.upstream.neutral(m, now)
+			} else {
+				s.forwarder.upstream.recordFailure(m, now)
+			}
+			s.forwarder.health.failure(m, failureClass, 0, now)
+			s.forwarder.affinity.clear(route.Group.ID, conversationID, m.ID)
+			markAvoidanceScopes(s.forwarder.avoidance, scopes, m.ID, now)
+		}
 	}
 	usageRecord.finish(status, usage, errorMessage)
 	credits := store.CalculateCredits(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, m)
@@ -648,26 +678,53 @@ type localCompatUsage struct {
 }
 
 type localCompatStreamWriter struct {
-	dst      http.ResponseWriter
-	flusher  http.Flusher
-	api      localCompatAPI
-	usage    localCompatUsage
-	pending  []byte
-	fullJSON bytes.Buffer
-	isSSE    bool
+	dst                   http.ResponseWriter
+	flusher               http.Flusher
+	api                   localCompatAPI
+	usage                 localCompatUsage
+	pending               []byte
+	fullJSON              bytes.Buffer
+	isSSE                 bool
+	eventType             string
+	terminalSeen          bool
+	failureSeen           bool
+	downstreamWriteFailed bool
 }
 
-func copyLocalCompatResponse(w http.ResponseWriter, body io.Reader, api localCompatAPI) (localCompatUsage, error) {
+func copyLocalCompatResponse(ctx context.Context, w http.ResponseWriter, body io.Reader, api localCompatAPI) (localCompatUsage, error) {
 	contentType := strings.ToLower(w.Header().Get("Content-Type"))
 	tracker := &localCompatStreamWriter{dst: w, api: api, isSSE: strings.Contains(contentType, "text/event-stream")}
 	tracker.flusher, _ = w.(http.Flusher)
 	_, err := io.Copy(tracker, body)
+	if err != nil && tracker.downstreamWriteFailed {
+		err = fmt.Errorf("%w: %v", errLocalCompatDownstreamWrite, err)
+	}
 	if tracker.isSSE {
 		tracker.consumeSSE(true)
+		if err == nil {
+			switch {
+			case tracker.failureSeen:
+				err = errLocalCompatStreamProtocol
+			case !tracker.terminalSeen:
+				err = errLocalCompatStreamMissingTerminal
+			}
+		}
+		if err != nil && !tracker.failureSeen && !tracker.downstreamWriteFailed && (ctx == nil || ctx.Err() == nil) {
+			if emitErr := tracker.emitControlledFailure(err); emitErr != nil {
+				err = fmt.Errorf("%w; emit controlled failure: %v", err, emitErr)
+			}
+		}
 	} else {
 		mergeLocalCompatUsage(&tracker.usage, api, tracker.fullJSON.Bytes())
 	}
 	return tracker.usage, err
+}
+
+func wrapLocalCompatDownstreamWriteError(err error) error {
+	if err == nil || errors.Is(err, errLocalCompatDownstreamWrite) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", errLocalCompatDownstreamWrite, err)
 }
 
 func (w *localCompatStreamWriter) Write(p []byte) (int, error) {
@@ -682,6 +739,9 @@ func (w *localCompatStreamWriter) Write(p []byte) (int, error) {
 		_, _ = w.fullJSON.Write(p[:remaining])
 	}
 	n, err := w.dst.Write(p)
+	if err != nil {
+		w.downstreamWriteFailed = true
+	}
 	if err == nil && w.flusher != nil {
 		w.flusher.Flush()
 	}
@@ -705,14 +765,113 @@ func (w *localCompatStreamWriter) consumeSSE(final bool) {
 }
 
 func (w *localCompatStreamWriter) consumeSSELine(line string) {
+	if strings.HasPrefix(line, "event:") {
+		w.eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		return
+	}
 	if !strings.HasPrefix(line, "data:") {
 		return
 	}
 	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-	if data == "" || data == "[DONE]" {
+	if data == "" {
+		return
+	}
+	if data == "[DONE]" {
+		if w.api == localCompatChat {
+			w.terminalSeen = true
+		}
+		w.eventType = ""
 		return
 	}
 	mergeLocalCompatUsage(&w.usage, w.api, []byte(data))
+	w.observeSSETerminal(data)
+}
+
+func (w *localCompatStreamWriter) observeSSETerminal(data string) {
+	var event struct {
+		Type    string          `json:"type"`
+		Error   json.RawMessage `json:"error"`
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal([]byte(data), &event) != nil {
+		return
+	}
+	eventType := event.Type
+	if eventType == "" {
+		eventType = w.eventType
+	}
+	w.eventType = ""
+	if len(event.Error) > 0 && string(event.Error) != "null" {
+		w.failureSeen = true
+		w.terminalSeen = true
+		return
+	}
+	switch w.api {
+	case localCompatResponses:
+		switch eventType {
+		case "response.completed":
+			w.terminalSeen = true
+		case "response.failed", "response.incomplete", "error":
+			w.failureSeen = true
+			w.terminalSeen = true
+		}
+	case localCompatMessages:
+		if eventType == "message_stop" {
+			w.terminalSeen = true
+		} else if eventType == "error" {
+			w.failureSeen = true
+			w.terminalSeen = true
+		}
+	case localCompatChat:
+		for _, choice := range event.Choices {
+			if choice.FinishReason != "" {
+				w.terminalSeen = true
+				break
+			}
+		}
+	}
+}
+
+func (w *localCompatStreamWriter) emitControlledFailure(cause error) error {
+	message := "upstream stream interrupted before completion"
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		message = cause.Error()
+	}
+	var eventType string
+	var payload interface{}
+	switch w.api {
+	case localCompatResponses:
+		eventType = "response.failed"
+		payload = map[string]interface{}{
+			"type": "response.failed",
+			"response": map[string]interface{}{
+				"status": "failed",
+				"error":  map[string]string{"code": "upstream_stream_interrupted", "message": message},
+			},
+		}
+	case localCompatMessages:
+		eventType = "error"
+		payload = map[string]interface{}{"type": "error", "error": map[string]string{"type": "api_error", "code": "upstream_stream_interrupted", "message": message}}
+	default:
+		payload = map[string]interface{}{"error": map[string]string{"type": "api_error", "code": "upstream_stream_interrupted", "message": message}}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	prefix := "data: "
+	if eventType != "" {
+		prefix = "event: " + eventType + "\ndata: "
+	}
+	if _, err := fmt.Fprintf(w.dst, "%s%s\n\n", prefix, encoded); err != nil {
+		return err
+	}
+	if w.flusher != nil {
+		w.flusher.Flush()
+	}
+	return nil
 }
 
 func mergeLocalCompatUsage(dst *localCompatUsage, api localCompatAPI, body []byte) {
@@ -798,6 +957,8 @@ type responsesSSEAggregator struct {
 	usage     localCompatUsage
 	pending   []byte
 	eventType string
+	completed bool
+	failure   string
 }
 
 func aggregateResponsesSSE(body io.Reader) ([]byte, localCompatUsage, error) {
@@ -817,6 +978,12 @@ func aggregateResponsesSSE(body io.Reader) ([]byte, localCompatUsage, error) {
 		}
 	}
 	agg.consume(true)
+	if agg.failure != "" {
+		return nil, agg.usage, fmt.Errorf("%w: responses stream reported %s", errLocalCompatStreamProtocol, agg.failure)
+	}
+	if !agg.completed {
+		return nil, agg.usage, fmt.Errorf("%w: response.completed", errLocalCompatStreamMissingTerminal)
+	}
 	if agg.response == nil {
 		return nil, agg.usage, fmt.Errorf("upstream responses stream completed without response object")
 	}
@@ -872,10 +1039,13 @@ func (a *responsesSSEAggregator) consumeLine(line string) {
 	switch eventType {
 	case "response.output_text.delta":
 		a.text.WriteString(event.Delta)
-	case "response.completed", "response.incomplete", "response.failed":
+	case "response.completed":
+		a.completed = true
 		if event.Response != nil {
 			a.response = event.Response
 		}
+	case "response.incomplete", "response.failed", "error":
+		a.failure = eventType
 	}
 	a.eventType = ""
 }

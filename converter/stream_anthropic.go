@@ -22,6 +22,7 @@ import (
 type AnthropicStreamConverter struct {
 	pr        *io.PipeReader
 	pw        *io.PipeWriter
+	source    io.ReadCloser
 	closeOnce sync.Once
 
 	mu           sync.Mutex
@@ -31,6 +32,8 @@ type AnthropicStreamConverter struct {
 	cacheWrite   int // cache_creation_input_tokens
 	outputChars  int
 	toolUsed     bool
+	outcome      StreamOutcome
+	writeFailed  bool
 	done         chan struct{}
 
 	// 工具调用状态：key = content block index
@@ -53,6 +56,8 @@ func NewAnthropicStreamConverter(source io.ReadCloser, modelID string, maxTokens
 	c := &AnthropicStreamConverter{
 		pr:               pr,
 		pw:               pw,
+		source:           source,
+		outcome:          StreamOutcomePending,
 		done:             make(chan struct{}),
 		toolBlocks:       make(map[int]*anthropicToolBlock),
 		modelID:          modelID,
@@ -72,8 +77,35 @@ func (c *AnthropicStreamConverter) Read(p []byte) (int, error) {
 }
 
 func (c *AnthropicStreamConverter) Close() error {
-	c.closeOnce.Do(func() { c.pr.Close() })
+	c.closeOnce.Do(func() {
+		select {
+		case <-c.done:
+		default:
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending {
+				c.outcome = StreamOutcomeClientCanceled
+			}
+			c.mu.Unlock()
+		}
+		_ = c.pr.Close()
+		_ = c.source.Close()
+	})
 	return nil
+}
+
+func (c *AnthropicStreamConverter) Outcome() StreamOutcome {
+	<-c.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.outcome
+}
+
+func (c *AnthropicStreamConverter) Succeeded() bool {
+	return c.Outcome() == StreamOutcomeCompleted
+}
+
+func (c *AnthropicStreamConverter) Error() error {
+	return streamOutcomeError(c.Outcome())
 }
 
 func (c *AnthropicStreamConverter) Usage() (int, int) {
@@ -92,17 +124,29 @@ func (c *AnthropicStreamConverter) CacheTokens() (cacheRead, cacheWrite int) {
 }
 
 func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[stream_anthropic] panic recovered: %v", r)
-		}
-	}()
 	defer close(c.done)
 	defer source.Close()
 	defer c.pw.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[stream_anthropic] panic recovered: %v", r)
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+				c.outcome = StreamOutcomeReadFailure
+			}
+			outcome := c.outcome
+			c.mu.Unlock()
+			if outcome != StreamOutcomeClientCanceled {
+				c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+			}
+		}
+	}()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
-	c.write(InitialResponseFrame(""))
+	if !c.write(InitialResponseFrame("")) {
+		return
+	}
+	var readErr error
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -111,13 +155,34 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 		if line != "" {
 			c.handleLine(line)
 		}
+		c.mu.Lock()
+		writeFailed := c.writeFailed
+		terminal := c.outcome != StreamOutcomePending
+		c.mu.Unlock()
+		if writeFailed || terminal {
+			break
+		}
 
 		if err != nil {
+			readErr = err
 			if err != io.EOF {
 				log.Printf("[stream_anthropic] 读取错误: %v", err)
 			}
 			break
 		}
+	}
+
+	c.mu.Lock()
+	if c.outcome == StreamOutcomePending {
+		c.outcome = streamOutcomeFromReadError(readErr)
+	}
+	outcome := c.outcome
+	c.mu.Unlock()
+	if outcome != StreamOutcomeCompleted {
+		if outcome != StreamOutcomeClientCanceled {
+			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+		}
+		return
 	}
 
 	c.mu.Lock()
@@ -138,8 +203,12 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 
 	// 项目内统一约定 inputTokens 是总输入；Anthropic 原始 input_tokens 仅是未缓存尾部。
 	totalIn := uncachedIn + cacheR + cacheW
-	c.write(MetadataStopFrame(stopReason))
-	c.write(ContextUsageFrame(totalIn+out, c.maxTokens))
+	if !c.write(MetadataStopFrame(stopReason)) {
+		return
+	}
+	if !c.write(ContextUsageFrame(totalIn+out, c.maxTokens)) {
+		return
+	}
 	c.write(MeteringFrame(calcCredits(totalIn, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
@@ -178,7 +247,18 @@ func (c *AnthropicStreamConverter) handleLine(line string) {
 		c.handleContentBlockStop(event)
 	case "message_delta":
 		c.handleMessageDelta(event)
+	case "message_stop":
+		c.mu.Lock()
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeCompleted
+		}
+		c.mu.Unlock()
 	case "error":
+		c.mu.Lock()
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeUpstreamProtocolFailure
+		}
+		c.mu.Unlock()
 		log.Printf("[stream_anthropic] 上游错误: %s", data)
 	}
 }
@@ -317,13 +397,25 @@ func (c *AnthropicStreamConverter) handleMessageDelta(event map[string]json.RawM
 	}
 }
 
-func (c *AnthropicStreamConverter) write(frame []byte) {
+func (c *AnthropicStreamConverter) write(frame []byte) bool {
 	if len(frame) == 0 {
-		return
+		return true
 	}
 	if _, err := c.pw.Write(frame); err != nil {
-		log.Printf("[stream_anthropic] 写入帧失败: %v", err)
+		c.mu.Lock()
+		firstFailure := !c.writeFailed
+		c.writeFailed = true
+		if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+			c.outcome = StreamOutcomeClientCanceled
+		}
+		c.mu.Unlock()
+		if firstFailure {
+			log.Printf("[stream_anthropic] downstream closed: %v", err)
+		}
+		_ = c.source.Close()
+		return false
 	}
+	return true
 }
 
 // extractIndex 从事件 map 中提取 index 字段

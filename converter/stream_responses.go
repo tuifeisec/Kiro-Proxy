@@ -30,6 +30,7 @@ import (
 type ResponsesStreamConverter struct {
 	pr        *io.PipeReader
 	pw        *io.PipeWriter
+	source    io.ReadCloser
 	closeOnce sync.Once
 
 	mu           sync.Mutex
@@ -40,8 +41,8 @@ type ResponsesStreamConverter struct {
 	outputChars  int
 	toolUsed     bool
 	responseID   string // 上游返回的 response ID（用于续传）
-	completed    bool
-	failed       bool
+	outcome      StreamOutcome
+	writeFailed  bool
 	done         chan struct{}
 
 	// 活跃工具调用：按 item_id 与 call_id 双索引，保证不同上游事件都能回填
@@ -66,6 +67,8 @@ func NewResponsesStreamConverter(source io.ReadCloser, modelID string, maxTokens
 	c := &ResponsesStreamConverter{
 		pr:               pr,
 		pw:               pw,
+		source:           source,
+		outcome:          StreamOutcomePending,
 		done:             make(chan struct{}),
 		toolsByItem:      make(map[string]*respToolState, 4),
 		toolsByCall:      make(map[string]*respToolState, 4),
@@ -86,7 +89,19 @@ func (c *ResponsesStreamConverter) Read(p []byte) (int, error) {
 }
 
 func (c *ResponsesStreamConverter) Close() error {
-	c.closeOnce.Do(func() { c.pr.Close() })
+	c.closeOnce.Do(func() {
+		select {
+		case <-c.done:
+		default:
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending {
+				c.outcome = StreamOutcomeClientCanceled
+			}
+			c.mu.Unlock()
+		}
+		_ = c.pr.Close()
+		_ = c.source.Close()
+	})
 	return nil
 }
 
@@ -116,25 +131,45 @@ func (c *ResponsesStreamConverter) ResponseID() string {
 
 // Succeeded 表示 Responses 流明确完成且未收到错误/失败事件。
 func (c *ResponsesStreamConverter) Succeeded() bool {
+	return c.Outcome() == StreamOutcomeCompleted
+}
+
+func (c *ResponsesStreamConverter) Outcome() StreamOutcome {
 	<-c.done
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.completed && !c.failed
+	return c.outcome
+}
+
+func (c *ResponsesStreamConverter) Error() error {
+	return streamOutcomeError(c.Outcome())
 }
 
 func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[stream_responses] panic recovered: %v", r)
-		}
-	}()
 	defer close(c.done)
 	defer source.Close()
 	defer c.pw.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[stream_responses] panic recovered: %v", r)
+			c.mu.Lock()
+			if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+				c.outcome = StreamOutcomeReadFailure
+			}
+			outcome := c.outcome
+			c.mu.Unlock()
+			if outcome != StreamOutcomeClientCanceled {
+				c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+			}
+		}
+	}()
 
 	reader := bufio.NewReaderSize(source, 64*1024)
-	c.write(InitialResponseFrame(""))
+	if !c.write(InitialResponseFrame("")) {
+		return
+	}
 	var currentEventType string
+	var readErr error
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -151,16 +186,34 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 				currentEventType = ""
 			}
 		}
+		c.mu.Lock()
+		writeFailed := c.writeFailed
+		terminal := c.outcome != StreamOutcomePending
+		c.mu.Unlock()
+		if writeFailed || terminal {
+			break
+		}
 
 		if err != nil {
+			readErr = err
 			if err != io.EOF {
 				log.Printf("[stream_responses] 读取错误: %v", err)
-				c.mu.Lock()
-				c.failed = true
-				c.mu.Unlock()
 			}
 			break
 		}
+	}
+
+	c.mu.Lock()
+	if c.outcome == StreamOutcomePending {
+		c.outcome = streamOutcomeFromReadError(readErr)
+	}
+	outcome := c.outcome
+	c.mu.Unlock()
+	if outcome != StreamOutcomeCompleted {
+		if outcome != StreamOutcomeClientCanceled {
+			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+		}
+		return
 	}
 
 	// 结尾帧：与 OpenAI chat 路径保持一致（Kiro IDE 依赖这些帧判定完成）
@@ -180,12 +233,24 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 	}
 	c.mu.Unlock()
 
-	c.write(MetadataStopFrame(stopReason))
-	c.write(ContextUsageFrame(in+out, c.maxTokens))
+	if !c.write(MetadataStopFrame(stopReason)) {
+		return
+	}
+	if !c.write(ContextUsageFrame(in+out, c.maxTokens)) {
+		return
+	}
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, 0, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
 func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
+	if eventType == "" {
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(data), &envelope) == nil {
+			eventType = envelope.Type
+		}
+	}
 	switch eventType {
 	case "response.output_text.delta":
 		var ev struct {
@@ -296,9 +361,13 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		if json.Unmarshal([]byte(data), &ev) == nil {
 			c.mu.Lock()
 			if eventType == "response.completed" {
-				c.completed = true
+				if c.outcome == StreamOutcomePending {
+					c.outcome = StreamOutcomeCompleted
+				}
 			} else {
-				c.failed = true
+				if c.outcome == StreamOutcomePending {
+					c.outcome = StreamOutcomeUpstreamProtocolFailure
+				}
 			}
 			if ev.Response.Usage.InputTokens > 0 {
 				c.inputTokens = ev.Response.Usage.InputTokens
@@ -330,9 +399,11 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			c.mu.Unlock()
 		}
 
-	case "error":
+	case "response.failed", "error":
 		c.mu.Lock()
-		c.failed = true
+		if c.outcome == StreamOutcomePending {
+			c.outcome = StreamOutcomeUpstreamProtocolFailure
+		}
 		c.mu.Unlock()
 		log.Printf("[stream_responses] 上游错误: %s", data)
 	}
@@ -378,11 +449,23 @@ func (c *ResponsesStreamConverter) removeTool(itemID, callID string) {
 	}
 }
 
-func (c *ResponsesStreamConverter) write(frame []byte) {
+func (c *ResponsesStreamConverter) write(frame []byte) bool {
 	if len(frame) == 0 {
-		return
+		return true
 	}
 	if _, err := c.pw.Write(frame); err != nil {
-		log.Printf("[stream_responses] 写入帧失败: %v", err)
+		c.mu.Lock()
+		firstFailure := !c.writeFailed
+		c.writeFailed = true
+		if c.outcome == StreamOutcomePending || c.outcome == StreamOutcomeCompleted {
+			c.outcome = StreamOutcomeClientCanceled
+		}
+		c.mu.Unlock()
+		if firstFailure {
+			log.Printf("[stream_responses] downstream closed: %v", err)
+		}
+		_ = c.source.Close()
+		return false
 	}
+	return true
 }

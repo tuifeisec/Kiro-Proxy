@@ -1,9 +1,75 @@
 package proxy
 
 import (
+	"context"
+	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestCopyLocalCompatResponseEmitsResponsesFailureOnMissingTerminal(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("Content-Type", "text/event-stream")
+	stream := "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
+
+	_, err := copyLocalCompatResponse(context.Background(), rr, strings.NewReader(stream), localCompatResponses)
+	if err == nil {
+		t.Fatal("expected missing terminal error")
+	}
+	if !errors.Is(err, errLocalCompatStreamMissingTerminal) {
+		t.Fatalf("error = %v, want missing-terminal classification", err)
+	}
+	if !strings.Contains(rr.Body.String(), "event: response.failed") || !strings.Contains(rr.Body.String(), "upstream_stream_interrupted") {
+		t.Fatalf("missing controlled Responses failure: %s", rr.Body.String())
+	}
+}
+
+func TestCopyLocalCompatResponseEmitsAnthropicFailureOnMissingTerminal(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("Content-Type", "text/event-stream")
+	stream := "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"
+
+	_, err := copyLocalCompatResponse(context.Background(), rr, strings.NewReader(stream), localCompatMessages)
+	if err == nil {
+		t.Fatal("expected missing terminal error")
+	}
+	if !errors.Is(err, errLocalCompatStreamMissingTerminal) {
+		t.Fatalf("error = %v, want missing-terminal classification", err)
+	}
+	if !strings.Contains(rr.Body.String(), "event: error") || !strings.Contains(rr.Body.String(), "upstream_stream_interrupted") {
+		t.Fatalf("missing controlled Anthropic failure: %s", rr.Body.String())
+	}
+}
+
+func TestCopyLocalCompatResponseAcceptsChatDone(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("Content-Type", "text/event-stream")
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
+
+	_, err := copyLocalCompatResponse(context.Background(), rr, strings.NewReader(stream), localCompatChat)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if strings.Contains(rr.Body.String(), "upstream_stream_interrupted") {
+		t.Fatalf("successful stream received controlled failure: %s", rr.Body.String())
+	}
+}
+
+func TestCopyLocalCompatResponseDoesNotWriteFailureAfterClientCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rr := httptest.NewRecorder()
+	rr.Header().Set("Content-Type", "text/event-stream")
+
+	_, err := copyLocalCompatResponse(ctx, rr, strings.NewReader("data: {\"choices\":[]}\n\n"), localCompatChat)
+	if err == nil {
+		t.Fatal("expected missing terminal error")
+	}
+	if strings.Contains(rr.Body.String(), "upstream_stream_interrupted") {
+		t.Fatalf("client cancellation must not append a controlled failure: %s", rr.Body.String())
+	}
+}
 
 func TestLocalCompatConversationIDPrefersExplicitIdentifiers(t *testing.T) {
 	request := httptest.NewRequest("POST", "/v1/responses", nil)
