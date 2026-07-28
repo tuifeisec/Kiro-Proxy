@@ -54,6 +54,7 @@ func (s *Server) registerRoutesTo(mux *http.ServeMux) {
 	mux.HandleFunc("/api/request-usage", s.handleRequestUsage)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/models/", s.handleModel)
+	mux.HandleFunc("/api/upstream-models", s.handleUpstreamModels)
 	mux.HandleFunc("/api/model-groups", s.handleModelGroups)
 	mux.HandleFunc("/api/model-groups/status", s.handleModelGroupStatus)
 	mux.HandleFunc("/api/model-groups/", s.handleModelGroup)

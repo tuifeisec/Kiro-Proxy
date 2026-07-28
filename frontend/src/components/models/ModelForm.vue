@@ -1,8 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { startCodexOAuth, exchangeCodexOAuth } from '../../api/models.js'
+import { startCodexOAuth, exchangeCodexOAuth, fetchUpstreamModels } from '../../api/models.js'
 import IconEye from '../icons/IconEye.vue'
 import IconEyeOff from '../icons/IconEyeOff.vue'
+import IconClose from '../icons/IconClose.vue'
+import IconRefresh from '../icons/IconRefresh.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 
 const props = defineProps({
@@ -44,7 +46,13 @@ const oauthLoading = ref(false)
 const oauthAuthUrl = ref('')
 const oauthCallbackUrl = ref('')
 const oauthError = ref('')
+const syncingUpstreamModels = ref(false)
+const upstreamModels = ref([])
+const upstreamModelSearch = ref('')
+const upstreamModelsError = ref('')
+const upstreamModelsDialogVisible = ref(false)
 const modalRef = ref(null)
+const upstreamModelsDialogRef = ref(null)
 const initialSnapshot = ref('')
 const discardConfirmVisible = ref(false)
 let lastFocused = null
@@ -64,6 +72,7 @@ watch(() => props.visible, (val) => {
     oauthAuthUrl.value = ''
     oauthCallbackUrl.value = ''
     oauthError.value = ''
+    resetUpstreamModels()
     loadingModel.value = false
     document.addEventListener('keydown', onKeydown)
     nextTick(() => {
@@ -80,9 +89,9 @@ watch(() => props.visible, (val) => {
 
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 
-function trapFocus(event) {
-  if (event.key !== 'Tab' || !modalRef.value) return
-  const focusables = Array.from(modalRef.value.querySelectorAll(
+function trapFocus(event, container) {
+  if (event.key !== 'Tab' || !container) return
+  const focusables = Array.from(container.querySelectorAll(
     'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
   )).filter((element) => element.offsetParent !== null)
   if (!focusables.length) return
@@ -101,10 +110,14 @@ function onKeydown(event) {
   if (discardConfirmVisible.value) return
   if (event.key === 'Escape') {
     event.preventDefault()
+    if (upstreamModelsDialogVisible.value) {
+      closeUpstreamModelsDialog()
+      return
+    }
     requestCancel()
     return
   }
-  trapFocus(event)
+  trapFocus(event, upstreamModelsDialogVisible.value ? upstreamModelsDialogRef.value : modalRef.value)
 }
 
 function closeForm() {
@@ -136,6 +149,13 @@ watch(() => form.value.provider, (val) => {
     applyDefaultPrices(val)
   }
 })
+
+watch(
+  () => [form.value.provider, form.value.base_url, form.value.api_key, form.value.proxy_url],
+  () => {
+    if (!syncingUpstreamModels.value) resetUpstreamModels()
+  }
+)
 
 const providerOptions = [
   { value: 'openai', label: 'OpenAI', icon: '◎' },
@@ -190,6 +210,18 @@ const endpointOptions = computed(() => {
   return ['/chat/completions', '/responses']
 })
 
+const canSyncUpstreamModels = computed(() => {
+  return form.value.provider !== 'codex'
+    && Boolean(form.value.base_url?.trim())
+    && Boolean(form.value.api_key?.trim())
+})
+
+const filteredUpstreamModels = computed(() => {
+  const keyword = upstreamModelSearch.value.trim().toLowerCase()
+  if (!keyword) return upstreamModels.value
+  return upstreamModels.value.filter((model) => model.toLowerCase().includes(keyword))
+})
+
 const reasoningOptions = computed(() => {
   const options = [
     { value: '', label: '自动' },
@@ -238,6 +270,72 @@ function applyDefaultPrices(provider) {
 function handleSave() {
   if (props.saving) return
   emit('save', { ...form.value })
+}
+
+function resetUpstreamModels() {
+  upstreamModels.value = []
+  upstreamModelSearch.value = ''
+  upstreamModelsError.value = ''
+  upstreamModelsDialogVisible.value = false
+}
+
+function upstreamModelsConfigKey() {
+  return JSON.stringify([
+    form.value.provider,
+    form.value.base_url,
+    form.value.api_key,
+    form.value.proxy_url
+  ])
+}
+
+async function handleSyncUpstreamModels() {
+  if (syncingUpstreamModels.value || !canSyncUpstreamModels.value) return
+  const configKey = upstreamModelsConfigKey()
+  syncingUpstreamModels.value = true
+  upstreamModelsError.value = ''
+  try {
+    const data = await fetchUpstreamModels({
+      source_id: props.model?.id || '',
+      provider: form.value.provider,
+      base_url: form.value.base_url,
+      api_key: form.value.api_key,
+      proxy_url: form.value.proxy_url
+    })
+    if (upstreamModelsConfigKey() !== configKey) {
+      resetUpstreamModels()
+      return
+    }
+    upstreamModels.value = Array.isArray(data?.models) ? data.models : []
+    upstreamModelSearch.value = ''
+    if (upstreamModels.value.length === 0) {
+      upstreamModelsError.value = '上游未返回可用模型'
+    } else {
+      upstreamModelsDialogVisible.value = true
+      nextTick(() => upstreamModelsDialogRef.value?.querySelector('input')?.focus())
+    }
+  } catch (e) {
+    if (upstreamModelsConfigKey() !== configKey) {
+      resetUpstreamModels()
+      return
+    }
+    upstreamModels.value = []
+    upstreamModelsError.value = e?.message || '同步上游模型失败'
+  } finally {
+    syncingUpstreamModels.value = false
+  }
+}
+
+function selectUpstreamModel(modelID) {
+  form.value.model_id = modelID
+  if (!form.value.name.trim()) {
+    form.value.name = modelID
+  }
+  closeUpstreamModelsDialog()
+}
+
+function closeUpstreamModelsDialog() {
+  upstreamModelsDialogVisible.value = false
+  upstreamModelSearch.value = ''
 }
 
 async function handleStartOAuth() {
@@ -302,9 +400,9 @@ async function handleExchangeOAuth() {
 
         <div class="flex-1 overflow-y-auto px-4 pb-3">
           <section class="rounded-lg border border-[#e5e7eb] bg-white p-3">
-            <div class="grid grid-cols-[72px_1fr] items-center gap-2.5 rounded-lg border border-[#eef2f7] bg-white p-2">
+            <div class="grid grid-cols-1 items-center gap-2.5 rounded-lg border border-[#eef2f7] bg-white p-2 sm:grid-cols-[72px_1fr]">
               <div class="text-xs font-semibold text-[#111827]">Provider</div>
-              <div class="grid grid-cols-4 gap-1.5">
+              <div class="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                 <button
                   v-for="provider in providerOptions"
                   :key="provider.value"
@@ -327,7 +425,7 @@ async function handleExchangeOAuth() {
 
           <section class="mt-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
             <h3 class="mb-3 text-sm font-semibold text-[#111827]">基础信息</h3>
-            <div class="grid grid-cols-2 gap-x-8 gap-y-3">
+            <div class="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2">
               <div>
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">下拉显示名称 <span class="text-[#ef4444]">*</span></label>
                 <input v-model="form.name"
@@ -348,13 +446,27 @@ async function handleExchangeOAuth() {
 
               <div>
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">模型标识 <span class="text-[#ef4444]">*</span></label>
-                <input v-model="form.model_id"
-                  class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
-                  :placeholder="providerPlaceholders.modelId" />
+                <div class="flex gap-2">
+                  <input v-model="form.model_id"
+                    class="h-9 min-w-0 flex-1 rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                    :placeholder="providerPlaceholders.modelId" />
+                  <button
+                    v-if="form.provider !== 'codex'"
+                    type="button"
+                    class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#dbeafe] text-[#2563eb] hover:bg-[#eff6ff] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="syncingUpstreamModels || !canSyncUpstreamModels"
+                    title="同步上游支持的模型"
+                    aria-label="同步上游支持的模型"
+                    @click="handleSyncUpstreamModels"
+                  >
+                    <IconRefresh class="h-4 w-4" :class="syncingUpstreamModels ? 'animate-spin' : ''" />
+                  </button>
+                </div>
                 <p class="mt-1 text-[11px] text-[#9ca3af]">模型标识会发送给上游 API</p>
+                <p v-if="upstreamModelsError" class="mt-1.5 text-[11px] text-[#ef4444]">{{ upstreamModelsError }}</p>
               </div>
 
-              <div :class="form.provider === 'codex' ? 'col-span-2' : ''">
+              <div :class="form.provider === 'codex' ? 'sm:col-span-2' : ''">
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">{{ form.provider === 'codex' ? 'Refresh Token / Codex Auth JSON' : '访问密钥 API Key' }} <span class="text-[#ef4444]">*</span></label>
                 <div class="relative">
                   <textarea v-if="form.provider === 'codex'" v-model="form.refresh_token"
@@ -431,7 +543,7 @@ async function handleExchangeOAuth() {
                 <p class="mt-1 text-[11px] text-[#9ca3af]">代理地址为空时表示直连</p>
               </div>
 
-              <div class="col-span-2 grid grid-cols-[132px_1fr] items-center gap-3">
+              <div class="grid grid-cols-1 items-center gap-1.5 sm:col-span-2 sm:grid-cols-[132px_1fr] sm:gap-3">
                 <label class="text-xs font-medium text-[#111827]">备注描述</label>
                 <div class="relative">
                   <input v-model="form.note"
@@ -446,8 +558,8 @@ async function handleExchangeOAuth() {
 
           <section class="mt-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
             <h3 class="mb-2 text-sm font-semibold text-[#111827]">模型能力参数</h3>
-            <div class="grid grid-cols-[1.6fr_.72fr_.72fr_1.6fr] items-start gap-4">
-              <div class="border-r border-[#e5e7eb] pr-4">
+            <div class="grid grid-cols-1 items-start gap-4 sm:grid-cols-[1.6fr_.72fr_.72fr_1.6fr]">
+              <div class="sm:border-r sm:border-[#e5e7eb] sm:pr-4">
                 <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
                   推理强度
                   <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
@@ -521,7 +633,7 @@ async function handleExchangeOAuth() {
                   placeholder="4096" />
               </div>
 
-              <div class="flex items-start gap-2.5 border-l border-[#e5e7eb] pl-4 pt-0.5">
+              <div class="flex items-start gap-2.5 pt-0.5 sm:border-l sm:border-[#e5e7eb] sm:pl-4">
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center justify-between gap-3">
                     <div class="truncate text-xs font-medium text-[#111827]">启用 continuation / previous_response_id</div>
@@ -537,11 +649,11 @@ async function handleExchangeOAuth() {
           </section>
 
           <section class="mt-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
-            <div class="mb-2.5 flex items-center justify-between">
+            <div class="mb-2.5 flex flex-wrap items-center justify-between gap-2">
               <h3 class="text-sm font-semibold text-[#111827]">Credit 价格配置 <span class="text-xs font-normal text-[#6b7280]">（每百万 Token）</span></h3>
               <button type="button" class="text-xs font-medium text-[#2563eb] hover:underline" @click="applyDefaultPrices(form.provider)">⟳ 恢复当前 Provider 默认价格</button>
             </div>
-            <div class="grid grid-cols-5 gap-3">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-5">
               <div>
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">输入价格</label>
                 <div class="relative">
@@ -550,7 +662,7 @@ async function handleExchangeOAuth() {
                   <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
                 </div>
               </div>
-              <div class="border-l border-[#e5e7eb] pl-3">
+              <div class="sm:border-l sm:border-[#e5e7eb] sm:pl-3">
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">输出价格</label>
                 <div class="relative">
                   <input v-model.number="form.output_price" type="number" step="0.001" min="0"
@@ -558,7 +670,7 @@ async function handleExchangeOAuth() {
                   <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
                 </div>
               </div>
-              <div class="border-l border-[#e5e7eb] pl-3">
+              <div class="sm:border-l sm:border-[#e5e7eb] sm:pl-3">
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">缓存输入价格</label>
                 <div class="relative">
                   <input v-model.number="form.cache_input_price" type="number" step="0.001" min="0"
@@ -566,7 +678,7 @@ async function handleExchangeOAuth() {
                   <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
                 </div>
               </div>
-              <div class="border-l border-[#e5e7eb] pl-3">
+              <div class="sm:border-l sm:border-[#e5e7eb] sm:pl-3">
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">缓存输出价格</label>
                 <div class="relative">
                   <input v-model.number="form.cache_output_price" type="number" step="0.001" min="0"
@@ -574,7 +686,7 @@ async function handleExchangeOAuth() {
                   <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#6b7280]">USD</span>
                 </div>
               </div>
-              <div class="border-l border-[#e5e7eb] pl-3">
+              <div class="sm:border-l sm:border-[#e5e7eb] sm:pl-3">
                 <label class="mb-1.5 block text-xs font-medium text-[#111827]">倍率</label>
                 <input v-model.number="form.rate_multiplier" type="number" step="0.01" min="0"
                   class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]" />
@@ -593,6 +705,64 @@ async function handleExchangeOAuth() {
             :disabled="saving" @click="requestCancel">取消</button>
           <button type="button" class="h-9 rounded-md bg-[#2563eb] px-7 text-xs font-medium text-white shadow-sm hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</button>
+        </div>
+      </div>
+
+      <div v-if="upstreamModelsDialogVisible" class="fixed inset-0 z-[60] flex items-center justify-center px-4 py-6">
+        <div class="absolute inset-0 bg-black/30" @click="closeUpstreamModelsDialog"></div>
+        <div
+          ref="upstreamModelsDialogRef"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="upstream-models-title"
+          class="relative flex max-h-[72vh] w-full max-w-[560px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white shadow-2xl"
+        >
+          <div class="flex shrink-0 items-center justify-between border-b border-[#eef2f7] px-4 py-3">
+            <div class="min-w-0">
+              <h3 id="upstream-models-title" class="text-sm font-semibold text-[#111827]">选择上游模型</h3>
+              <p class="mt-0.5 text-[11px] text-[#9ca3af]">已拉取 {{ upstreamModels.length }} 个模型</p>
+            </div>
+            <button
+              type="button"
+              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#111827]"
+              aria-label="关闭模型选择"
+              title="关闭"
+              @click="closeUpstreamModelsDialog"
+            >
+              <IconClose class="h-4 w-4" />
+            </button>
+          </div>
+
+          <div class="shrink-0 border-b border-[#eef2f7] px-4 py-3">
+            <input
+              v-model="upstreamModelSearch"
+              class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-3 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+              placeholder="搜索上游模型"
+            />
+          </div>
+
+          <div class="min-h-0 flex-1 overflow-y-auto py-1">
+            <button
+              v-for="modelID in filteredUpstreamModels"
+              :key="modelID"
+              type="button"
+              class="flex min-h-10 w-full items-center justify-between gap-4 px-4 py-2 text-left text-xs hover:bg-[#f8fafc]"
+              :class="form.model_id === modelID ? 'bg-[#eff6ff] text-[#2563eb]' : 'text-[#374151]'"
+              @click="selectUpstreamModel(modelID)"
+            >
+              <span class="min-w-0 break-all">{{ modelID }}</span>
+              <span class="shrink-0 text-[10px] font-medium">{{ form.model_id === modelID ? '当前模型' : '选择' }}</span>
+            </button>
+            <div v-if="filteredUpstreamModels.length === 0" class="px-4 py-10 text-center text-xs text-[#9ca3af]">没有匹配的模型</div>
+          </div>
+
+          <div class="flex shrink-0 justify-end border-t border-[#eef2f7] px-4 py-3">
+            <button
+              type="button"
+              class="h-9 rounded-md border border-[#e5e7eb] bg-white px-5 text-xs text-[#374151] hover:bg-[#f9fafb]"
+              @click="closeUpstreamModelsDialog"
+            >关闭</button>
+          </div>
         </div>
       </div>
     </div>

@@ -78,6 +78,15 @@ export async function testModel(modelId, model) {
   return parseJSONResponse(r)
 }
 
+export async function fetchUpstreamModels(data) {
+  const r = await fetch(`${BASE}/api/upstream-models`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  return parseJSONResponse(r)
+}
+
 export async function refreshCodexModel(id) {
   const r = await fetch(`${BASE}/api/refresh-codex-model`, {
     method: 'POST',
