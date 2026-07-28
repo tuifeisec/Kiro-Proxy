@@ -3,14 +3,125 @@ package test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"kiro-proxy/converter"
 	"kiro-proxy/store"
 )
+
+func TestPrefixAuditAttributesAppendAndRewrite(t *testing.T) {
+	base := prefixAuditShape(t, `[{"role":"system","content":"stable"},{"role":"user","content":"one"}]`)
+	appended := prefixAuditShape(t, `[{"role":"system","content":"stable"},{"role":"user","content":"one"},{"role":"assistant","content":"done"}]`)
+	diagnostics := converter.ComparePrefixAuditShapes(&base, appended)
+	if diagnostics.PrefixChanged || diagnostics.InputRelation != "append" || diagnostics.StableItems != 2 || diagnostics.AddedItems != 1 {
+		t.Fatalf("正常追加被错误归因: %+v", diagnostics)
+	}
+
+	rewritten := prefixAuditShape(t, `[{"role":"system","content":"stable"},{"role":"user","content":"changed"},{"role":"assistant","content":"done"}]`)
+	diagnostics = converter.ComparePrefixAuditShapes(&base, rewritten)
+	if !diagnostics.PrefixChanged || diagnostics.InputRelation != "rewrite" || diagnostics.FirstChangedItem != 1 || !hasAuditReason(diagnostics.ChangeReasons, "history_rewrite") {
+		t.Fatalf("历史重写未被识别: %+v", diagnostics)
+	}
+
+	routeChanged := appended
+	routeChanged.ModelConfigID = "model-config-b"
+	routeChanged.ToolsHash = "tools-b"
+	diagnostics = converter.ComparePrefixAuditShapes(&appended, routeChanged)
+	if !diagnostics.PrefixChanged || diagnostics.InputRelation != "same" || !hasAuditReason(diagnostics.ChangeReasons, "model_config") || !hasAuditReason(diagnostics.ChangeReasons, "tools") {
+		t.Fatalf("路由或工具漂移未被识别: %+v", diagnostics)
+	}
+
+	cacheControlA := `[{"role":"user","content":[{"type":"text","text":"stable","cache_control":{"type":"ephemeral"}}]}]`
+	cacheControlB := `[{"role":"user","content":[{"type":"text","text":"stable"}]}]`
+	hashesA, err := converter.PrefixAuditItemHashesIgnoringCacheControl(cacheControlA)
+	if err != nil {
+		t.Fatalf("归一化第一个 Anthropic 输入: %v", err)
+	}
+	hashesB, err := converter.PrefixAuditItemHashesIgnoringCacheControl(cacheControlB)
+	if err != nil {
+		t.Fatalf("归一化第二个 Anthropic 输入: %v", err)
+	}
+	if len(hashesA) != 1 || len(hashesB) != 1 || hashesA[0] != hashesB[0] {
+		t.Fatalf("Anthropic 滚动 cache_control 被误判为内容变化: %v != %v", hashesA, hashesB)
+	}
+}
+
+func TestOpenAICachePrefixCurveWithMockProvider(t *testing.T) {
+	mock := &prefixCacheMock{t: t}
+	server := httptest.NewServer(mock)
+	defer server.Close()
+
+	systemPrompt := strings.Repeat("stable project policy and coding conventions. ", 160)
+	tools := []json.RawMessage{json.RawMessage(`{"toolSpecification":{"name":"read_file","description":"Read a file","inputSchema":{"json":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}}`)}
+	history := []converter.ParsedHistoryEntry{{IsSystem: true, UserContent: systemPrompt}}
+	rates := make([]int, 0, 8)
+
+	for turn := 0; turn < 8; turn++ {
+		question := fmt.Sprintf("turn-%d: inspect the cache prefix", turn)
+		conversation := &converter.ParsedConversation{
+			ModelID:        "cache-test-model",
+			ConversationID: "cache-curve",
+			SystemText:     systemPrompt,
+			History:        append([]converter.ParsedHistoryEntry(nil), history...),
+			CurrentContent: question,
+			RawTools:       tools,
+			ToolsHash:      "stable-tools",
+		}
+		body, err := converter.KiroToOpenAI(conversation, "cache-test-model", "")
+		if err != nil {
+			t.Fatalf("第 %d 轮生成请求: %v", turn, err)
+		}
+		response, err := http.Post(server.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("第 %d 轮发送 mock 请求: %v", turn, err)
+		}
+		var result struct {
+			Usage struct {
+				PromptTokens          int `json:"prompt_tokens"`
+				PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+				PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+			} `json:"usage"`
+		}
+		decodeErr := json.NewDecoder(response.Body).Decode(&result)
+		response.Body.Close()
+		if decodeErr != nil {
+			t.Fatalf("第 %d 轮解析 mock usage: %v", turn, decodeErr)
+		}
+		denominator := result.Usage.PromptCacheHitTokens + result.Usage.PromptCacheMissTokens
+		if denominator == 0 {
+			t.Fatalf("第 %d 轮 mock usage 缺少输入 token", turn)
+		}
+		rates = append(rates, result.Usage.PromptCacheHitTokens*100/denominator)
+		history = append(history, converter.ParsedHistoryEntry{
+			UserContent:      question,
+			HasAssistant:     true,
+			AssistantContent: fmt.Sprintf("turn-%d complete", turn),
+		})
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	for i := 1; i < len(mock.totalBytes); i++ {
+		if mock.hitBytes[i] != mock.totalBytes[i-1] {
+			t.Fatalf("第 %d 轮没有完整复用上一轮前缀: hit=%d previous=%d", i, mock.hitBytes[i], mock.totalBytes[i-1])
+		}
+		if mock.cacheKeys[i] != mock.cacheKeys[0] {
+			t.Fatalf("第 %d 轮 prompt_cache_key 漂移: %q != %q", i, mock.cacheKeys[i], mock.cacheKeys[0])
+		}
+	}
+	if rates[len(rates)-1] < rates[1] || rates[len(rates)-1] < 90 {
+		t.Fatalf("缓存命中曲线未保持高位: %v", rates)
+	}
+}
 
 func TestContextGathererBootstrapRemainsAppendOnly(t *testing.T) {
 	const (
@@ -499,4 +610,120 @@ func removeCacheControl(value any) {
 			removeCacheControl(child)
 		}
 	}
+}
+
+func prefixAuditShape(t *testing.T, inputJSON string) converter.PrefixAuditShape {
+	t.Helper()
+	hashes, err := converter.PrefixAuditItemHashes(inputJSON)
+	if err != nil {
+		t.Fatalf("生成 prefix audit hashes: %v", err)
+	}
+	return converter.PrefixAuditShape{
+		SystemHash:    "system-a",
+		ToolsHash:     "tools-a",
+		CacheKey:      "cache-a",
+		ModelConfigID: "model-config-a",
+		ModelID:       "model-a",
+		Provider:      "openai",
+		Endpoint:      "/chat/completions",
+		API:           "chat",
+		ItemHashes:    hashes,
+	}
+}
+
+func hasAuditReason(reasons []string, want string) bool {
+	for _, reason := range reasons {
+		if reason == want {
+			return true
+		}
+	}
+	return false
+}
+
+type prefixCacheMock struct {
+	t          *testing.T
+	mu         sync.Mutex
+	previous   []json.RawMessage
+	totalBytes []int
+	hitBytes   []int
+	cacheKeys  []string
+}
+
+func (m *prefixCacheMock) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		m.t.Errorf("读取 mock 请求: %v", err)
+		http.Error(w, "read request", http.StatusBadRequest)
+		return
+	}
+	var payload struct {
+		Messages       []json.RawMessage `json:"messages"`
+		Tools          json.RawMessage   `json:"tools"`
+		PromptCacheKey string            `json:"prompt_cache_key"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		m.t.Errorf("解析 mock 请求: %v", err)
+		http.Error(w, "decode request", http.StatusBadRequest)
+		return
+	}
+
+	prefix := make([]json.RawMessage, 0, len(payload.Messages)+1)
+	if len(payload.Tools) > 0 {
+		prefix = append(prefix, append(json.RawMessage(nil), payload.Tools...))
+	}
+	for _, message := range payload.Messages {
+		prefix = append(prefix, append(json.RawMessage(nil), message...))
+	}
+
+	m.mu.Lock()
+	common := commonRawPrefix(m.previous, prefix)
+	hitBytes := rawMessageBytes(prefix[:common])
+	totalBytes := rawMessageBytes(prefix)
+	m.previous = prefix
+	m.totalBytes = append(m.totalBytes, totalBytes)
+	m.hitBytes = append(m.hitBytes, hitBytes)
+	m.cacheKeys = append(m.cacheKeys, payload.PromptCacheKey)
+	m.mu.Unlock()
+
+	promptTokens := maxInt(1, (totalBytes+3)/4)
+	hitTokens := hitBytes / 4
+	if hitTokens > promptTokens {
+		hitTokens = promptTokens
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"usage": map[string]int{
+			"prompt_tokens":            promptTokens,
+			"prompt_cache_hit_tokens":  hitTokens,
+			"prompt_cache_miss_tokens": promptTokens - hitTokens,
+		},
+	})
+}
+
+func commonRawPrefix(previous, current []json.RawMessage) int {
+	limit := len(previous)
+	if len(current) < limit {
+		limit = len(current)
+	}
+	for i := 0; i < limit; i++ {
+		if !bytes.Equal(previous[i], current[i]) {
+			return i
+		}
+	}
+	return limit
+}
+
+func rawMessageBytes(messages []json.RawMessage) int {
+	total := 0
+	for _, message := range messages {
+		total += len(message)
+	}
+	return total
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

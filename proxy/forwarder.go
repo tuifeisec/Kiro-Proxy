@@ -41,16 +41,17 @@ const (
 
 // Forwarder 负责转发请求到上游
 type Forwarder struct {
-	stats     *store.Stats
-	db        *store.DB
-	clientMu  sync.RWMutex
-	clients   map[string]*http.Client
-	health    *modelHealthTracker
-	affinity  *modelAffinityStore
-	load      *modelLoadTracker
-	latency   *modelLatencyTracker
-	upstream  *upstreamBucketHealth
-	avoidance *modelAvoidanceStore
+	stats       *store.Stats
+	db          *store.DB
+	clientMu    sync.RWMutex
+	clients     map[string]*http.Client
+	health      *modelHealthTracker
+	affinity    *modelAffinityStore
+	load        *modelLoadTracker
+	latency     *modelLatencyTracker
+	upstream    *upstreamBucketHealth
+	avoidance   *modelAvoidanceStore
+	prefixAudit *prefixAuditTracker
 }
 
 // NewForwarder 创建转发器
@@ -61,15 +62,16 @@ func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
 		clients[""] = client
 	}
 	return &Forwarder{
-		stats:     stats,
-		db:        db,
-		clients:   clients,
-		health:    newModelHealthTracker(),
-		affinity:  newModelAffinityStore(),
-		load:      newModelLoadTracker(),
-		latency:   newModelLatencyTracker(),
-		upstream:  newUpstreamBucketHealth(),
-		avoidance: newModelAvoidanceStore(),
+		stats:       stats,
+		db:          db,
+		clients:     clients,
+		health:      newModelHealthTracker(),
+		affinity:    newModelAffinityStore(),
+		load:        newModelLoadTracker(),
+		latency:     newModelLatencyTracker(),
+		upstream:    newUpstreamBucketHealth(),
+		avoidance:   newModelAvoidanceStore(),
+		prefixAudit: newPrefixAuditTracker(),
 	}
 }
 
@@ -540,7 +542,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		}
 	}
 
-	logPrefixDrift(logger, pre, model, upstreamBody, contResult)
+	f.logPrefixDrift(logger, pre, model, upstreamBody, contResult)
 	logger.InfoBytes("forwarder", fmt.Sprintf("转发: %s → %s (body=%d bytes)", model.ModelID, upstreamURL, len(upstreamBody)), upstreamBody)
 	sessionID := ""
 	if pre != nil && pre.Conv != nil {
@@ -859,8 +861,8 @@ func shouldRetryWithoutContinuation(body string) bool {
 	return false
 }
 
-func logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body []byte, contResult *converter.ResponsesContinuationResult) {
-	if logger == nil || pre == nil || pre.Conv == nil || pre.Conv.IsClassifier {
+func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body []byte, contResult *converter.ResponsesContinuationResult) {
+	if logger == nil || pre == nil || pre.Conv == nil || pre.Conv.IsClassifier || m == nil {
 		return
 	}
 
@@ -894,28 +896,45 @@ func logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body 
 		PromptCacheKey     string          `json:"prompt_cache_key"`
 		Input              json.RawMessage `json:"input"`
 		Messages           json.RawMessage `json:"messages"`
+		Contents           json.RawMessage `json:"contents"`
 		Tools              json.RawMessage `json:"tools"`
 		PreviousResponseID string          `json:"previous_response_id"`
 	}
-	if openAICache && json.Unmarshal(body, &auditBody) == nil {
+	providerInputJSON := ""
+	if contResult != nil && contResult.FullInputJSON != "" {
+		providerInputJSON = contResult.FullInputJSON
+	}
+	if json.Unmarshal(body, &auditBody) == nil {
 		actualCacheKey = auditBody.PromptCacheKey
 		previousResponseID = auditBody.PreviousResponseID
 		if len(auditBody.Input) > 0 {
 			api = "responses"
 		}
-		if providerInputHash == "" {
+		if providerInputJSON == "" {
 			prefix := auditBody.Input
 			if len(prefix) == 0 {
 				prefix = auditBody.Messages
 			}
+			if len(prefix) == 0 {
+				prefix = auditBody.Contents
+			}
 			if len(prefix) > 0 {
-				providerInputHash = converter.HashInput(string(prefix))
-				var items []json.RawMessage
-				if json.Unmarshal(prefix, &items) == nil {
-					providerInputItems = len(items)
-				}
+				providerInputJSON = string(prefix)
 			}
 		}
+		if providerToolsHash == "" && len(auditBody.Tools) > 0 {
+			providerToolsHash = converter.HashInput(string(auditBody.Tools))
+		}
+	}
+	itemHashes, hashErr := converter.PrefixAuditItemHashes(providerInputJSON)
+	if m.Provider == "anthropic" {
+		itemHashes, hashErr = converter.PrefixAuditItemHashesIgnoringCacheControl(providerInputJSON)
+	}
+	if hashErr == nil && providerInputJSON != "" {
+		providerInputHash = converter.HashInput(providerInputJSON)
+		providerInputItems = len(itemHashes)
+	} else {
+		itemHashes = nil
 	}
 	if openAICache {
 		expectedCacheKey = converter.PromptCacheKeyForAuditWithProviderToolsHash(
@@ -926,15 +945,37 @@ func logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body 
 		)
 	}
 
+	shape := converter.PrefixAuditShape{
+		SystemHash:    converter.HashInput(staticSystem),
+		ToolsHash:     providerToolsHash,
+		CacheKey:      actualCacheKey,
+		ModelConfigID: m.ID,
+		ModelID:       m.ModelID,
+		Provider:      m.Provider,
+		Endpoint:      m.Endpoint,
+		API:           api,
+		ItemHashes:    itemHashes,
+	}
+	diagnostics := converter.ComparePrefixAuditShapes(nil, shape)
+	if f != nil {
+		diagnostics = f.prefixAudit.compareAndStore(responsesContinuationStateKey(pre.Conv), shape)
+	}
+	changeReasons := strings.Join(diagnostics.ChangeReasons, "|")
+	if changeReasons == "" {
+		changeReasons = "none"
+	}
+
 	logger.Info("cache", fmt.Sprintf(
-		"prefix_audit: model=%s endpoint=%s api=%s conv=%s body=%d system_static=%d system_dynamic=%d env=%d question=%d history=%d tools=%d raw_tools_hash=%s provider_tools_hash=%s tool_invalid=%d tool_schema_invalid=%d tool_websearch_filtered=%d tool_desc_truncated=%d tool_over_limit=%d tool_results=%d tool_blocks=%d tool_nontext_blocks=%d cache_key=%s expected_key=%s provider_input_items=%d provider_input_hash=%s previous_response=%v continuation=%v",
+		"prefix_audit: model=%s model_config=%s endpoint=%s api=%s conv=%s body=%d system_static=%d system_dynamic=%d system_hash=%s env=%d question=%d history=%d tools=%d raw_tools_hash=%s provider_tools_hash=%s tool_invalid=%d tool_schema_invalid=%d tool_websearch_filtered=%d tool_desc_truncated=%d tool_over_limit=%d tool_results=%d tool_blocks=%d tool_nontext_blocks=%d cache_key=%s expected_key=%s provider_input_items=%d provider_input_hash=%s previous_response=%v continuation=%v previous_audit=%v input_relation=%s prefix_changed=%v change_reasons=%s stable_items=%d added_items=%d removed_items=%d first_changed_item=%d",
 		statsModelID(m),
+		m.ID,
 		m.Endpoint,
 		api,
 		pre.Conv.ConversationID,
 		len(body),
 		len(staticSystem),
 		len(dynamicSystem),
+		shape.SystemHash,
 		len(envContext),
 		len(currentQuestion),
 		len(pre.Conv.History),
@@ -955,6 +996,14 @@ func logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body 
 		providerInputHash,
 		previousResponseID != "",
 		contResult != nil && contResult.UsedContinuation,
+		diagnostics.HasPrevious,
+		diagnostics.InputRelation,
+		diagnostics.PrefixChanged,
+		changeReasons,
+		diagnostics.StableItems,
+		diagnostics.AddedItems,
+		diagnostics.RemovedItems,
+		diagnostics.FirstChangedItem,
 	))
 }
 
