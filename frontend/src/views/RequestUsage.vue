@@ -450,7 +450,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                 <div><dt class="text-[#94a3b8]">推理程度</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.reasoning_effort || 'Default' }}</dd></div>
                 <div><dt class="text-[#94a3b8]">服务档位</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.service_tier || 'Standard' }}</dd></div>
                 <div><dt class="text-[#94a3b8]">连接复用</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.reused_connection ? '是' : '否' }}</dd></div>
-                <div><dt class="text-[#94a3b8]">重试次数</dt><dd class="mt-0.5 font-medium" :class="selectedItem.retry_count ? 'text-[#d97706]' : 'text-[#334155]'">{{ selectedItem.retry_count || 0 }}</dd></div>
+                <div><dt class="text-[#94a3b8]">同候选重试</dt><dd class="mt-0.5 font-medium" :class="selectedItem.retry_count ? 'text-[#d97706]' : 'text-[#334155]'">{{ selectedItem.retry_count || 0 }}</dd></div>
+                <div><dt class="text-[#94a3b8]">请求入口</dt><dd class="mt-0.5 truncate font-medium text-[#334155]" :title="selectedItem.requested_model || '-'">{{ selectedItem.requested_model || '-' }}</dd></div>
+                <div><dt class="text-[#94a3b8]">候选切换</dt><dd class="mt-0.5 font-medium" :class="selectedItem.failover_count ? 'text-[#d97706]' : 'text-[#334155]'">{{ selectedItem.failover_count || 0 }}</dd></div>
+                <div><dt class="text-[#94a3b8]">调度选择</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.dispatch_reason || 'direct' }}</dd></div>
+                <div><dt class="text-[#94a3b8]">最后切换原因</dt><dd class="mt-0.5 font-medium" :class="selectedItem.failover_reason ? 'text-[#d97706]' : 'text-[#334155]'">{{ selectedItem.failover_reason || '-' }}</dd></div>
+                <div v-if="selectedItem.route_group_id"><dt class="text-[#94a3b8]">路由分组 ID</dt><dd class="mt-0.5 truncate font-mono text-[11px] text-[#334155]" :title="selectedItem.route_group_id">{{ selectedItem.route_group_id }}</dd></div>
+                <div v-if="selectedItem.selected_model_config_id"><dt class="text-[#94a3b8]">最终模型配置 ID</dt><dd class="mt-0.5 truncate font-mono text-[11px] text-[#334155]" :title="selectedItem.selected_model_config_id">{{ selectedItem.selected_model_config_id }}</dd></div>
               </dl>
             </section>
 
@@ -473,6 +479,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                 <dt class="text-[#64748b]">连接上游</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.connect_ms) }}</dd>
                 <dt class="text-[#64748b]">TLS 握手</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.tls_ms) }}</dd>
                 <dt class="text-[#64748b]">上游等待响应</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.upstream_wait_ms) }}</dd>
+                <dt class="text-[#64748b]">亲和容量等待</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.capacity_wait_ms) }}</dd>
                 <dt class="text-[#64748b]">首字耗时</dt><dd class="font-medium tabular-nums text-[#2563eb]">{{ formatDuration(selectedItem.first_byte_ms) }}</dd>
                 <dt class="text-[#64748b]">总耗时</dt><dd class="font-medium tabular-nums text-[#0f172a]">{{ formatDuration(selectedItem.duration_ms) }}</dd>
               </dl>

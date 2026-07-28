@@ -14,6 +14,7 @@ const props = defineProps({
   refreshingCodex: { type: Boolean, default: false },
   togglingEnabled: { type: Boolean, default: false },
   primary: { type: Boolean, default: false },
+  groupMembership: { type: Object, default: null },
   hidePrivateInfo: { type: Boolean, default: false }
 })
 
@@ -205,6 +206,9 @@ function usedText(row) {
           <div class="flex items-center gap-1.5">
             <div class="truncate text-[14px] font-semibold leading-5 text-[#111827]">{{ displayName }}</div>
             <span v-if="primary" class="rounded-[4px] bg-[#eef6ff] px-1.5 py-[1px] text-[11px] font-medium text-[#2563eb]">主力</span>
+            <span v-if="groupMembership" class="max-w-[96px] truncate rounded-[4px] bg-[#f5f3ff] px-1.5 py-[1px] text-[11px] font-medium text-[#7c3aed]" :title="`${groupMembership.group.name} · 优先级 ${groupMembership.priority + 1}`">
+              {{ groupMembership.group.name }} #{{ groupMembership.priority + 1 }}
+            </span>
           </div>
           <div class="mt-[2px] truncate font-mono text-[11px] leading-4 text-[#64748b]">{{ model.model_id || '-' }}</div>
           <div class="mt-[4px] inline-flex rounded-[4px] px-1.5 py-[1px] text-[11px] leading-4" :class="providerMeta.badge">{{ providerMeta.label }}</div>

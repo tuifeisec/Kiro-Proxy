@@ -58,6 +58,55 @@ func TestUpstreamStatusRetryDelay(t *testing.T) {
 	}
 }
 
+func TestInternalServerErrorIsRetryableAndFailoverEligible(t *testing.T) {
+	if !shouldRetryUpstreamStatus(http.StatusInternalServerError) {
+		t.Fatal("HTTP 500 should be retried for a single model")
+	}
+	if !shouldFailoverModelStatus(http.StatusInternalServerError) {
+		t.Fatal("HTTP 500 should fail over to another group candidate")
+	}
+}
+
+func TestSendWithRetryRecoversAfterInternalServerError(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	logger, err := NewTrafficLogger("", nil)
+	if err != nil {
+		t.Fatalf("create logger: %v", err)
+	}
+	defer logger.Close()
+
+	forwarder := NewForwarder(nil, nil)
+	resp, err := forwarder.sendWithRetry(
+		context.Background(),
+		server.URL,
+		[]byte(`{"stream":true}`),
+		&store.Model{Provider: "openai", APIKey: "test"},
+		logger,
+		"retry-500-test",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("sendWithRetry returned error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+}
+
 func TestSendWithRetryRecoversAfterThreeServiceUnavailableResponses(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

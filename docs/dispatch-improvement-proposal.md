@@ -75,17 +75,11 @@
 
 ---
 
-## 我不需要什么
+## 调度能力边界
 
-| 能力 | 为什么不需要 |
-|------|-------------|
-| 按 IP 回避某个 key | 我就一个人用，没有多 IP 的问题 |
-| 并发控制 / 排队 | 我不存在几十个请求同时抢一个 key 的场景 |
-| 回复质量评分 | 我不需要系统判断"这个回答够不够好" |
-| 自动升级模型 | 我不要系统替我决定"这个模型不行换更贵的" |
-| 客户端画像 | 我的入口就 Kiro + 本地兼容两种，不需要识别 20 种客户端 |
-| Fallback 路由组（系统预设） | 我自己分组就够了，不需要系统再搞一套"主组/备组"的层级 |
-| 分布式状态 | 单进程，内存里记一下就行 |
+分组调度需要覆盖会话亲和、成员并发上限、熔断、客户端 IP 与失败轮次回避、首字节超时切换和备用分组。运行状态保存在单进程内存中，服务重启后重新统计。
+
+响应质量不使用“字数少就是低质量”之类的主观即时判断。流式回复或工具调用一旦已经输出，自动重放可能产生重复文本、重复扣费和重复工具执行。后续如增加质量治理，应采用显式、可审计的规则，在请求调度之外做评分、隔离和恢复。
 
 ---
 
@@ -99,17 +93,184 @@
 
 ---
 
-## 数据库怎么存（我的理解）
+## 最终实现方案
 
-`models` 表加两个字段就行：
+### 逻辑模型组
 
-- `group_id`：属于哪个组（空 = 不属于任何组）
-- `group_priority`：组内排第几（数字越小越优先）
+分组本身作为一个可以被 Kiro 和本地兼容接口选择的逻辑模型。分组是新增入口，不替代原模型：已加入分组的成员仍继续暴露给 Kiro，并且可以单独选择；只有明确选择组名时才启用组内自动切换。
 
-不需要新建表。组名之类的元信息存 settings 或者后续再说。
+例如 Kiro 同时看到：
+
+```text
+Claude 主力组
+claude-opus-4-8 官方
+claude-opus-4-81 中转
+GLM-5.2 备用
+```
+
+后台实际维护：
+
+```text
+Claude 主力组
+  0. claude-opus-4-8 官方
+  1. claude-opus-4-81 中转
+  2. GLM-5.2 备用
+```
+
+组名必须唯一，并且不能与现有模型显示名称冲突，避免同一个请求名称产生两种路由结果。
+
+路由语义：
+
+- 选择 `Claude 主力组`：按组内优先级、会话归属和熔断状态进行调度。
+- 选择 `claude-opus-4-8 官方`：只请求该模型，不展开所属分组；分组启用期间仍共享该成员配置的全局并发上限。
+- 禁用分组会关闭逻辑组入口和成员全局并发约束，不影响组内模型继续单独使用。
+
+### 数据库存储
+
+分组属于路由策略，不属于模型凭证本身，因此使用独立表，不把组名 JSON 塞进 settings，也不修改 models 表的主体结构：
+
+```sql
+CREATE TABLE model_groups (
+    id                    TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL UNIQUE,
+    enabled               INTEGER NOT NULL DEFAULT 1,
+    first_byte_timeout_ms INTEGER NOT NULL DEFAULT 10000,
+    max_attempts          INTEGER NOT NULL DEFAULT 4,
+    fallback_group_id     TEXT NOT NULL DEFAULT '',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+);
+
+CREATE TABLE model_group_members (
+    group_id       TEXT NOT NULL,
+    model_id       TEXT NOT NULL UNIQUE,
+    priority       INTEGER NOT NULL,
+    max_concurrency INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (group_id, model_id),
+    UNIQUE (group_id, priority),
+    FOREIGN KEY (group_id) REFERENCES model_groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE
+);
+```
+
+约束：
+
+- 一个模型最多属于一个组。
+- 同一组内 priority 唯一，并在保存时规范化为从 0 开始的连续数字。
+- 创建、改名、调整成员、删除组全部使用数据库事务。
+- 删除组只解除路由关系，不删除模型配置。
+- 删除模型时自动删除对应成员关系。
+
+### 路由结果
+
+路由层不再只返回一个 Model，而是返回一个有序候选计划：
+
+```go
+type RoutePlan struct {
+    RequestedName string
+    Group         *ModelGroup
+    Candidates    []*store.Model
+}
+```
+
+未分组模型仍然生成只有一个候选的 RoutePlan，因此原有行为、重试规则和模型列表不受影响。
+
+### 请求调度
+
+分组请求按以下顺序执行：
+
+1. 解析逻辑组名并取得启用的有序成员。
+2. 优先选择当前会话已经成功使用的成员；新会话从 priority 0 开始。
+3. 将达到全局并发上限、仍处于熔断状态或命中 IP/失败轮次回避的成员降权或跳过。成员被直接选择或由 Classifier 调用时也计入同一并发上限。
+4. 针对当前候选重新转换请求体、URL、Header 和流式响应转换器。
+5. 从候选请求发起开始计算首字节预算，覆盖建连、TLS、响应头和正文首字节等待。
+6. 在响应正文写给客户端之前判断是否需要切换；收到首字节后解除该预算。
+7. 主组候选耗尽后，按相同规则展开备用组候选。
+8. 成功后记录实际成员和会话归属。
+9. 所有可用候选失败后返回最后一个有意义的上游错误。
+
+跨 Provider 切换必须对每个候选重新执行 Kiro 请求转换，不能只替换 base_url 或 API key。
+
+流式响应一旦已经向客户端输出数据，后续断流只记录错误，不再切换，避免重复文本、重复工具调用或损坏 EventStream。
+
+### 会话保持与缓存
+
+内存中保存：
+
+```text
+conversation_id + group_id -> selected_model_id
+```
+
+同一 Kiro 会话切换到备用成员后，后续轮次继续优先使用该成员，直到它失败、被禁用或进入熔断状态。新会话仍从组内第一项开始。
+
+这样可以保持 Prompt Cache、Responses previous_response_id 和工具调用上下文的连续性。Responses 续传状态继续按 conversation、模型配置 ID 和 reasoning effort 隔离。首次切换上游时可能产生一次冷缓存，这是上游变化带来的正常结果。
+
+### 本地兼容接口边界
+
+Kiro 请求可以在 OpenAI、Anthropic、Gemini、Codex 之间按候选重新转换。
+
+本地兼容接口第一阶段只使用与入口协议兼容的成员：
+
+| 入口 | 可用候选 |
+|------|----------|
+| `/v1/chat/completions` | OpenAI Chat 兼容模型 |
+| `/v1/responses` | OpenAI Responses、Codex 兼容模型 |
+| `/v1/messages` | Anthropic Messages 兼容模型 |
+
+不兼容成员在本次请求中跳过并记录原因。后续如果建设 OpenAI 与 Anthropic 的完整双向转换层，再解除这个限制。
+
+本地兼容接口的会话亲和优先使用 `X-Conversation-ID`、`X-Session-ID`、`prompt_cache_key` 或 `conversation_id`。客户端没有提供显式标识时，使用协议、稳定 system/instructions 和 tools 的规范化哈希；当前用户输入、助手输出和变化的 `previous_response_id` 不参与哈希。
+
+### 错误分类和熔断
+
+| 情况 | 分组行为 | 熔断行为 |
+|------|----------|----------|
+| 401/403 | 立即换下一个 | 当前成员立即熔断 |
+| 429 | 立即换下一个 | 优先采用 Retry-After，否则 60 秒 |
+| 502/503/504 | 立即换下一个 | 连续 3 次后熔断 60 秒 |
+| DNS、连接、TLS、首字节超时 | 在总时间预算和组内最大尝试次数内换成员 | 计入连续失败 |
+| 400/404/422 | 不切换，原样返回 | 不计入熔断 |
+| 客户端取消 | 结束请求 | 不计入熔断 |
+| 已开始输出后的断流 | 不切换 | 计入失败并记录日志 |
+
+熔断状态只保存在单进程内存中：Closed -> Open -> HalfOpen -> Closed。HalfOpen 同一时间只允许一个试探请求，防止多个请求同时冲击刚恢复的上游。模型配置被更新时立即清除该模型的熔断状态。
+
+分组候选之间共用一个绝对时间预算；每次候选的首字节时限取配置阈值与剩余总预算的较小值。`max_attempts` 是候选尝试上限，不保证在总预算耗尽后继续发起请求。未分组模型继续沿用现有重试行为。分组请求不会对每个候选重复执行现有的三次 5xx 重试，避免请求次数和等待时间成倍放大。
+
+### Classifier、统计和日志
+
+- 主请求成功选定成员后，再记录会话实际模型。
+- Classifier 设置为跟随主模型时，跟随实际成功成员，而不是最初的 priority 0。
+- Request Usage 仍然一条逻辑请求对应一条记录，避免首页请求数被候选尝试次数放大。
+- `model_id` 和 Credits 归属最终实际使用的模型。
+- Request Usage 增加 `requested_model`、`route_group_id`、`selected_model_config_id`、`failover_count`。
+- 每次候选尝试通过结构化日志记录组名、候选、序号、错误分类和熔断变化。
+
+### 前端交互
+
+模型管理页增加“模型 / 分组”视图：
+
+1. 创建、改名、启用、停用和删除组。
+2. 从现有模型中选择成员。
+3. 使用上移、下移按钮调整优先级，不新增拖拽依赖。
+4. 配置首字节超时、最大尝试次数、备用组和成员最大并发。
+5. 分组默认折叠，支持单组及全部展开或收起。
+6. 模型列表显示所属组和组内顺序。
+7. 分组列表显示候选数、可调度数、熔断数、在途请求、会话占用和临时回避数；分组视图每 3 秒刷新一次运行状态。
+8. 展开分组后显示各成员的健康状态、失败次数、并发占用、回避范围和熔断恢复时间。
+9. 手动测试模型只测试该模型本身，不修改线上熔断状态。
+
+### 实施与验收顺序
+
+1. 数据表、事务化 Store 和分组 CRUD API。
+2. 逻辑模型列表和候选 RoutePlan。
+3. 候选级重新转换、错误分类、总时间预算。
+4. 会话保持、熔断、Classifier 和统计归属。
+5. 模型分组前端。
+6. 回归验证未分组模型、Kiro EventStream、OpenAI Responses、Claude 缓存和本地兼容接口。
 
 ---
 
 ## 总结
 
-我要的就是：**我分好组、排好序，然后系统帮我自动切换。挂了不用我管，没挂不打扰我。**
+我要的就是：**我分好组、排好序，然后系统帮我自动切换。挂了不用我管，没挂不打扰我；同一会话尽量保持同一上游，避免破坏缓存和续传。**

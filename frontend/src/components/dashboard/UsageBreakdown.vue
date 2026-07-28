@@ -6,7 +6,7 @@ import { ALL_STATS_START_DATE, statsDaysAgo } from '../../utils/date.js'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
-  days: { type: Number, default: -1 },
+  days: { type: Number, default: 0 },
 })
 const emit = defineEmits(['summary', 'range-change'])
 const { rows, loading, error, range, load } = useDailyStats()

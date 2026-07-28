@@ -68,6 +68,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if err := s.validateModelGroupConflict(m.Name, m.ModelID); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		m.Enabled = true
 		if err := s.db.CreateModel(&m); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -138,6 +142,10 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "Codex 账号预检测失败: "+err.Error())
 				return
 			}
+		}
+		if err := s.validateModelGroupConflict(m.Name, m.ModelID); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
 		}
 		if err := s.db.UpdateModel(&m); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())

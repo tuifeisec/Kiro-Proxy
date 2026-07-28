@@ -10,9 +10,14 @@ import (
 	"sync"
 )
 
-// Route 一次路由决策的结果（直接就是 Model 配置）
+// Route 一次路由决策的结果。未分组模型只有一个候选。
 type Route struct {
-	Model *store.Model
+	Model           *store.Model
+	Candidates      []*store.Model
+	CandidateLimits map[string]int
+	CandidateGroups map[string]*store.ModelGroup
+	Group           *store.ModelGroup
+	RequestedName   string
 }
 
 // Router 维护内存路由表
@@ -21,6 +26,7 @@ type Router struct {
 
 	mu     sync.RWMutex
 	models []store.Model
+	groups []store.ModelGroup
 }
 
 // New 创建路由器并加载初始数据
@@ -37,12 +43,18 @@ func (r *Router) Reload() {
 		log.Printf("[router] 加载模型失败: %v", err)
 		return
 	}
+	groups, err := r.db.GetModelGroups()
+	if err != nil {
+		log.Printf("[router] 加载模型分组失败: %v", err)
+		return
+	}
 
 	r.mu.Lock()
 	r.models = models
+	r.groups = groups
 	r.mu.Unlock()
 
-	log.Printf("[router] 路由表已加载: %d 条模型配置", len(models))
+	log.Printf("[router] 路由表已加载: %d 条模型配置, %d 个分组", len(models), len(groups))
 }
 
 // Resolve 根据 Kiro 请求中的 modelId 找到模型配置
@@ -51,17 +63,24 @@ func (r *Router) Reload() {
 func (r *Router) Resolve(modelID string) *Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if route := r.resolveGroupByNameLocked(modelID); route != nil {
+		return route
+	}
 
-	var fallback *store.Model
-	var modelIDMatch *store.Model
+	var fallback *Route
+	var modelIDMatch *Route
 
 	for i := range r.models {
 		m := &r.models[i]
 		if !m.Enabled {
 			continue
 		}
+		route := r.routeForModelLocked(m, modelID)
+		if route == nil {
+			continue
+		}
 		if fallback == nil {
-			fallback = m
+			fallback = route
 		}
 		// 优先按显示名称匹配（Kiro 发来的就是 Name）
 		name := m.Name
@@ -69,22 +88,22 @@ func (r *Router) Resolve(modelID string) *Route {
 			name = m.ModelID
 		}
 		if name == modelID {
-			return &Route{Model: m}
+			return route
 		}
 		// 兼容：也按 model_id 匹配（向后兼容旧配置）
 		if modelIDMatch == nil && m.ModelID == modelID {
-			modelIDMatch = m
+			modelIDMatch = route
 		}
 	}
 
 	// 回退到 ModelID 匹配
 	if modelIDMatch != nil {
-		return &Route{Model: modelIDMatch}
+		return modelIDMatch
 	}
 
 	// 未找到精确匹配时，用第一条可用模型（让 classifier 等请求也能走通）
 	if fallback != nil {
-		return &Route{Model: fallback}
+		return fallback
 	}
 	return nil
 }
@@ -95,6 +114,9 @@ func (r *Router) Resolve(modelID string) *Route {
 func (r *Router) ResolveByName(modelName string) *Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if route := r.resolveGroupByNameLocked(modelName); route != nil {
+		return route
+	}
 
 	for i := range r.models {
 		m := &r.models[i]
@@ -106,7 +128,7 @@ func (r *Router) ResolveByName(modelName string) *Route {
 			name = m.ModelID
 		}
 		if name == modelName {
-			return &Route{Model: m}
+			return r.routeForModelLocked(m, modelName)
 		}
 	}
 	return nil
@@ -117,8 +139,11 @@ func (r *Router) ResolveByName(modelName string) *Route {
 func (r *Router) ResolveExact(modelID string) *Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if route := r.resolveGroupByNameLocked(modelID); route != nil {
+		return route
+	}
 
-	var modelIDMatch *store.Model
+	var modelIDMatch *Route
 	for i := range r.models {
 		m := &r.models[i]
 		if !m.Enabled {
@@ -129,14 +154,14 @@ func (r *Router) ResolveExact(modelID string) *Route {
 			name = m.ModelID
 		}
 		if name == modelID {
-			return &Route{Model: m}
+			return r.routeForModelLocked(m, modelID)
 		}
 		if modelIDMatch == nil && m.ModelID == modelID {
-			modelIDMatch = m
+			modelIDMatch = r.routeForModelLocked(m, modelID)
 		}
 	}
 	if modelIDMatch != nil {
-		return &Route{Model: modelIDMatch}
+		return modelIDMatch
 	}
 	return nil
 }
@@ -147,12 +172,137 @@ func (r *Router) EnabledModels() []store.Model {
 	defer r.mu.RUnlock()
 
 	var result []store.Model
+	for i := range r.groups {
+		group := &r.groups[i]
+		if !group.Enabled {
+			continue
+		}
+		route := r.routeForGroupLocked(group, group.Name)
+		if route == nil || route.Model == nil {
+			continue
+		}
+		virtual := *route.Model
+		virtual.ID = group.ID
+		virtual.Name = group.Name
+		result = append(result, virtual)
+	}
 	for _, m := range r.models {
 		if m.Enabled {
 			result = append(result, m)
 		}
 	}
 	return result
+}
+
+// ResolveByID 按内部配置 ID 精确解析单个模型，不展开所属分组。
+func (r *Router) ResolveByID(id string) *Route {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.models {
+		m := &r.models[i]
+		if m.Enabled && m.ID == id {
+			return r.routeForModelLocked(m, id)
+		}
+	}
+	return nil
+}
+
+func (r *Router) resolveGroupByNameLocked(name string) *Route {
+	for i := range r.groups {
+		group := &r.groups[i]
+		if group.Enabled && group.Name == name {
+			return r.routeForGroupLocked(group, name)
+		}
+	}
+	return nil
+}
+
+func (r *Router) routeForModelLocked(model *store.Model, requestedName string) *Route {
+	return singleModelRoute(model, requestedName, r.modelConcurrencyLimitLocked(model.ID))
+}
+
+func (r *Router) modelConcurrencyLimitLocked(modelID string) int {
+	for i := range r.groups {
+		if !r.groups[i].Enabled {
+			continue
+		}
+		for _, member := range r.groups[i].Members {
+			if member.ModelID == modelID {
+				return member.MaxConcurrency
+			}
+		}
+	}
+	return 0
+}
+
+func (r *Router) routeForGroupLocked(group *store.ModelGroup, requestedName string) *Route {
+	if group == nil || !group.Enabled {
+		return nil
+	}
+	candidates := make([]*store.Model, 0, len(group.Members))
+	limits := make(map[string]int)
+	candidateGroups := make(map[string]*store.ModelGroup)
+	r.collectGroupCandidatesLocked(group, make(map[string]bool), make(map[string]bool), &candidates, limits, candidateGroups)
+	if len(candidates) == 0 {
+		return nil
+	}
+	return &Route{
+		Model:           candidates[0],
+		Candidates:      candidates,
+		CandidateLimits: limits,
+		CandidateGroups: candidateGroups,
+		Group:           group,
+		RequestedName:   requestedName,
+	}
+}
+
+func (r *Router) collectGroupCandidatesLocked(
+	group *store.ModelGroup,
+	visitedGroups map[string]bool,
+	seenModels map[string]bool,
+	candidates *[]*store.Model,
+	limits map[string]int,
+	candidateGroups map[string]*store.ModelGroup,
+) {
+	if group == nil || !group.Enabled || visitedGroups[group.ID] {
+		return
+	}
+	visitedGroups[group.ID] = true
+	for _, member := range group.Members {
+		if seenModels[member.ModelID] {
+			continue
+		}
+		for i := range r.models {
+			model := &r.models[i]
+			if model.ID == member.ModelID && model.Enabled {
+				*candidates = append(*candidates, model)
+				limits[model.ID] = member.MaxConcurrency
+				candidateGroups[model.ID] = group
+				seenModels[model.ID] = true
+				break
+			}
+		}
+	}
+	if group.FallbackGroupID == "" {
+		return
+	}
+	for i := range r.groups {
+		if r.groups[i].ID == group.FallbackGroupID {
+			r.collectGroupCandidatesLocked(&r.groups[i], visitedGroups, seenModels, candidates, limits, candidateGroups)
+			return
+		}
+	}
+}
+
+func singleModelRoute(model *store.Model, requestedName string, maxConcurrency int) *Route {
+	if model == nil {
+		return nil
+	}
+	return &Route{
+		Model: model, Candidates: []*store.Model{model},
+		CandidateLimits: map[string]int{model.ID: maxConcurrency}, CandidateGroups: map[string]*store.ModelGroup{},
+		RequestedName: requestedName,
+	}
 }
 
 // ResolveClassifier 返回 classifier 专用模型配置
@@ -179,7 +329,7 @@ func (r *Router) ResolveClassifier() *Route {
 			continue
 		}
 		if m.ID == classifierID {
-			return &Route{Model: m}
+			return r.routeForModelLocked(m, classifierID)
 		}
 
 		name := m.Name
@@ -195,10 +345,10 @@ func (r *Router) ResolveClassifier() *Route {
 	}
 
 	if nameMatch != nil {
-		return &Route{Model: nameMatch}
+		return r.routeForModelLocked(nameMatch, classifierID)
 	}
 	if modelIDMatch != nil {
-		return &Route{Model: modelIDMatch}
+		return r.routeForModelLocked(modelIDMatch, classifierID)
 	}
 	return nil
 }

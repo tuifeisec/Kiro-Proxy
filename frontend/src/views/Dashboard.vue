@@ -27,8 +27,8 @@ const showRangeMenu = ref(false)
 const showMoreMenu = ref(false)
 const rangeMenuRef = ref(null)
 const moreMenuRef = ref(null)
-const selectedRangeLabel = ref('全部')
-const selectedRangeDays = ref(-1)
+const selectedRangeLabel = ref('今天')
+const selectedRangeDays = ref(0)
 const rangeSummary = ref({
   total_requests: 0,
   total_errors: 0,

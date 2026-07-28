@@ -2,6 +2,10 @@ package proxy
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"kiro-proxy/codex"
@@ -82,58 +86,235 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		writeLocalCompatError(w, http.StatusNotFound, "no route for model: "+requestMeta.Model)
 		return
 	}
-	m := route.Model
-	if err := validateLocalCompatRoute(api, m); err != nil {
-		writeLocalCompatError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	clientWantsStream := requestMeta.Stream != nil && *requestMeta.Stream
-	upstreamBody := replaceModelInBody(body, m.ModelID)
-	responsesFallback := api == localCompatResponses && responsesNeedsChatFallback(m)
-	var fallbackState *fallbackResponseState
-	if api == localCompatResponses {
-		var cacheErr error
-		upstreamBody, _, cacheErr = ensureResponsesPromptCacheKey(upstreamBody, m.ModelID)
-		if cacheErr != nil {
-			writeLocalCompatError(w, http.StatusBadRequest, cacheErr.Error())
+	usageRecord := newRequestUsageRecorder(s.db, start, route.Model, r.URL.Path, string(api))
+	usageRecord.setRoute(route)
+	conversationID := localCompatConversationID(r, body, api)
+	affinityModelID := ""
+	var scopes []string
+	if route.Group != nil {
+		affinityModelID = s.forwarder.affinity.get(route.Group.ID, conversationID, time.Now())
+		scopes = dispatchAvoidanceScopes(route.Group.ID, conversationID, requestClientIP(r))
+	}
+	candidates := orderedRouteCandidates(route, affinityModelID, s.forwarder.avoidance, scopes, time.Now())
+	if route.Group != nil {
+		candidates = s.forwarder.latency.order(candidates, time.Now())
+		candidates = s.forwarder.upstream.order(candidates, time.Now())
+	}
+	grouped := route.Group != nil
+	attempted := 0
+	attemptsByGroup := make(map[string]int)
+	var m *store.Model
+	var prepared *localCompatPreparedCandidate
+	var resp *http.Response
+	var lastResp *http.Response
+	var lastPrepared *localCompatPreparedCandidate
+	var lastModel *store.Model
+	var lastErr error
+	deadline := time.Now().Add(retryBudget)
+
+	for index, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		if grouped && !candidateHasBudget(deadline, time.Now()) {
+			break
+		}
+		candidateGroup := routeGroupForCandidate(route, candidate)
+		if grouped && attemptsByGroup[candidateGroup.ID] >= candidateGroup.MaxAttempts {
+			continue
+		}
+		if route.Group != nil {
+			allowed, circuitState := s.forwarder.health.allow(candidate, time.Now())
+			if !allowed {
+				usageRecord.setFailoverReason("circuit_" + circuitState)
+				s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容接口跳过熔断模型: group=%s model=%s state=%s", route.Group.Name, statsModelID(candidate), circuitState))
+				continue
+			}
+		}
+		if routeErr := validateLocalCompatRoute(api, candidate); routeErr != nil {
+			if route.Group == nil {
+				writeLocalCompatError(w, http.StatusBadRequest, routeErr.Error())
+				return
+			}
+			s.forwarder.health.neutral(candidate)
+			s.logger.Debug("dispatcher", fmt.Sprintf("跳过协议不兼容候选: group=%s model=%s api=%s", route.Group.Name, statsModelID(candidate), api))
+			continue
+		}
+
+		candidatePrepared, prepareErr := s.prepareLocalCompatCandidate(body, api, candidate, clientWantsStream)
+		if prepareErr != nil {
+			if grouped {
+				s.forwarder.health.neutral(candidate)
+			}
+			writeLocalCompatError(w, http.StatusBadRequest, prepareErr.Error())
 			return
 		}
-	}
-	if responsesFallback {
-		previousMessages, previousErr := s.fallbackMessages(responsesPreviousResponseID(upstreamBody))
-		if previousErr != nil {
-			writeLocalCompatError(w, http.StatusBadRequest, previousErr.Error())
-			return
+		capacityWait := time.Duration(0)
+		if grouped && candidate.ID == affinityModelID {
+			capacityWait = affinityCapacityWait
 		}
-		var convertErr error
-		upstreamBody, fallbackState, convertErr = responsesToChatFallbackWithPrevious(upstreamBody, m.ModelID, previousMessages)
-		if convertErr != nil {
-			writeLocalCompatError(w, http.StatusBadRequest, convertErr.Error())
-			return
+		capacityStarted := time.Now()
+		lease, acquired := s.forwarder.load.acquireWithWait(r.Context(), candidate.ID, route.CandidateLimits[candidate.ID], capacityWait)
+		capacityWaited := time.Since(capacityStarted)
+		if capacityWait > 0 {
+			usageRecord.addCapacityWait(capacityWaited)
 		}
-	}
-	aggregateCodex := api == localCompatResponses && m.Provider == "codex" && !clientWantsStream
-	if api == localCompatResponses && m.Provider == "codex" {
-		upstreamBody = codex.NewRequestBodyFromResponses(upstreamBody, m.ServiceTier)
-	}
-	upstreamURL, err := localCompatUpstreamURL(api, m)
-	if err != nil {
-		writeLocalCompatError(w, http.StatusBadRequest, err.Error())
-		return
+		if !acquired {
+			if grouped {
+				s.forwarder.health.neutral(candidate)
+			}
+			if r.Context().Err() != nil {
+				lastErr = r.Context().Err()
+				break
+			}
+			usageRecord.setFailoverReason("capacity_full")
+			s.logger.Info("dispatcher", fmt.Sprintf("本地兼容接口跳过并发已满候选: group=%s model=%s", route.Group.Name, statsModelID(candidate)))
+			continue
+		}
+		if grouped {
+			bucketAllowed, bucketState := s.forwarder.upstream.allow(candidate, time.Now())
+			if !bucketAllowed {
+				lease.release()
+				s.forwarder.health.neutral(candidate)
+				usageRecord.setFailoverReason("upstream_bucket_" + bucketState)
+				s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容接口跳过上游地址异常候选: group=%s model=%s state=%s", route.Group.Name, statsModelID(candidate), bucketState))
+				continue
+			}
+		}
+		route.Model = candidate
+		usageRecord.setModel(candidate)
+		usageRecord.setFailoverCount(attempted)
+		usageRecord.setDispatchReason(dispatchSelectionReason(route, candidate, affinityModelID, capacityWaited, s.forwarder.latency.isDegraded(affinityModelID, time.Now())))
+		attempted++
+		if grouped {
+			attemptsByGroup[candidateGroup.ID]++
+		}
+		s.logger.InfoBytes("local-compat", fmt.Sprintf("本地兼容接口转发: api=%s model=%s → %s", api, statsModelID(candidate), candidatePrepared.upstreamURL), candidatePrepared.upstreamBody)
+		if grouped {
+			configuredFirstByteTimeout := time.Duration(candidateGroup.FirstByteTimeoutMS) * time.Millisecond
+			firstByteTimeout := observedFirstByteTimeout(
+				configuredFirstByteTimeout,
+				deadline,
+				time.Now(),
+				s.forwarder.latency.isDegraded(candidate.ID, time.Now()),
+			)
+			var firstByteDuration time.Duration
+			resp, firstByteDuration, err = requestWithFirstByteTimeout(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+				return s.forwarder.doRequest(attemptCtx, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, "local-compat", usageRecord)
+			})
+			if err == nil && firstByteDuration > 0 {
+				s.forwarder.latency.record(candidate.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
+			} else if errors.Is(err, errFirstByteTimeout) {
+				s.forwarder.latency.record(candidate.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
+			}
+		} else {
+			resp, err = s.forwarder.sendWithRetry(r.Context(), candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, s.logger, "local-compat", usageRecord)
+		}
+		if err != nil {
+			lease.release()
+			lastErr = err
+			if route.Group == nil || r.Context().Err() != nil {
+				break
+			}
+			failureClass := "candidate_error"
+			if errors.Is(err, errFirstByteTimeout) {
+				failureClass = "first_byte_slow"
+				s.forwarder.health.neutral(candidate)
+				s.forwarder.upstream.neutral(candidate, time.Now())
+				if s.forwarder.latency.isDegraded(candidate.ID, time.Now()) {
+					s.forwarder.affinity.clear(route.Group.ID, conversationID, candidate.ID)
+				}
+			} else if isUpstreamTransportFailure(err) {
+				failureClass = string(modelFailureTransport)
+				s.forwarder.health.failure(candidate, modelFailureTransport, 0, time.Now())
+				s.forwarder.upstream.recordFailure(candidate, time.Now())
+				s.forwarder.affinity.clear(route.Group.ID, conversationID, candidate.ID)
+				markAvoidanceScopes(s.forwarder.avoidance, scopes, candidate.ID, time.Now())
+			} else {
+				s.forwarder.health.neutral(candidate)
+				s.forwarder.upstream.neutral(candidate, time.Now())
+			}
+			usageRecord.setFailoverReason(failureClass)
+			s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容候选网络失败: group=%s candidate=%d model=%s error=%v", route.Group.Name, index, statsModelID(candidate), err))
+			continue
+		}
+		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
+		if grouped {
+			s.forwarder.upstream.recordSuccess(candidate, time.Now())
+		}
+
+		if grouped && shouldFailoverModelStatus(resp.StatusCode) {
+			detail := preserveResponseBody(resp)
+			failureClass := modelFailureForStatus(resp.StatusCode)
+			retryAfter := time.Duration(0)
+			if failureClass == modelFailureRateLimit {
+				retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+			}
+			s.forwarder.health.failure(candidate, failureClass, retryAfter, time.Now())
+			s.forwarder.affinity.clear(route.Group.ID, conversationID, candidate.ID)
+			markAvoidanceScopes(s.forwarder.avoidance, scopes, candidate.ID, time.Now())
+			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp
+			lastPrepared = candidatePrepared
+			lastModel = candidate
+			usageRecord.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+			s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容候选切换: group=%s candidate=%d model=%s status=%d detail=%s", route.Group.Name, index, statsModelID(candidate), resp.StatusCode, detail))
+			resp = nil
+			continue
+		}
+		if grouped && resp.StatusCode < http.StatusBadRequest {
+			usageRecord.markFirstByte(time.Now())
+		}
+
+		if lastResp != nil {
+			lastResp.Body.Close()
+		}
+		if route.Group != nil && resp.StatusCode < http.StatusBadRequest {
+			s.forwarder.health.success(candidate)
+			s.forwarder.affinity.set(route.Group.ID, conversationID, candidate.ID, time.Now())
+			clearAvoidanceScopes(s.forwarder.avoidance, scopes, candidate.ID)
+			resp.Body = &observedUpstreamBody{
+				ReadCloser: resp.Body,
+				onFailure: func(readErr error) {
+					s.forwarder.health.failure(candidate, modelFailureTransport, 0, time.Now())
+					s.forwarder.upstream.recordFailure(candidate, time.Now())
+					s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容候选响应流中断: group=%s model=%s error=%v", route.Group.Name, statsModelID(candidate), readErr))
+				},
+			}
+		} else if route.Group != nil {
+			s.forwarder.health.neutral(candidate)
+		}
+		m = candidate
+		prepared = candidatePrepared
+		break
 	}
 
-	modelKey := statsModelID(m)
-	usageRecord := newRequestUsageRecorder(s.db, start, m, r.URL.Path, string(api))
-	s.logger.InfoBytes("local-compat", fmt.Sprintf("本地兼容接口转发: api=%s model=%s → %s", api, modelKey, upstreamURL), upstreamBody)
-	resp, err := s.forwarder.sendWithRetry(r.Context(), upstreamURL, upstreamBody, m, s.logger, "local-compat", usageRecord)
-	if err != nil {
-		usageRecord.finish(http.StatusBadGateway, localCompatUsage{}, err.Error())
+	if resp == nil && lastResp != nil {
+		resp = lastResp
+		prepared = lastPrepared
+		m = lastModel
+	}
+	if resp == nil || prepared == nil || m == nil {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("没有与 %s 兼容的可用分组成员", api)
+		}
+		usageRecord.finish(http.StatusBadGateway, localCompatUsage{}, lastErr.Error())
+		modelKey := statsModelID(route.Model)
 		s.stats.RecordRequestFull(0, 0, 0, 0, modelKey, true)
-		s.logger.ErrorWithMeta("local-compat", "转发失败: "+err.Error(), LogMeta{Model: modelKey, LatencyMS: time.Since(start).Milliseconds()})
-		writeLocalCompatError(w, http.StatusBadGateway, "upstream error: "+err.Error())
+		s.logger.ErrorWithMeta("local-compat", "转发失败: "+lastErr.Error(), LogMeta{Model: modelKey, LatencyMS: time.Since(start).Milliseconds()})
+		writeLocalCompatError(w, http.StatusBadGateway, "upstream error: "+lastErr.Error())
 		return
 	}
+	route.Model = m
+	usageRecord.setModel(m)
+	modelKey := statsModelID(m)
+	responsesFallback := prepared.responsesFallback
+	fallbackState := prepared.fallbackState
+	aggregateCodex := prepared.aggregateCodex
 	defer resp.Body.Close()
 	usageRecord.wrapResponse(resp)
 
@@ -202,6 +383,154 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	}
 	s.logger.InfoWithMeta("local-compat", fmt.Sprintf("本地兼容接口完成: api=%s status=%d in=%d out=%d", api, status, usage.InputTokens, usage.OutputTokens), LogMeta{Model: modelKey, Status: status, LatencyMS: time.Since(start).Milliseconds()})
 }
+
+func localCompatConversationID(r *http.Request, body []byte, api localCompatAPI) string {
+	if r != nil {
+		for _, header := range []string{"X-Conversation-ID", "X-Session-ID"} {
+			if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
+				return value
+			}
+		}
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	for _, field := range []string{"prompt_cache_key", "conversation_id"} {
+		var value string
+		if json.Unmarshal(payload[field], &value) == nil && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+
+	stable := localCompatStableAffinityInput(payload, api)
+	if len(stable) == 0 {
+		return ""
+	}
+	hash := sha256.Sum256(stable)
+	return "local-affinity-" + hex.EncodeToString(hash[:16])
+}
+
+func localCompatStableAffinityInput(payload map[string]json.RawMessage, api localCompatAPI) []byte {
+	stable := make(map[string]interface{})
+	for _, field := range []string{"tools"} {
+		if value, ok := canonicalLocalCompatValue(payload[field]); ok {
+			stable[field] = value
+		}
+	}
+
+	switch api {
+	case localCompatResponses:
+		if value, ok := canonicalLocalCompatValue(payload["instructions"]); ok {
+			stable["instructions"] = value
+		}
+	case localCompatChat:
+		var messages []map[string]json.RawMessage
+		if json.Unmarshal(payload["messages"], &messages) == nil {
+			prefix := make([]interface{}, 0, len(messages))
+			for _, message := range messages {
+				var role string
+				if json.Unmarshal(message["role"], &role) != nil || (role != "system" && role != "developer") {
+					continue
+				}
+				if _, ok := canonicalLocalCompatValue(message["content"]); !ok {
+					continue
+				}
+				encoded, err := json.Marshal(message)
+				if err != nil {
+					continue
+				}
+				if value, ok := canonicalLocalCompatValue(encoded); ok {
+					prefix = append(prefix, value)
+				}
+			}
+			if len(prefix) > 0 {
+				stable["messages"] = prefix
+			}
+		}
+	case localCompatMessages:
+		if value, ok := canonicalLocalCompatValue(payload["system"]); ok {
+			stable["system"] = value
+		}
+	}
+
+	if len(stable) == 0 {
+		return nil
+	}
+	stable["api"] = string(api)
+	encoded, err := json.Marshal(stable)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+func canonicalLocalCompatValue(raw json.RawMessage) (interface{}, bool) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, false
+	}
+	var value interface{}
+	if json.Unmarshal(raw, &value) != nil {
+		return nil, false
+	}
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil, false
+		}
+	case []interface{}:
+		if len(typed) == 0 {
+			return nil, false
+		}
+	case map[string]interface{}:
+		if len(typed) == 0 {
+			return nil, false
+		}
+	}
+	return value, true
+}
+
+type localCompatPreparedCandidate struct {
+	upstreamBody      []byte
+	upstreamURL       string
+	responsesFallback bool
+	fallbackState     *fallbackResponseState
+	aggregateCodex    bool
+}
+
+func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, model *store.Model, clientWantsStream bool) (*localCompatPreparedCandidate, error) {
+	prepared := &localCompatPreparedCandidate{}
+	prepared.upstreamBody = replaceModelInBody(body, model.ModelID)
+	prepared.responsesFallback = api == localCompatResponses && responsesNeedsChatFallback(model)
+	if api == localCompatResponses {
+		var err error
+		prepared.upstreamBody, _, err = ensureResponsesPromptCacheKey(prepared.upstreamBody, model.ModelID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if prepared.responsesFallback {
+		previousMessages, err := s.fallbackMessages(responsesPreviousResponseID(prepared.upstreamBody))
+		if err != nil {
+			return nil, err
+		}
+		prepared.upstreamBody, prepared.fallbackState, err = responsesToChatFallbackWithPrevious(prepared.upstreamBody, model.ModelID, previousMessages)
+		if err != nil {
+			return nil, err
+		}
+	}
+	prepared.aggregateCodex = api == localCompatResponses && model.Provider == "codex" && !clientWantsStream
+	if api == localCompatResponses && model.Provider == "codex" {
+		prepared.upstreamBody = codex.NewRequestBodyFromResponses(prepared.upstreamBody, model.ServiceTier)
+	}
+	var err error
+	prepared.upstreamURL, err = localCompatUpstreamURL(api, model)
+	if err != nil {
+		return nil, err
+	}
+	return prepared, nil
+}
+
 func (s *Server) allowLocalCompatRequest(r *http.Request) bool {
 	if s.proxyAccessMode() == ProxyAccessLAN {
 		return true

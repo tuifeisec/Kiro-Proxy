@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"io"
 	"kiro-proxy/converter"
+	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"log"
 	"net/http"
@@ -42,6 +43,67 @@ func newRequestUsageRecorder(db *store.DB, start time.Time, model *store.Model, 
 		item.ServiceTier = model.ServiceTier
 	}
 	return &requestUsageRecorder{db: db, item: item, model: model, start: start}
+}
+
+func (r *requestUsageRecorder) setModel(model *store.Model) {
+	if r == nil || model == nil {
+		return
+	}
+	r.model = model
+	r.item.ModelID = statsModelID(model)
+	r.item.Provider = model.Provider
+	r.item.Endpoint = model.Endpoint
+	r.item.ServiceTier = model.ServiceTier
+	r.item.SelectedModelConfigID = model.ID
+	r.item.ReasoningEffort, _ = converter.NormalizeReasoningEffort(model.ReasoningEffort)
+}
+
+func (r *requestUsageRecorder) setRoute(route *router.Route) {
+	if r == nil || route == nil {
+		return
+	}
+	r.item.RequestedModel = route.RequestedName
+	if route.Group != nil {
+		r.item.RouteGroupID = route.Group.ID
+	}
+}
+
+func (r *requestUsageRecorder) setFailoverCount(count int) {
+	if r == nil {
+		return
+	}
+	if count < 0 {
+		count = 0
+	}
+	r.item.FailoverCount = count
+}
+
+func (r *requestUsageRecorder) setDispatchReason(reason string) {
+	if r == nil {
+		return
+	}
+	r.item.DispatchReason = strings.TrimSpace(reason)
+}
+
+func (r *requestUsageRecorder) setFailoverReason(reason string) {
+	if r == nil {
+		return
+	}
+	r.item.FailoverReason = strings.TrimSpace(reason)
+}
+
+func (r *requestUsageRecorder) addCapacityWait(duration time.Duration) {
+	if r == nil || duration <= 0 {
+		return
+	}
+	r.item.CapacityWaitMS += duration.Milliseconds()
+}
+
+func (r *requestUsageRecorder) markFirstByte(at time.Time) {
+	if r == nil || at.IsZero() {
+		return
+	}
+	r.firstByte.CompareAndSwap(0, at.UnixNano())
 }
 
 func (r *requestUsageRecorder) setReasoningEffort(value string) {

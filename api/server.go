@@ -10,10 +10,15 @@ import (
 )
 
 type Server struct {
-	db     *store.DB
-	router *router.Router
-	stats  *store.Stats
-	mux    *http.ServeMux
+	db             *store.DB
+	router         *router.Router
+	stats          *store.Stats
+	mux            *http.ServeMux
+	healthProvider ModelHealthProvider
+}
+
+type ModelHealthProvider interface {
+	ModelHealthStatuses() []store.ModelHealthStatus
 }
 
 func New(db *store.DB, r *router.Router, stats *store.Stats) *Server {
@@ -31,6 +36,10 @@ func (s *Server) Handler() http.Handler {
 	return s.mux
 }
 
+func (s *Server) SetModelHealthProvider(provider ModelHealthProvider) {
+	s.healthProvider = provider
+}
+
 // RegisterTo 将 API 路由注册到外部 mux
 func (s *Server) RegisterTo(mux *http.ServeMux) {
 	s.registerRoutesTo(mux)
@@ -45,6 +54,9 @@ func (s *Server) registerRoutesTo(mux *http.ServeMux) {
 	mux.HandleFunc("/api/request-usage", s.handleRequestUsage)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/models/", s.handleModel)
+	mux.HandleFunc("/api/model-groups", s.handleModelGroups)
+	mux.HandleFunc("/api/model-groups/status", s.handleModelGroupStatus)
+	mux.HandleFunc("/api/model-groups/", s.handleModelGroup)
 	mux.HandleFunc("/api/refresh-codex-model", s.handleRefreshCodexModel)
 	mux.HandleFunc("/api/codex-oauth/start", s.handleStartCodexOAuth)
 	mux.HandleFunc("/api/codex-oauth/exchange", s.handleExchangeCodexOAuth)

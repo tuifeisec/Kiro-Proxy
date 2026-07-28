@@ -193,8 +193,8 @@ func (s *Server) setupInterceptor() {
 				"conversation_id": pre.ConversationID,
 			},
 		})
-		s.rememberMainModel(pre, route)
 		pre.usage = newRequestUsageRecorder(s.db, time.Now(), route.Model, req.URL.Path, pre.Protocol)
+		pre.usage.setRoute(route)
 		pre.usage.setReasoningEffort(resolveReasoningEffort(pre, route.Model))
 
 		// 转发
@@ -213,6 +213,7 @@ func (s *Server) setupInterceptor() {
 			s.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(route.Model), true)
 			return req, errorResponse(req, http.StatusBadGateway, "upstream error: "+err.Error())
 		}
+		s.rememberMainModel(pre, route)
 
 		s.logger.InfoWithMeta("forwarder", fmt.Sprintf("上游响应: status=%d", resp.StatusCode), LogMeta{
 			Model:     statsModelID(route.Model),
@@ -316,6 +317,9 @@ func (s *Server) resolveClassifierRoute(pre *Preflight) *router.Route {
 	}
 
 	if model := s.mainModelForConversation(pre.ConversationID); model != "" {
+		if route := s.router.ResolveByID(model); route != nil {
+			return route
+		}
 		if route := s.router.ResolveByName(model); route != nil {
 			return route
 		}
@@ -335,11 +339,7 @@ func (s *Server) rememberMainModel(pre *Preflight, route *router.Route) {
 		return
 	}
 
-	modelName := route.Model.Name
-	if modelName == "" {
-		modelName = route.Model.ModelID
-	}
-	s.rememberModelName(pre, modelName)
+	s.rememberModelName(pre, route.Model.ID)
 }
 
 func (s *Server) rememberEasterEggModel(pre *Preflight) {

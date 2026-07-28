@@ -6,6 +6,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"kiro-proxy/codex"
@@ -14,6 +15,7 @@ import (
 	"kiro-proxy/store"
 	"kiro-proxy/ua"
 	"kiro-proxy/upstreamproxy"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -31,16 +33,24 @@ const (
 	statusRetryBaseDelay = time.Second
 	maxRetryDelay        = 10 * time.Second
 	// 网络异常仍只重试一次；快速返回的 502/503/504 最多重试三次。
-	retryBudget      = 125 * time.Second
-	defaultMaxTokens = 200000
+	retryBudget          = 125 * time.Second
+	defaultMaxTokens     = 200000
+	affinityCapacityWait = 750 * time.Millisecond
+	firstByteGraceLimit  = 60 * time.Second
 )
 
 // Forwarder 负责转发请求到上游
 type Forwarder struct {
-	stats    *store.Stats
-	db       *store.DB
-	clientMu sync.RWMutex
-	clients  map[string]*http.Client
+	stats     *store.Stats
+	db        *store.DB
+	clientMu  sync.RWMutex
+	clients   map[string]*http.Client
+	health    *modelHealthTracker
+	affinity  *modelAffinityStore
+	load      *modelLoadTracker
+	latency   *modelLatencyTracker
+	upstream  *upstreamBucketHealth
+	avoidance *modelAvoidanceStore
 }
 
 // NewForwarder 创建转发器
@@ -51,9 +61,15 @@ func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
 		clients[""] = client
 	}
 	return &Forwarder{
-		stats:   stats,
-		db:      db,
-		clients: clients,
+		stats:     stats,
+		db:        db,
+		clients:   clients,
+		health:    newModelHealthTracker(),
+		affinity:  newModelAffinityStore(),
+		load:      newModelLoadTracker(),
+		latency:   newModelLatencyTracker(),
+		upstream:  newUpstreamBucketHealth(),
+		avoidance: newModelAvoidanceStore(),
 	}
 }
 
@@ -81,40 +97,435 @@ func (f *Forwarder) clientForProxy(proxyAddr string) (*http.Client, error) {
 	return client, nil
 }
 
+func (f *Forwarder) ModelHealthStatuses() []store.ModelHealthStatus {
+	now := time.Now()
+	models, modelsErr := f.db.GetModels()
+	if modelsErr == nil {
+		f.health.syncModels(models)
+	}
+	statuses := f.health.snapshot(now)
+	counts := f.affinity.counts(now)
+	active := f.load.snapshot()
+	latency := f.latency.snapshot(now)
+	avoided := f.avoidance.counts(now)
+	limits := make(map[string]int)
+	timeouts := make(map[string]int)
+	if groups, err := f.db.GetModelGroups(); err == nil {
+		for _, group := range groups {
+			for _, member := range group.Members {
+				timeouts[member.ModelID] = group.FirstByteTimeoutMS
+				if member.MaxConcurrency > 0 {
+					limits[member.ModelID] = member.MaxConcurrency
+				}
+			}
+		}
+	}
+	byModel := make(map[string]int, len(statuses))
+	for i := range statuses {
+		statuses[i].AffinitySessions = counts[statuses[i].ModelConfigID]
+		statuses[i].ActiveRequests = active[statuses[i].ModelConfigID]
+		statuses[i].CurrentConcurrency = active[statuses[i].ModelConfigID]
+		statuses[i].MaxConcurrency = limits[statuses[i].ModelConfigID]
+		statuses[i].AvoidedScopes = avoided[statuses[i].ModelConfigID]
+		statuses[i].FirstByteTimeoutMS = timeouts[statuses[i].ModelConfigID]
+		applyLatencyMetric(&statuses[i], latency[statuses[i].ModelConfigID])
+		byModel[statuses[i].ModelConfigID] = i
+	}
+	allModels := make(map[string]struct{})
+	for modelID := range counts {
+		allModels[modelID] = struct{}{}
+	}
+	for modelID := range active {
+		allModels[modelID] = struct{}{}
+	}
+	for modelID := range avoided {
+		allModels[modelID] = struct{}{}
+	}
+	for modelID := range limits {
+		allModels[modelID] = struct{}{}
+	}
+	for modelID := range timeouts {
+		allModels[modelID] = struct{}{}
+	}
+	for modelID := range latency {
+		allModels[modelID] = struct{}{}
+	}
+	for modelID := range allModels {
+		if _, exists := byModel[modelID]; exists {
+			continue
+		}
+		status := store.ModelHealthStatus{
+			ModelConfigID: modelID, State: "closed", AffinitySessions: counts[modelID],
+			ActiveRequests: active[modelID], CurrentConcurrency: active[modelID],
+			MaxConcurrency: limits[modelID], AvoidedScopes: avoided[modelID],
+			FirstByteTimeoutMS: timeouts[modelID],
+		}
+		applyLatencyMetric(&status, latency[modelID])
+		statuses = append(statuses, status)
+	}
+	if modelsErr == nil {
+		byID := make(map[string]*store.Model, len(models))
+		for i := range models {
+			byID[models[i].ID] = &models[i]
+		}
+		for i := range statuses {
+			statuses[i].UpstreamBucketState = f.upstream.state(byID[statuses[i].ModelConfigID], now)
+		}
+	}
+	return statuses
+}
+
+func applyLatencyMetric(status *store.ModelHealthStatus, metric modelLatencyMetric) {
+	if status == nil || metric.sampleCount == 0 {
+		return
+	}
+	status.LastFirstByteMS = metric.lastMS
+	status.AverageFirstByteMS = metric.averageMS
+	status.EWMAFirstByteMS = metric.ewmaMS
+	status.P95FirstByteMS = metric.p95MS
+	status.FirstByteSampleCount = metric.sampleCount
+	status.SlowFirstByteSamples = metric.slowSampleCount
+	status.LatencyDegraded = metric.degraded
+	if !metric.degradedUntil.IsZero() {
+		status.LatencyDegradedUntil = metric.degradedUntil.Format(time.RFC3339Nano)
+	}
+}
+
 // Forward 执行完整的转发流程
 func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
-	m := route.Model
+	if route == nil || route.Model == nil {
+		return nil, fmt.Errorf("无可用模型候选")
+	}
+	if route.Group == nil {
+		model := route.Model
+		lease, acquired := f.load.acquire(model.ID, route.CandidateLimits[model.ID])
+		if !acquired {
+			return nil, fmt.Errorf("模型 %s 已达到并发上限", statsModelID(model))
+		}
+		bindUsageModel(pre, model)
+		resp, contResult, err := f.forwardCandidate(req.Context(), pre, model, logger, true)
+		if err != nil {
+			lease.release()
+			return nil, err
+		}
+		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
+		route.Model = model
+		finalized, err := f.finalizeForwardResponse(resp, pre, model, logger, contResult)
+		if err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+		return finalized, nil
+	}
+	return f.forwardModelGroup(req, pre, route, logger)
+}
 
-	// 转换请求体
-	logger.Info("converter", fmt.Sprintf("开始转换: provider=%s, model_id=%s", m.Provider, m.ModelID))
+func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
+	now := time.Now()
+	conversationID := ""
+	if pre != nil && pre.Conv != nil {
+		conversationID = pre.Conv.ConversationID
+	}
+	affinityModelID := f.affinity.get(route.Group.ID, conversationID, now)
+	scopes := dispatchAvoidanceScopes(route.Group.ID, conversationID, requestClientIP(req))
+	candidates := orderedRouteCandidates(route, affinityModelID, f.avoidance, scopes, now)
+	candidates = f.latency.order(candidates, now)
+	candidates = f.upstream.order(candidates, now)
+	deadline := now.Add(retryBudget)
+	attempted := 0
+	attemptsByGroup := make(map[string]int)
+	var lastErr error
+	var lastResp *http.Response
+	var lastContResult *converter.ResponsesContinuationResult
+	var lastModel *store.Model
+
+	for index, model := range candidates {
+		if model == nil {
+			continue
+		}
+		if !candidateHasBudget(deadline, time.Now()) {
+			break
+		}
+		candidateGroup := routeGroupForCandidate(route, model)
+		if attemptsByGroup[candidateGroup.ID] >= candidateGroup.MaxAttempts {
+			continue
+		}
+		allowed, circuitState := f.health.allow(model, time.Now())
+		if !allowed {
+			if pre != nil && pre.usage != nil {
+				pre.usage.setFailoverReason("circuit_" + circuitState)
+			}
+			logger.WarnWithMeta("dispatcher", fmt.Sprintf("跳过熔断模型: group=%s model=%s state=%s", route.Group.Name, statsModelID(model), circuitState), LogMeta{
+				Model: statsModelID(model),
+				Metadata: map[string]interface{}{
+					"group_id":  route.Group.ID,
+					"group":     route.Group.Name,
+					"candidate": index,
+					"circuit":   circuitState,
+				},
+			})
+			continue
+		}
+		capacityWait := time.Duration(0)
+		if model.ID == affinityModelID {
+			capacityWait = affinityCapacityWait
+		}
+		capacityStarted := time.Now()
+		lease, acquired := f.load.acquireWithWait(req.Context(), model.ID, route.CandidateLimits[model.ID], capacityWait)
+		capacityWaited := time.Since(capacityStarted)
+		if pre != nil && pre.usage != nil && capacityWait > 0 {
+			pre.usage.addCapacityWait(capacityWaited)
+		}
+		if !acquired {
+			f.health.neutral(model)
+			if req.Context().Err() != nil {
+				return nil, req.Context().Err()
+			}
+			if pre != nil && pre.usage != nil {
+				pre.usage.setFailoverReason("capacity_full")
+			}
+			logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过并发已满候选: group=%s model=%s", route.Group.Name, statsModelID(model)), LogMeta{
+				Model:    statsModelID(model),
+				Metadata: map[string]interface{}{"group_id": route.Group.ID, "candidate": index, "max_concurrency": route.CandidateLimits[model.ID]},
+			})
+			continue
+		}
+		bucketAllowed, bucketState := f.upstream.allow(model, time.Now())
+		if !bucketAllowed {
+			lease.release()
+			f.health.neutral(model)
+			if pre != nil && pre.usage != nil {
+				pre.usage.setFailoverReason("upstream_bucket_" + bucketState)
+			}
+			logger.WarnWithMeta("dispatcher", fmt.Sprintf("跳过上游地址异常候选: group=%s model=%s state=%s", route.Group.Name, statsModelID(model), bucketState), LogMeta{
+				Model:    statsModelID(model),
+				Metadata: map[string]interface{}{"group_id": route.Group.ID, "candidate": index, "upstream_bucket": bucketState},
+			})
+			continue
+		}
+
+		attempted++
+		attemptsByGroup[candidateGroup.ID]++
+		route.Model = model
+		bindUsageModel(pre, model)
+		if pre != nil && pre.usage != nil {
+			pre.usage.setFailoverCount(attempted - 1)
+			pre.usage.setDispatchReason(dispatchSelectionReason(route, model, affinityModelID, capacityWaited, f.latency.isDegraded(affinityModelID, time.Now())))
+		}
+		logger.InfoWithMeta("dispatcher", fmt.Sprintf("尝试分组候选: group=%s candidate=%d model=%s", route.Group.Name, index, statsModelID(model)), LogMeta{
+			Model: statsModelID(model),
+			Metadata: map[string]interface{}{
+				"group_id":  route.Group.ID,
+				"group":     route.Group.Name,
+				"candidate": index,
+			},
+		})
+
+		var contResult *converter.ResponsesContinuationResult
+		var attemptResp *http.Response
+		configuredFirstByteTimeout := time.Duration(candidateGroup.FirstByteTimeoutMS) * time.Millisecond
+		firstByteTimeout := observedFirstByteTimeout(
+			configuredFirstByteTimeout,
+			deadline,
+			time.Now(),
+			f.latency.isDegraded(model.ID, time.Now()),
+		)
+		resp, firstByteDuration, err := requestWithFirstByteTimeout(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+			var forwardErr error
+			attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, false)
+			return attemptResp, forwardErr
+		})
+		if err != nil {
+			lease.release()
+			if req.Context().Err() != nil {
+				return nil, req.Context().Err()
+			}
+			lastErr = err
+			failureClass := "candidate_error"
+			if errors.Is(err, errFirstByteTimeout) {
+				failureClass = "first_byte_slow"
+				f.latency.record(model.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
+				f.health.neutral(model)
+				f.upstream.neutral(model, time.Now())
+				if f.latency.isDegraded(model.ID, time.Now()) {
+					f.affinity.clear(route.Group.ID, conversationID, model.ID)
+				}
+			} else if isUpstreamTransportFailure(err) {
+				failureClass = string(modelFailureTransport)
+				f.health.failure(model, modelFailureTransport, 0, time.Now())
+				f.upstream.recordFailure(model, time.Now())
+				f.affinity.clear(route.Group.ID, conversationID, model.ID)
+				markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+			} else {
+				f.health.neutral(model)
+				f.upstream.neutral(model, time.Now())
+			}
+			if pre != nil && pre.usage != nil {
+				pre.usage.setFailoverReason(failureClass)
+			}
+			logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选网络失败: group=%s model=%s error=%v", route.Group.Name, statsModelID(model), err), LogMeta{
+				Model: statsModelID(model),
+				Metadata: map[string]interface{}{
+					"group_id":      route.Group.ID,
+					"failure_class": failureClass,
+					"candidate":     index,
+				},
+			})
+			continue
+		}
+		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
+		if firstByteDuration > 0 {
+			f.latency.record(model.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
+		}
+		f.upstream.recordSuccess(model, time.Now())
+
+		if shouldFailoverModelStatus(resp.StatusCode) {
+			bodyDetail := preserveResponseBody(resp)
+			failureClass := modelFailureForStatus(resp.StatusCode)
+			retryAfter := time.Duration(0)
+			if failureClass == modelFailureRateLimit {
+				retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+			}
+			f.health.failure(model, failureClass, retryAfter, time.Now())
+			f.affinity.clear(route.Group.ID, conversationID, model.ID)
+			markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp
+			lastContResult = contResult
+			lastModel = model
+			if pre != nil && pre.usage != nil {
+				pre.usage.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+			}
+			logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选返回可切换错误: group=%s model=%s status=%d", route.Group.Name, statsModelID(model), resp.StatusCode), LogMeta{
+				Model:  statsModelID(model),
+				Status: resp.StatusCode,
+				Metadata: map[string]interface{}{
+					"group_id":      route.Group.ID,
+					"failure_class": string(failureClass),
+					"candidate":     index,
+				},
+			}, bodyDetail)
+			continue
+		}
+		if resp.StatusCode < http.StatusBadRequest && pre != nil && pre.usage != nil {
+			pre.usage.markFirstByte(time.Now())
+		}
+
+		if lastResp != nil {
+			lastResp.Body.Close()
+		}
+		if resp.StatusCode < http.StatusBadRequest {
+			f.health.success(model)
+			f.affinity.set(route.Group.ID, conversationID, model.ID, time.Now())
+			clearAvoidanceScopes(f.avoidance, scopes, model.ID)
+			resp.Body = &observedUpstreamBody{
+				ReadCloser: resp.Body,
+				onFailure: func(readErr error) {
+					f.health.failure(model, modelFailureTransport, 0, time.Now())
+					f.upstream.recordFailure(model, time.Now())
+					f.affinity.clear(route.Group.ID, conversationID, model.ID)
+					logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选响应流中断: group=%s model=%s error=%v", route.Group.Name, statsModelID(model), readErr), LogMeta{
+						Model: statsModelID(model),
+						Metadata: map[string]interface{}{
+							"group_id":      route.Group.ID,
+							"failure_class": string(modelFailureTransport),
+						},
+					})
+				},
+			}
+		} else {
+			f.health.neutral(model)
+		}
+		return f.finalizeForwardResponse(resp, pre, model, logger, contResult)
+	}
+
+	if lastResp != nil && lastModel != nil {
+		route.Model = lastModel
+		bindUsageModel(pre, lastModel)
+		return f.finalizeForwardResponse(lastResp, pre, lastModel, logger, lastContResult)
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("模型组 %s 请求失败: %w", route.Group.Name, lastErr)
+	}
+	if attempted == 0 {
+		return nil, fmt.Errorf("模型组 %s 当前没有可用候选", route.Group.Name)
+	}
+	return nil, fmt.Errorf("模型组 %s 已超过请求时间预算", route.Group.Name)
+}
+
+func requestClientIP(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(req.RemoteAddr))
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(req.RemoteAddr)
+}
+
+func routeGroupForCandidate(route *router.Route, model *store.Model) *store.ModelGroup {
+	if route == nil {
+		return nil
+	}
+	if model != nil && route.CandidateGroups != nil {
+		if group := route.CandidateGroups[model.ID]; group != nil {
+			return group
+		}
+	}
+	return route.Group
+}
+
+func dispatchAvoidanceScopes(groupID, conversationID, clientIP string) []string {
+	scopes := make([]string, 0, 2)
+	if clientIP != "" {
+		scopes = append(scopes, "ip:"+groupID+":"+clientIP)
+	}
+	if conversationID != "" {
+		scopes = append(scopes, "turn:"+groupID+":"+conversationID)
+	}
+	return scopes
+}
+
+func markAvoidanceScopes(store *modelAvoidanceStore, scopes []string, modelID string, now time.Time) {
+	for _, scope := range scopes {
+		store.mark(scope, modelID, now)
+	}
+}
+
+func clearAvoidanceScopes(store *modelAvoidanceStore, scopes []string, modelID string) {
+	for _, scope := range scopes {
+		store.clear(scope, modelID)
+	}
+}
+
+func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model *store.Model, logger *TrafficLogger, retry bool) (*http.Response, *converter.ResponsesContinuationResult, error) {
+	logger.Info("converter", fmt.Sprintf("开始转换: provider=%s, model_id=%s", model.Provider, model.ModelID))
 	conversionStarted := time.Now()
-	upstreamBody, upstreamURL, err := convertRequest(pre, m)
+	upstreamBody, upstreamURL, err := convertRequest(pre, model)
 	if pre != nil && pre.usage != nil {
 		pre.usage.setConversionDuration(conversionStarted)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("转换失败: %w", err)
+		return nil, nil, fmt.Errorf("转换失败: %w", err)
 	}
 
-	// Responses API 续传优化：使用 previous_response_id 减少重发
-	// 仅当模型配置启用了续传时才生效（默认关闭，因为很多中转站不支持）
 	var contResult *converter.ResponsesContinuationResult
 	continuationStateKey := ""
 	if pre != nil {
-		continuationStateKey = responsesContinuationStateKeyFor(pre, m, resolveReasoningEffort(pre, m))
+		continuationStateKey = responsesContinuationStateKeyFor(pre, model, resolveReasoningEffort(pre, model))
 	}
-	if m.EnableContinuation && useResponsesAPI(pre, m) && pre.Conv != nil && !pre.Conv.IsClassifier && continuationStateKey != "" {
+	if pre != nil && pre.Conv != nil && model.EnableContinuation && useResponsesAPI(pre, model) && !pre.Conv.IsClassifier && continuationStateKey != "" {
 		prevSession, sessionErr := f.db.GetResponsesSession(continuationStateKey)
 		if sessionErr != nil {
-			return nil, fmt.Errorf("读取 Responses 续传状态失败: %w", sessionErr)
+			return nil, nil, fmt.Errorf("读取 Responses 续传状态失败: %w", sessionErr)
 		}
 		var prevState *converter.ResponsesContinuationState
 		if prevSession != nil && prevSession.ResponseID != "" {
-			prevState = &converter.ResponsesContinuationState{
-				ResponseID: prevSession.ResponseID,
-				InputJSON:  prevSession.InputJSON,
-				ItemCount:  prevSession.ItemCount,
-			}
+			prevState = &converter.ResponsesContinuationState{ResponseID: prevSession.ResponseID, InputJSON: prevSession.InputJSON, ItemCount: prevSession.ItemCount}
 		}
 		contResult, err = converter.ApplyResponsesContinuation(upstreamBody, prevState)
 		if err == nil && contResult != nil {
@@ -123,32 +534,27 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 				if len(prevID) > 12 {
 					prevID = prevID[:12]
 				}
-				logger.Info("forwarder", fmt.Sprintf("续传命中: convId=%s, prev_response=%s, delta_size=%d bytes",
-					pre.Conv.ConversationID, prevID, len(contResult.Body)))
+				logger.Info("forwarder", fmt.Sprintf("续传命中: convId=%s, prev_response=%s, delta_size=%d bytes", pre.Conv.ConversationID, prevID, len(contResult.Body)))
 			}
 			upstreamBody = contResult.Body
 		}
 	}
 
-	logPrefixDrift(logger, pre, m, upstreamBody, contResult)
-	logger.InfoBytes("forwarder", fmt.Sprintf("转发: %s → %s (body=%d bytes)", m.ModelID, upstreamURL, len(upstreamBody)), upstreamBody)
-
-	// 发送请求（带重试）
+	logPrefixDrift(logger, pre, model, upstreamBody, contResult)
+	logger.InfoBytes("forwarder", fmt.Sprintf("转发: %s → %s (body=%d bytes)", model.ModelID, upstreamURL, len(upstreamBody)), upstreamBody)
 	sessionID := ""
-	if pre.Conv != nil {
+	if pre != nil && pre.Conv != nil {
 		if pre.Conv.IsClassifier {
 			sessionID = "kiro-classifier"
 		} else {
 			sessionID = pre.Conv.ConversationID
 		}
 	}
-	resp, err := f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID, pre.usage)
+	resp, err := f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retry)
 	if err != nil {
-		return nil, err
+		return nil, contResult, err
 	}
 
-	// 续传被拒时回退全量发送。兼容 OpenAI/DeepSeek/sub2api 常见错误：
-	// invalid_previous_response_id / previous_response_not_found / unsupported field 等。
 	if contResult != nil && contResult.UsedContinuation && resp.StatusCode >= 400 && resp.StatusCode < 500 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -160,27 +566,51 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 			}
 			upstreamBody = contResult.FallbackBody
 			contResult.UsedContinuation = false
-			resp, err = f.sendWithRetry(req.Context(), upstreamURL, upstreamBody, m, logger, sessionID, pre.usage)
+			resp, err = f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retry)
 			if err != nil {
-				return nil, err
+				return nil, contResult, err
 			}
 		} else {
-			// 不是可安全归因于续传状态的 4xx，原样返回
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 		}
 	}
+	return resp, contResult, nil
+}
 
+func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body []byte, model *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retry bool) (*http.Response, error) {
+	if retry {
+		return f.sendWithRetry(ctx, url, body, model, logger, sessionID, usage)
+	}
+	return f.doRequest(ctx, url, body, model, sessionID, usage)
+}
+
+func (f *Forwarder) finalizeForwardResponse(resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult) (*http.Response, error) {
 	if pre != nil && pre.usage != nil {
 		pre.usage.wrapResponse(resp)
 	}
-
-	// 非 Kiro 协议直接返回
-	if pre.Protocol != "kiro" {
+	if pre == nil || pre.Protocol != "kiro" {
 		return resp, nil
 	}
+	return f.wrapKiroStream(resp, pre, model, logger, contResult)
+}
 
-	// Kiro 协议：包装流式转换器
-	return f.wrapKiroStream(resp, pre, m, logger, contResult)
+func bindUsageModel(pre *Preflight, model *store.Model) {
+	if pre == nil || pre.usage == nil {
+		return
+	}
+	pre.usage.setModel(model)
+	pre.usage.setReasoningEffort(resolveReasoningEffort(pre, model))
+}
+
+func preserveResponseBody(resp *http.Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	return truncate(string(body), 500)
 }
 
 // sendWithRetry 发送请求，失败重试
@@ -209,8 +639,10 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 			}
 		}
 
-		resp, err := f.doRequest(ctx, url, body, m, sessionID, usage)
+		attemptCtx, cancelAttempt := context.WithDeadline(ctx, deadline)
+		resp, err := f.doRequest(attemptCtx, url, body, m, sessionID, usage)
 		if err != nil {
+			cancelAttempt()
 			lastErr = err
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -222,6 +654,11 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 			}
 			nextRetryDelay = transportRetryDelay
 			continue
+		}
+		if resp.Body != nil {
+			resp.Body = &cancelReadCloser{ReadCloser: resp.Body, cancel: cancelAttempt}
+		} else {
+			cancelAttempt()
 		}
 
 		if shouldRetryUpstreamStatus(resp.StatusCode) && attempt < maxRetries {
@@ -241,7 +678,8 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 }
 
 func shouldRetryUpstreamStatus(status int) bool {
-	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+	return status == http.StatusInternalServerError || status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 }
 
 func upstreamStatusRetryDelay(retryNumber int, retryAfter string) time.Duration {

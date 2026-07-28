@@ -1,14 +1,32 @@
 <script setup>
-import { computed, ref, onMounted } from 'vue'
-import { getModels, createModel, updateModel, deleteModel, testModel, refreshCodexModel } from '../api/models.js'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  getModels,
+  createModel,
+  updateModel,
+  deleteModel,
+  testModel,
+  refreshCodexModel,
+  getModelGroups,
+  getModelGroupStatus,
+  createModelGroup,
+  updateModelGroup,
+  deleteModelGroup,
+} from '../api/models.js'
 import ModelRow from '../components/models/ModelRow.vue'
 import ModelForm from '../components/models/ModelForm.vue'
+import ModelGroupsPanel from '../components/models/ModelGroupsPanel.vue'
 import IconPlus from '../components/icons/IconPlus.vue'
 import IconModels from '../components/icons/IconModels.vue'
 import IconSearch from '../components/icons/IconSearch.vue'
+import IconEye from '../components/icons/IconEye.vue'
+import IconEyeOff from '../components/icons/IconEyeOff.vue'
 import { useToast } from '../composables/useToast.js'
 
 const models = ref([])
+const groups = ref([])
+const groupHealth = ref([])
+const activeView = ref('models')
 const showForm = ref(false)
 const editingModel = ref(null)
 const testResults = ref({})
@@ -17,6 +35,10 @@ const refreshingCodexIds = ref({})
 const togglingEnabledIds = ref({})
 const saving = ref(false)
 const loadingModels = ref(false)
+const loadingGroups = ref(false)
+const loadingGroupHealth = ref(false)
+const savingGroup = ref(false)
+const deletingGroup = ref(false)
 const showDeleteModal = ref(false)
 const deleteTarget = ref(null)
 const deletingModel = ref(false)
@@ -45,6 +67,15 @@ const statusOptions = [
 ]
 
 const primaryModelId = computed(() => models.value.find((m) => m.enabled !== false)?.id || '')
+const groupMembershipByModelID = computed(() => {
+  const result = new Map()
+  for (const group of groups.value) {
+    for (const member of group.members || []) {
+      result.set(member.model_id, { group, priority: Number(member.priority || 0) })
+    }
+  }
+  return result
+})
 
 const filteredModels = computed(() => {
   const keyword = searchText.value.trim().toLowerCase()
@@ -90,6 +121,8 @@ const deleteTargetName = computed(() => deleteTarget.value?.name || deleteTarget
 
 const TEST_RESULTS_STORAGE_KEY = 'kiro-proxy:model-test-results:v1'
 const HIDE_PRIVATE_INFO_STORAGE_KEY = 'kiro-proxy:models-hide-private-info:v1'
+const GROUP_HEALTH_REFRESH_INTERVAL_MS = 3000
+let groupHealthRefreshTimer = null
 
 function loadPrivateInfoPreference() {
   try {
@@ -153,6 +186,54 @@ async function loadModels() {
   }
 }
 
+async function loadGroupHealth({ silent = false } = {}) {
+  if (loadingGroupHealth.value) return
+  loadingGroupHealth.value = true
+  try {
+    const data = await getModelGroupStatus()
+    groupHealth.value = Array.isArray(data) ? data : []
+  } catch (e) {
+    if (!silent) {
+      errorMessage.value = e?.message || '加载分组运行状态失败'
+    }
+  } finally {
+    loadingGroupHealth.value = false
+  }
+}
+
+async function loadGroups() {
+  if (loadingGroups.value) return
+  loadingGroups.value = true
+  errorMessage.value = ''
+  try {
+    const [groupData] = await Promise.all([getModelGroups(), loadGroupHealth()])
+    groups.value = Array.isArray(groupData) ? groupData : []
+  } catch (e) {
+    groups.value = []
+    errorMessage.value = e?.message || '加载模型分组失败'
+  } finally {
+    loadingGroups.value = false
+  }
+}
+
+function stopGroupHealthRefresh() {
+  if (groupHealthRefreshTimer === null) return
+  window.clearInterval(groupHealthRefreshTimer)
+  groupHealthRefreshTimer = null
+}
+
+function startGroupHealthRefresh() {
+  if (groupHealthRefreshTimer !== null) return
+  groupHealthRefreshTimer = window.setInterval(() => {
+    if (activeView.value === 'groups') loadGroupHealth({ silent: true })
+  }, GROUP_HEALTH_REFRESH_INTERVAL_MS)
+}
+
+async function refreshCurrentView() {
+  if (activeView.value === 'groups') await Promise.all([loadModels(), loadGroups()])
+  else await loadModels()
+}
+
 function openAdd() {
   editingModel.value = null
   errorMessage.value = ''
@@ -177,7 +258,7 @@ async function handleSave(form) {
       await createModel(form)
     }
     showForm.value = false
-    await loadModels()
+    await Promise.all([loadModels(), loadGroups()])
     showToast(updating ? '模型配置已保存' : '模型已添加')
   } catch (e) {
     errorMessage.value = e?.message || '保存失败'
@@ -209,13 +290,58 @@ async function confirmDelete() {
     await deleteModel(deleteTarget.value.id)
     showDeleteModal.value = false
     deleteTarget.value = null
-    await loadModels()
+    await Promise.all([loadModels(), loadGroups()])
     showToast('模型已删除')
   } catch (e) {
     deleteError.value = e?.message || '删除失败'
     showToast(deleteError.value, { tone: 'error' })
   } finally {
     deletingModel.value = false
+  }
+}
+
+async function handleGroupSave(payload) {
+  if (savingGroup.value) return
+  savingGroup.value = true
+  errorMessage.value = ''
+  try {
+    const data = {
+      name: payload.name,
+      description: payload.description,
+      enabled: payload.enabled,
+      first_byte_timeout_ms: payload.first_byte_timeout_ms,
+      max_attempts: payload.max_attempts,
+      fallback_group_id: payload.fallback_group_id,
+      members: payload.members,
+    }
+    if (payload.id) await updateModelGroup(payload.id, data)
+    else await createModelGroup(data)
+    await Promise.all([loadModels(), loadGroups()])
+    payload.done?.()
+    showToast(payload.id ? '模型分组已保存' : '模型分组已创建')
+  } catch (e) {
+    const message = e?.message || '保存模型分组失败'
+    payload.fail?.(message)
+    showToast(message, { tone: 'error' })
+  } finally {
+    savingGroup.value = false
+  }
+}
+
+async function handleGroupDelete(payload) {
+  if (!payload?.group?.id || deletingGroup.value) return
+  deletingGroup.value = true
+  errorMessage.value = ''
+  try {
+    await deleteModelGroup(payload.group.id)
+    await Promise.all([loadModels(), loadGroups()])
+    payload.done?.()
+    showToast('模型分组已删除')
+  } catch (e) {
+    const message = e?.message || '删除模型分组失败'
+    showToast(message, { tone: 'error' })
+  } finally {
+    deletingGroup.value = false
   }
 }
 
@@ -272,23 +398,35 @@ onMounted(() => {
   loadPrivateInfoPreference()
   loadStoredTestResults()
   loadModels()
+  loadGroups()
 })
+
+watch(activeView, (view) => {
+  if (view === 'groups') {
+    loadGroupHealth({ silent: true })
+    startGroupHealthRefresh()
+    return
+  }
+  stopGroupHealthRefresh()
+})
+
+onBeforeUnmount(stopGroupHealthRefresh)
 </script>
 
 <template>
   <div class="ui-page-shell h-full overflow-y-auto">
     <div class="ui-page-inner space-y-3">
-      <header class="flex items-start justify-between gap-4 px-1 pt-1">
+      <header class="flex flex-wrap items-start justify-between gap-4 px-1 pt-1">
         <div class="min-w-0">
           <h1 class="text-[22px] font-semibold leading-7 tracking-tight text-[#111827]">模型配置</h1>
           <p class="mt-1 text-[12px] leading-4 text-[#6b7280]">配置 Kiro 可用的 AI 模型，每个模型对应一个上游 API 接口</p>
         </div>
 
-        <div class="flex flex-wrap items-center justify-end gap-2">
-          <div class="relative">
+        <div class="flex w-full flex-wrap items-center justify-end gap-2 lg:w-auto">
+          <div v-if="activeView === 'models'" class="relative w-full sm:w-auto">
             <input
               v-model="searchText"
-              class="ui-control-h ui-control w-[280px] pl-9 pr-10 text-[12px] text-[#111827] shadow-sm outline-none transition focus:border-[#bfdbfe] focus:ring-2 focus:ring-[#eff6ff] lg:w-[330px]"
+              class="ui-control-h ui-control w-full pl-9 pr-10 text-[12px] text-[#111827] shadow-sm outline-none transition focus:border-[#bfdbfe] focus:ring-2 focus:ring-[#eff6ff] sm:w-[280px] lg:w-[330px]"
               placeholder="搜索模型名称、ID 或 Provider..."
             />
             <IconSearch class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9ca3af]" />
@@ -296,6 +434,7 @@ onMounted(() => {
           </div>
 
           <select
+            v-if="activeView === 'models'"
             v-model="providerFilter"
             class="ui-control-h ui-control px-3 text-[12px] text-[#374151] shadow-sm outline-none"
           >
@@ -303,6 +442,7 @@ onMounted(() => {
           </select>
 
           <select
+            v-if="activeView === 'models'"
             v-model="statusFilter"
             class="ui-control-h ui-control px-3 text-[12px] text-[#374151] shadow-sm outline-none"
           >
@@ -310,6 +450,7 @@ onMounted(() => {
           </select>
 
           <button
+            v-if="activeView === 'models'"
             type="button"
             class="flex h-9 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium shadow-sm transition"
             :class="hidePrivateInfo
@@ -318,20 +459,21 @@ onMounted(() => {
             :title="hidePrivateInfo ? '当前已隐藏连接配置与 Codex 账户信息' : '显示连接配置与 Codex 账户信息'"
             @click="togglePrivateInfo"
           >
-            <span class="text-[13px]">{{ hidePrivateInfo ? '🔒' : '👁' }}</span>
+            <IconEyeOff v-if="hidePrivateInfo" class="h-4 w-4" />
+            <IconEye v-else class="h-4 w-4" />
             <span>{{ hidePrivateInfo ? '隐私已隐藏' : '隐藏隐私' }}</span>
           </button>
 
           <button
             class="ui-control-h flex w-8 items-center justify-center ui-control border-[#e6ebf2] bg-white text-[#475569] shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#111827] disabled:cursor-not-allowed disabled:opacity-70"
-            :aria-label="loadingModels ? '刷新中' : '刷新模型列表'"
-            :title="loadingModels ? '刷新中...' : '刷新模型列表'"
-            :disabled="loadingModels"
-            @click="loadModels"
+            :aria-label="loadingModels || loadingGroups ? '刷新中' : '刷新列表'"
+            :title="loadingModels || loadingGroups ? '刷新中...' : '刷新列表'"
+            :disabled="loadingModels || loadingGroups"
+            @click="refreshCurrentView"
           >
             <svg
               class="h-4 w-4 transition-transform"
-              :class="{ 'animate-spin': loadingModels }"
+              :class="{ 'animate-spin': loadingModels || loadingGroups }"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -347,6 +489,7 @@ onMounted(() => {
           </button>
 
           <button
+            v-if="activeView === 'models'"
             class="ui-primary-h flex items-center gap-2 ui-primary-button px-4 text-[13px] font-semibold leading-none shadow-[0_6px_14px_rgba(22,119,255,0.24)] transition hover:shadow-[0_8px_18px_rgba(22,119,255,0.28)] active:scale-[0.98]"
             @click="openAdd"
           >
@@ -356,7 +499,12 @@ onMounted(() => {
         </div>
       </header>
 
-      <section class="ui-card grid grid-cols-2 overflow-hidden sm:grid-cols-3 lg:grid-cols-5">
+      <div class="inline-flex h-8 w-fit items-center rounded-md border border-[#dfe5ec] bg-[#f8fafc] p-0.5 shadow-sm">
+        <button class="h-7 rounded px-4 text-[12px] font-medium transition" :class="activeView === 'models' ? 'bg-white text-[#1677ff] shadow-sm ring-1 ring-[#dbeafe]' : 'text-[#64748b] hover:bg-white/70 hover:text-[#334155]'" @click="activeView = 'models'">模型</button>
+        <button class="h-7 rounded px-4 text-[12px] font-medium transition" :class="activeView === 'groups' ? 'bg-white text-[#1677ff] shadow-sm ring-1 ring-[#dbeafe]' : 'text-[#64748b] hover:bg-white/70 hover:text-[#334155]'" @click="activeView = 'groups'">分组</button>
+      </div>
+
+      <section v-if="activeView === 'models'" class="ui-card grid grid-cols-2 overflow-hidden sm:grid-cols-3 lg:grid-cols-5">
         <div
           v-for="(item, index) in summaryItems"
           :key="item.label"
@@ -404,7 +552,7 @@ onMounted(() => {
         {{ errorMessage }}
       </div>
 
-      <section v-if="models.length > 0" class="overflow-hidden ui-card">
+      <section v-if="activeView === 'models' && models.length > 0" class="overflow-hidden ui-card">
         <div class="overflow-x-auto">
           <div class="grid min-w-[1153px] grid-cols-[48px_205px_400px_225px_133px_142px] border-b border-[#edf0f5] bg-[#f8fafc] text-[13px] font-medium leading-5 text-[#64748b]">
             <div class="px-3 py-2.5 text-center"> </div>
@@ -419,6 +567,7 @@ onMounted(() => {
             v-for="m in filteredModels"
             :key="m.id"
             :model="m"
+            :group-membership="groupMembershipByModelID.get(m.id)"
             :primary="m.id === primaryModelId"
             :hide-private-info="hidePrivateInfo"
             :test-result="testResults[m.id]"
@@ -440,11 +589,23 @@ onMounted(() => {
         </div>
       </section>
 
-      <section v-else class="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#cbd5e1] bg-white py-20 text-[#64748b] shadow-sm">
+      <section v-else-if="activeView === 'models'" class="flex flex-col items-center justify-center border border-dashed border-[#cbd5e1] bg-white py-20 text-[#64748b] shadow-sm">
         <IconModels class="mb-3 h-9 w-9" />
         <p class="text-sm font-medium text-[#475569]">暂无模型</p>
         <p class="mt-1 text-xs">点击「新增模型」开始配置 Kiro 可用的上游模型</p>
       </section>
+
+      <ModelGroupsPanel
+        v-else
+        :groups="groups"
+        :models="models"
+        :health="groupHealth"
+        :test-results="testResults"
+        :saving="savingGroup"
+        :deleting="deletingGroup"
+        @save="handleGroupSave"
+        @delete="handleGroupDelete"
+      />
     </div>
 
     <ModelForm

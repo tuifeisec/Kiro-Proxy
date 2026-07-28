@@ -36,6 +36,39 @@ export async function deleteModel(id) {
   return parseJSONResponse(r)
 }
 
+export async function getModelGroups() {
+  const r = await fetch(`${BASE}/api/model-groups`)
+  return parseJSONResponse(r)
+}
+
+export async function getModelGroupStatus() {
+  const r = await fetch(`${BASE}/api/model-groups/status`)
+  return parseJSONResponse(r)
+}
+
+export async function createModelGroup(data) {
+  const r = await fetch(`${BASE}/api/model-groups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  return parseJSONResponse(r)
+}
+
+export async function updateModelGroup(id, data) {
+  const r = await fetch(`${BASE}/api/model-groups/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  return parseJSONResponse(r)
+}
+
+export async function deleteModelGroup(id) {
+  const r = await fetch(`${BASE}/api/model-groups/${id}`, { method: 'DELETE' })
+  return parseJSONResponse(r)
+}
+
 export async function testModel(modelId, model) {
   const r = await fetch(`${BASE}/api/test-model`, {
     method: 'POST',

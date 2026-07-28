@@ -55,6 +55,9 @@ func TestRequestUsageStoresReasoningEffort(t *testing.T) {
 		StatusCode:      200,
 		Success:         true,
 		ReasoningEffort: "medium",
+		DispatchReason:  "affinity_capacity_wait",
+		FailoverReason:  "capacity_full",
+		CapacityWaitMS:  125,
 	})
 	if err != nil {
 		t.Fatalf("insert usage: %v", err)
@@ -65,5 +68,8 @@ func TestRequestUsageStoresReasoningEffort(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ReasoningEffort != "medium" {
 		t.Fatalf("stored reasoning effort = %+v", items)
+	}
+	if items[0].DispatchReason != "affinity_capacity_wait" || items[0].FailoverReason != "capacity_full" || items[0].CapacityWaitMS != 125 {
+		t.Fatalf("stored dispatch metadata = %+v", items[0])
 	}
 }

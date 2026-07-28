@@ -9,41 +9,48 @@ import (
 
 // RequestUsage 是单次上游请求的结构化统计，不保存请求或响应正文。
 type RequestUsage struct {
-	ID               int64   `json:"id"`
-	RequestDate      string  `json:"request_date"`
-	CreatedAt        string  `json:"created_at"`
-	ModelID          string  `json:"model_id"`
-	Provider         string  `json:"provider"`
-	Endpoint         string  `json:"endpoint"`
-	RequestPath      string  `json:"request_path"`
-	Protocol         string  `json:"protocol"`
-	StatusCode       int     `json:"status_code"`
-	Success          bool    `json:"success"`
-	InputTokens      int     `json:"input_tokens"`
-	OutputTokens     int     `json:"output_tokens"`
-	CacheReadTokens  int     `json:"cache_read_tokens"`
-	CacheWriteTokens int     `json:"cache_write_tokens"`
-	FirstByteMS      int64   `json:"first_byte_ms"`
-	DurationMS       int64   `json:"duration_ms"`
-	Credits          float64 `json:"credits"`
-	InputCost        float64 `json:"input_cost"`
-	OutputCost       float64 `json:"output_cost"`
-	CacheReadCost    float64 `json:"cache_read_cost"`
-	CacheWriteCost   float64 `json:"cache_write_cost"`
-	ConversionMS     int64   `json:"conversion_ms"`
-	AuthMS           int64   `json:"auth_ms"`
-	DNSMS            int64   `json:"dns_ms"`
-	ConnectMS        int64   `json:"connect_ms"`
-	TLSMS            int64   `json:"tls_ms"`
-	RequestSendMS    int64   `json:"request_send_ms"`
-	UpstreamWaitMS   int64   `json:"upstream_wait_ms"`
-	ResponseHeaderMS int64   `json:"response_header_ms"`
-	StreamWaitMS     int64   `json:"stream_wait_ms"`
-	RetryCount       int     `json:"retry_count"`
-	ReusedConnection bool    `json:"reused_connection"`
-	ReasoningEffort  string  `json:"reasoning_effort,omitempty"`
-	ServiceTier      string  `json:"service_tier,omitempty"`
-	ErrorMessage     string  `json:"error_message,omitempty"`
+	ID                    int64   `json:"id"`
+	RequestDate           string  `json:"request_date"`
+	CreatedAt             string  `json:"created_at"`
+	ModelID               string  `json:"model_id"`
+	Provider              string  `json:"provider"`
+	Endpoint              string  `json:"endpoint"`
+	RequestPath           string  `json:"request_path"`
+	Protocol              string  `json:"protocol"`
+	StatusCode            int     `json:"status_code"`
+	Success               bool    `json:"success"`
+	InputTokens           int     `json:"input_tokens"`
+	OutputTokens          int     `json:"output_tokens"`
+	CacheReadTokens       int     `json:"cache_read_tokens"`
+	CacheWriteTokens      int     `json:"cache_write_tokens"`
+	FirstByteMS           int64   `json:"first_byte_ms"`
+	DurationMS            int64   `json:"duration_ms"`
+	Credits               float64 `json:"credits"`
+	InputCost             float64 `json:"input_cost"`
+	OutputCost            float64 `json:"output_cost"`
+	CacheReadCost         float64 `json:"cache_read_cost"`
+	CacheWriteCost        float64 `json:"cache_write_cost"`
+	ConversionMS          int64   `json:"conversion_ms"`
+	AuthMS                int64   `json:"auth_ms"`
+	DNSMS                 int64   `json:"dns_ms"`
+	ConnectMS             int64   `json:"connect_ms"`
+	TLSMS                 int64   `json:"tls_ms"`
+	RequestSendMS         int64   `json:"request_send_ms"`
+	UpstreamWaitMS        int64   `json:"upstream_wait_ms"`
+	ResponseHeaderMS      int64   `json:"response_header_ms"`
+	StreamWaitMS          int64   `json:"stream_wait_ms"`
+	RetryCount            int     `json:"retry_count"`
+	ReusedConnection      bool    `json:"reused_connection"`
+	ReasoningEffort       string  `json:"reasoning_effort,omitempty"`
+	ServiceTier           string  `json:"service_tier,omitempty"`
+	RequestedModel        string  `json:"requested_model,omitempty"`
+	RouteGroupID          string  `json:"route_group_id,omitempty"`
+	SelectedModelConfigID string  `json:"selected_model_config_id,omitempty"`
+	FailoverCount         int     `json:"failover_count"`
+	DispatchReason        string  `json:"dispatch_reason,omitempty"`
+	FailoverReason        string  `json:"failover_reason,omitempty"`
+	CapacityWaitMS        int64   `json:"capacity_wait_ms"`
+	ErrorMessage          string  `json:"error_message,omitempty"`
 }
 
 type RequestUsageSummary struct {
@@ -119,12 +126,14 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 			cache_write_tokens, first_byte_ms, duration_ms, credits, input_cost, output_cost,
 			cache_read_cost, cache_write_cost, conversion_ms, auth_ms, dns_ms, connect_ms,
 			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
-			retry_count, reused_connection, reasoning_effort, service_tier, error_message
+			retry_count, reused_connection, reasoning_effort, service_tier, requested_model,
+			route_group_id, selected_model_config_id, failover_count, dispatch_reason,
+			failover_reason, capacity_wait_ms, error_message
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 	`, item.RequestDate, item.CreatedAt, item.ModelID, item.Provider, item.Endpoint,
 		item.RequestPath, item.Protocol, item.StatusCode, boolToInt(item.Success),
@@ -133,7 +142,8 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 		item.CacheReadCost, item.CacheWriteCost, item.ConversionMS, item.AuthMS, item.DNSMS,
 		item.ConnectMS, item.TLSMS, item.RequestSendMS, item.UpstreamWaitMS,
 		item.ResponseHeaderMS, item.StreamWaitMS, item.RetryCount, boolToInt(item.ReusedConnection), item.ReasoningEffort,
-		item.ServiceTier, item.ErrorMessage)
+		item.ServiceTier, item.RequestedModel, item.RouteGroupID, item.SelectedModelConfigID,
+		item.FailoverCount, item.DispatchReason, item.FailoverReason, item.CapacityWaitMS, item.ErrorMessage)
 	return err
 }
 
@@ -187,7 +197,9 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 			cache_write_tokens, first_byte_ms, duration_ms, credits, input_cost, output_cost,
 			cache_read_cost, cache_write_cost, conversion_ms, auth_ms, dns_ms, connect_ms,
 			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
-			retry_count, reused_connection, reasoning_effort, service_tier, error_message
+			retry_count, reused_connection, reasoning_effort, service_tier, requested_model,
+			route_group_id, selected_model_config_id, failover_count, dispatch_reason,
+			failover_reason, capacity_wait_ms, error_message
 		FROM request_usage`+where+` ORDER BY julianday(created_at) DESC, id DESC LIMIT ? OFFSET ?`, append(args, pageSize, offset)...)
 	if err != nil {
 		return RequestUsagePage{}, err
@@ -206,7 +218,8 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 			&item.ConversionMS, &item.AuthMS, &item.DNSMS, &item.ConnectMS, &item.TLSMS,
 			&item.RequestSendMS, &item.UpstreamWaitMS, &item.ResponseHeaderMS,
 			&item.StreamWaitMS, &item.RetryCount, &reusedConnection, &item.ReasoningEffort, &item.ServiceTier,
-			&item.ErrorMessage); err != nil {
+			&item.RequestedModel, &item.RouteGroupID, &item.SelectedModelConfigID, &item.FailoverCount,
+			&item.DispatchReason, &item.FailoverReason, &item.CapacityWaitMS, &item.ErrorMessage); err != nil {
 			return RequestUsagePage{}, err
 		}
 		item.Success = success != 0
@@ -261,8 +274,8 @@ func requestUsageWhere(query RequestUsageQuery) (string, []interface{}) {
 	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		pattern := "%" + strings.ToLower(keyword) + "%"
-		conditions = append(conditions, `(LOWER(model_id) LIKE ? OR LOWER(provider) LIKE ? OR LOWER(endpoint) LIKE ? OR LOWER(request_path) LIKE ? OR LOWER(error_message) LIKE ?)`)
-		args = append(args, pattern, pattern, pattern, pattern, pattern)
+		conditions = append(conditions, `(LOWER(model_id) LIKE ? OR LOWER(provider) LIKE ? OR LOWER(endpoint) LIKE ? OR LOWER(request_path) LIKE ? OR LOWER(requested_model) LIKE ? OR LOWER(error_message) LIKE ?)`)
+		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern)
 	}
 	if provider := strings.TrimSpace(query.Provider); provider != "" {
 		conditions = append(conditions, "LOWER(provider) = ?")

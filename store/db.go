@@ -19,7 +19,7 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on", path)
+	dsn := fmt.Sprintf("%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
@@ -86,6 +86,18 @@ func (db *DB) migrate() error {
 		{"request_usage", "reused_connection", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "reasoning_effort", "TEXT NOT NULL DEFAULT ''"},
 		{"request_usage", "service_tier", "TEXT NOT NULL DEFAULT ''"},
+		{"request_usage", "requested_model", "TEXT NOT NULL DEFAULT ''"},
+		{"request_usage", "route_group_id", "TEXT NOT NULL DEFAULT ''"},
+		{"request_usage", "selected_model_config_id", "TEXT NOT NULL DEFAULT ''"},
+		{"request_usage", "failover_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "dispatch_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"request_usage", "failover_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"request_usage", "capacity_wait_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"model_groups", "first_byte_timeout_ms", "INTEGER NOT NULL DEFAULT 10000"},
+		{"model_groups", "max_attempts", "INTEGER NOT NULL DEFAULT 4"},
+		{"model_groups", "fallback_group_id", "TEXT NOT NULL DEFAULT ''"},
+		{"model_groups", "description", "TEXT NOT NULL DEFAULT ''"},
+		{"model_group_members", "max_concurrency", "INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, col := range columns {
 		if err := db.addColumnIfNotExists(col.table, col.name, col.def); err != nil {
@@ -163,6 +175,32 @@ CREATE TABLE IF NOT EXISTS models (
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS model_groups (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    first_byte_timeout_ms INTEGER NOT NULL DEFAULT 10000,
+    max_attempts INTEGER NOT NULL DEFAULT 4,
+    fallback_group_id TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS model_group_members (
+    group_id    TEXT NOT NULL,
+    model_id    TEXT NOT NULL UNIQUE,
+    priority    INTEGER NOT NULL,
+    max_concurrency INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (group_id, model_id),
+    UNIQUE (group_id, priority),
+    FOREIGN KEY (group_id) REFERENCES model_groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_group_members_group_priority
+    ON model_group_members(group_id, priority);
+
 CREATE TABLE IF NOT EXISTS settings (
     key         TEXT PRIMARY KEY,
     value       TEXT NOT NULL,
@@ -216,7 +254,14 @@ CREATE TABLE IF NOT EXISTS request_usage (
 		retry_count        INTEGER NOT NULL DEFAULT 0,
 		reused_connection  INTEGER NOT NULL DEFAULT 0,
 	reasoning_effort   TEXT NOT NULL DEFAULT '',
-	service_tier       TEXT NOT NULL DEFAULT '',
+    service_tier       TEXT NOT NULL DEFAULT '',
+    requested_model    TEXT NOT NULL DEFAULT '',
+    route_group_id     TEXT NOT NULL DEFAULT '',
+    selected_model_config_id TEXT NOT NULL DEFAULT '',
+    failover_count     INTEGER NOT NULL DEFAULT 0,
+	dispatch_reason     TEXT NOT NULL DEFAULT '',
+	failover_reason     TEXT NOT NULL DEFAULT '',
+	capacity_wait_ms    INTEGER NOT NULL DEFAULT 0,
     error_message      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_usage_date_id ON request_usage(request_date, id DESC);

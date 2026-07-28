@@ -70,6 +70,7 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
 	r := router.New(db)
 	fwd := NewForwarder(stats, db)
 	apiSrv := api.New(db, r, stats)
+	apiSrv.SetModelHealthProvider(fwd)
 
 	p := goproxy.NewProxyHttpServer()
 	p.Verbose = cfg.Proxy.Verbose
