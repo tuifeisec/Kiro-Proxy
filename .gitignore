@@ -1,73 +1,143 @@
-# IDE and local agent state
+# IDE, editor, and local agent state
 .kiro/
+.codex/
+.claude/
+.cursor/
+.continue/
 .vscode/
 .idea/
+.vs/
 .codegraph/*
 !.codegraph/.gitignore
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.swp
+*.swo
 
-# Go build and test output
+# Local secrets, certificates, and machine-specific configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+/config.yaml
+/config.yml
+/config.local.*
+*.local.json
+*.local.yaml
+*.local.yml
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+credentials*.json
+secrets*.json
+*.secrets.json
+certs/
+
+# License server runtime data
+go/data/
+
+# Runtime databases, logs, captures, and process state
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+*.log.*
+log/
+logs/
+*.pid
+*.sock
+jilu/
+captures/
+
+# Go and native build output
 *.exe
 *.exe~
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
 *.syso
 *.test
 *.out
-coverage.out
+*.prof
+*.coverprofile
+coverage*.out
 .gocache/
+/bin/
+/release/
 
-# Keep Windows resource source files; ignore generated build output.
+# Installers and packaged applications
+*.msi
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.app/
+
+# Keep Windows resource source files; ignore generated build output
 build/*
 !build/windows/
 build/windows/*
 !build/windows/kiro-proxy.rc
 !build/windows/kiro-proxy.ico
 
-# Runtime data
-*.db
-*.db-wal
-*.db-shm
-*.sqlite
-*.sqlite3
-*.log
-log/
-
-# Local secrets and configuration
-config.yaml
-.env
-.env.*
-!.env.example
-certs/
-
-# Frontend dependencies and generated assets
-frontend/node_modules/
+# Frontend dependencies, caches, and generated assets
+node_modules/
 frontend/dist/
-frontend-inspector/node_modules/
 frontend-inspector/dist/
-go/web/admin/node_modules/
-go/web/admin/dist/
-.vben-template/node_modules/
+# go/web/admin/dist is intentionally tracked for go:embed.
+.vite/
+.turbo/
+.cache/
+.npm/
+.pnpm-store/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
 
-# Generated documentation/cache directories
+# Python tooling caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Generated documentation and local reference checkouts
 doc/ai-proxy/
 doc/openai/
+xuexi/
+
+# Test artifacts and one-off local scripts
+test/screenshots/
+test/results/
+test/tmp/
+test_sse.ps1
+install-ca.ps1
 
 # Temporary and operating-system files
 *.tmp
 *.temp
 *.bak
+*.old
+*.orig
+*.rej
+*~
 Thumbs.db
 Desktop.ini
 .DS_Store
-
-# Local debug captures and scratch files
-*.prof
-*.coverprofile
-
-# Keep source/configuration JSON files trackable. Ignore only known captures.
-jilu/*.json
-
-# One-off local scripts
-test_sse.ps1
-install-ca.ps1
-
-# Cloned external study project (juhe-ai) — do not push to GitHub
-xuexi/
