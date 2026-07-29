@@ -35,8 +35,10 @@ const (
 )
 
 type localCompatRequest struct {
-	Model  string `json:"model"`
-	Stream *bool  `json:"stream"`
+	Model      string `json:"model"`
+	Stream     *bool  `json:"stream"`
+	ImageCount int    `json:"-"`
+	ImageBytes int    `json:"-"`
 }
 
 func (s *Server) handleLocalOpenAIChat(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +95,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		return
 	}
 	clientWantsStream := requestMeta.Stream != nil && *requestMeta.Stream
+	hasImage := requestMeta.ImageCount > 0
 	usageRecord := newRequestUsageRecorder(s.db, start, route.Model, r.URL.Path, string(api))
 	usageRecord.setRoute(route)
 	conversationID := localCompatConversationID(r, body, api)
@@ -106,6 +109,30 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	if route.Group != nil {
 		candidates = s.forwarder.latency.order(candidates, time.Now())
 		candidates = s.forwarder.upstream.order(candidates, time.Now())
+	}
+	var skippedImageCandidates []skippedImageCandidate
+	candidates, skippedImageCandidates = imageCompatibleCandidates(candidates, hasImage, s.forwarder.imageCaps, time.Now())
+	groupName := requestMeta.Model
+	groupID := ""
+	if route.Group != nil {
+		groupName = route.Group.Name
+		groupID = route.Group.ID
+	}
+	for _, skipped := range skippedImageCandidates {
+		s.logger.InfoWithMeta("dispatcher", fmt.Sprintf("本地兼容接口跳过不支持图片的候选: group=%s model=%s", groupName, statsModelID(skipped.model)), LogMeta{
+			Model: statsModelID(skipped.model),
+			Metadata: map[string]interface{}{
+				"group_id":          groupID,
+				"has_image":         true,
+				"image_count":       requestMeta.ImageCount,
+				"image_bytes":       requestMeta.ImageBytes,
+				"capability_source": skipped.source,
+			},
+		})
+	}
+	if hasImage && len(candidates) == 0 {
+		writeLocalCompatError(w, http.StatusBadRequest, "当前路由没有支持图片输入的可用模型")
+		return
 	}
 	grouped := route.Group != nil
 	attempted := 0
@@ -199,11 +226,13 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		s.logger.InfoBytes("local-compat", fmt.Sprintf("本地兼容接口转发: api=%s model=%s → %s", api, statsModelID(candidate), candidatePrepared.upstreamURL), candidatePrepared.upstreamBody)
 		if grouped {
 			configuredFirstByteTimeout := time.Duration(candidateGroup.FirstByteTimeoutMS) * time.Millisecond
-			firstByteTimeout := observedFirstByteTimeout(
+			firstByteTimeout := imageAwareFirstByteTimeout(
 				configuredFirstByteTimeout,
 				deadline,
 				time.Now(),
 				s.forwarder.latency.isDegraded(candidate.ID, time.Now()),
+				hasImage,
+				len(candidates),
 			)
 			var firstByteDuration time.Duration
 			resp, firstByteDuration, err = requestWithFirstByteTimeout(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
@@ -258,16 +287,35 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		}
 		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
 
-		if grouped && shouldFailoverModelStatus(resp.StatusCode) {
-			detail := preserveResponseBody(resp)
-			failureClass := modelFailureForStatus(resp.StatusCode)
-			retryAfter := time.Duration(0)
-			if failureClass == modelFailureRateLimit {
-				retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+		detail := ""
+		capabilityMismatch := false
+		if grouped && resp.StatusCode == http.StatusBadRequest {
+			detail = preserveResponseBody(resp)
+			capabilityMismatch = hasImage && isModelCapabilityMismatch(resp.StatusCode, detail)
+		}
+		if grouped && (shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch) {
+			if detail == "" {
+				detail = preserveResponseBody(resp)
 			}
-			s.forwarder.health.failure(candidate, failureClass, retryAfter, time.Now())
+			failureClass := modelFailureForStatus(resp.StatusCode)
+			if capabilityMismatch {
+				failureClass = modelFailureCapability
+				s.forwarder.imageCaps.observe(candidate, modelImageUnsupported, time.Now())
+				s.forwarder.health.neutral(candidate)
+				s.forwarder.upstream.neutral(candidate, time.Now())
+			} else {
+				retryAfter := time.Duration(0)
+				if failureClass == modelFailureRateLimit {
+					retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+				}
+				s.forwarder.health.failure(candidate, failureClass, retryAfter, time.Now())
+			}
 			s.forwarder.affinity.clear(route.Group.ID, conversationID, candidate.ID)
-			markAvoidanceScopes(s.forwarder.avoidance, scopes, candidate.ID, time.Now())
+			if capabilityMismatch {
+				markConversationAvoidance(s.forwarder.avoidance, route.Group.ID, conversationID, candidate.ID, time.Now())
+			} else {
+				markAvoidanceScopes(s.forwarder.avoidance, scopes, candidate.ID, time.Now())
+			}
 			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
 			if lastResp != nil {
 				lastResp.Body.Close()
@@ -275,7 +323,11 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			lastResp = resp
 			lastPrepared = candidatePrepared
 			lastModel = candidate
-			usageRecord.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+			if capabilityMismatch {
+				usageRecord.setFailoverReason("capability_mismatch")
+			} else {
+				usageRecord.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+			}
 			s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容候选切换: group=%s candidate=%d model=%s status=%d detail=%s", route.Group.Name, index, statsModelID(candidate), resp.StatusCode, detail))
 			resp = nil
 			continue
@@ -387,6 +439,9 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			s.forwarder.health.neutral(m)
 			s.forwarder.upstream.neutral(m, now)
 		case writeErr == nil:
+			if hasImage {
+				s.forwarder.imageCaps.observe(m, modelImageSupported, now)
+			}
 			s.forwarder.upstream.recordSuccess(m, now)
 			s.forwarder.health.success(m)
 			s.forwarder.affinity.set(route.Group.ID, conversationID, m.ID, now)
@@ -599,7 +654,61 @@ func parseLocalCompatRequest(body []byte) (localCompatRequest, error) {
 	if req.Model == "" {
 		return req, fmt.Errorf("model is required")
 	}
+	req.ImageCount, req.ImageBytes = localCompatImageStats(body)
 	return req, nil
+}
+
+func localCompatImageStats(body []byte) (int, int) {
+	var payload interface{}
+	if json.Unmarshal(body, &payload) != nil {
+		return 0, 0
+	}
+	count := 0
+	bytes := 0
+	var visit func(interface{})
+	visit = func(value interface{}) {
+		switch typed := value.(type) {
+		case []interface{}:
+			for _, item := range typed {
+				visit(item)
+			}
+		case map[string]interface{}:
+			blockType, _ := typed["type"].(string)
+			switch strings.ToLower(strings.TrimSpace(blockType)) {
+			case "image_url", "input_image":
+				count++
+				bytes += localCompatImageValueBytes(typed["image_url"])
+			case "image":
+				if source, ok := typed["source"].(map[string]interface{}); ok {
+					count++
+					bytes += localCompatImageValueBytes(source["data"])
+				}
+			}
+			for _, item := range typed {
+				visit(item)
+			}
+		}
+	}
+	visit(payload)
+	return count, bytes
+}
+
+func localCompatImageValueBytes(value interface{}) int {
+	switch typed := value.(type) {
+	case string:
+		if marker := strings.Index(typed, ";base64,"); marker >= 0 {
+			return decodedBase64Length(typed[marker+8:])
+		}
+		lower := strings.ToLower(strings.TrimSpace(typed))
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+			return 0
+		}
+		return decodedBase64Length(typed)
+	case map[string]interface{}:
+		return localCompatImageValueBytes(typed["url"])
+	default:
+		return 0
+	}
 }
 
 func validateLocalCompatRoute(api localCompatAPI, m *store.Model) error {

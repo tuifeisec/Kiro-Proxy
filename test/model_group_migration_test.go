@@ -68,6 +68,45 @@ func TestModelGroupMigrationPreservesLegacyData(t *testing.T) {
 	}
 }
 
+func TestModelImageInputModePersistsAndDefaultsToAuto(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "model-image-capability.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	auto := &store.Model{
+		Name: "Auto", ModelID: "auto", Provider: "openai", BaseURL: "https://example.test",
+		APIKey: "test", Endpoint: "/v1/responses", Enabled: true,
+	}
+	if err := db.CreateModel(auto); err != nil {
+		t.Fatal(err)
+	}
+	loadedAuto, err := db.GetModel(auto.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loadedAuto.ImageInputMode != store.ImageInputAuto {
+		t.Fatalf("empty image mode should normalize to auto, got %q", loadedAuto.ImageInputMode)
+	}
+
+	loadedAuto.ImageInputMode = store.ImageInputUnsupported
+	if err := db.UpdateModel(loadedAuto); err != nil {
+		t.Fatal(err)
+	}
+	loadedUnsupported, err := db.GetModel(auto.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loadedUnsupported.ImageInputMode != store.ImageInputUnsupported {
+		t.Fatalf("image mode was not persisted: %q", loadedUnsupported.ImageInputMode)
+	}
+	if !sqliteColumnExists(t, dbPath, "models", "image_input_mode") {
+		t.Fatal("models migration did not add image_input_mode")
+	}
+}
+
 func sqliteColumnExists(t *testing.T, dbPath, table, column string) bool {
 	t.Helper()
 	conn, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")

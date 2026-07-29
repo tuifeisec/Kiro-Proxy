@@ -42,6 +42,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		if m.Provider == "" {
 			m.Provider = "openai"
 		}
+		imageInputMode, err := store.NormalizeImageInputMode(m.ImageInputMode)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		m.ImageInputMode = imageInputMode
 		if m.Provider == "codex" {
 			codex.NormalizeModel(&m)
 			if strings.TrimSpace(m.Name) == "" {
@@ -112,6 +118,12 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.ID = id
+		imageInputMode, err := store.NormalizeImageInputMode(m.ImageInputMode)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		m.ImageInputMode = imageInputMode
 		// 校验 name 不可重复（排除自身）
 		if m.Name != "" {
 			if dup, _ := s.db.FindModelByName(m.Name); dup != nil && dup.ID != id {

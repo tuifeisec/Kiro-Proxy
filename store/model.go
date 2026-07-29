@@ -38,6 +38,7 @@ type Model struct {
 	ContextWindow        int     `json:"context_window"`      // 上下文窗口，0=默认
 	MaxTokens            int     `json:"max_tokens"`          // 最大输出 Token，0=默认
 	ReasoningEffort      string  `json:"reasoning_effort"`    // 推理强度：空/low/medium/high
+	ImageInputMode       string  `json:"image_input_mode"`    // 图片输入能力：auto/supported/unsupported
 	RateMultiplier       float64 `json:"rate_multiplier"`     // 兼容旧字段：倍率（用于 Kiro credit 计算），默认 1.0
 	InputPrice           float64 `json:"input_price"`         // 普通输入价格（每百万 token）
 	OutputPrice          float64 `json:"output_price"`        // 普通输出价格（每百万 token）
@@ -60,7 +61,7 @@ type Model struct {
 func (db *DB) GetModels() ([]Model, error) {
 	rows, err := db.conn.Query(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
@@ -77,7 +78,7 @@ func (db *DB) GetModels() ([]Model, error) {
 		var enabled, enableCont, disableAuto int
 		if err := rows.Scan(&m.ID, &m.Name, &m.ModelID,
 			&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-			&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
+			&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
 			&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 			&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 			&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt); err != nil {
@@ -96,14 +97,14 @@ func (db *DB) GetModel(id string) (*Model, error) {
 	var enabled, enableCont, disableAuto int
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE id = ?
 	`, id).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
+		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
@@ -122,14 +123,14 @@ func (db *DB) FindByModelID(modelID string) (*Model, error) {
 	var enabled, enableCont, disableAuto int
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE model_id = ? AND enabled = 1 LIMIT 1
 	`, modelID).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
+		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
@@ -148,14 +149,14 @@ func (db *DB) FindModelByName(name string) (*Model, error) {
 	var enabled, enableCont, disableAuto int
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE name = ? LIMIT 1
 	`, name).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort,
+		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
@@ -181,6 +182,11 @@ func (db *DB) CreateModel(m *Model) error {
 	m.Endpoint = strings.TrimSpace(m.Endpoint)
 	m.ProxyURL = strings.TrimSpace(m.ProxyURL)
 	m.ServiceTier = normalizeServiceTier(m.ServiceTier)
+	imageInputMode, err := NormalizeImageInputMode(m.ImageInputMode)
+	if err != nil {
+		return err
+	}
+	m.ImageInputMode = imageInputMode
 	normalizeModelPrices(m)
 	enabled := 0
 	if m.Enabled {
@@ -190,15 +196,15 @@ func (db *DB) CreateModel(m *Model) error {
 	if m.EnableContinuation {
 		enableCont = 1
 	}
-	_, err := db.conn.Exec(`
+	_, err = db.conn.Exec(`
 		INSERT INTO models (id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		  endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, rate_multiplier,
+		  endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode, rate_multiplier,
 		  input_price, output_price, cache_input_price, cache_output_price,
 		  enable_continuation, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		  service_tier, enabled, sort_order, note, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.ID, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
-		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
+		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ImageInputMode,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
 		m.ServiceTier, enabled, m.SortOrder, m.Note, m.CreatedAt, m.UpdatedAt)
@@ -221,16 +227,21 @@ func (db *DB) UpdateModel(m *Model) error {
 	m.Endpoint = strings.TrimSpace(m.Endpoint)
 	m.ProxyURL = strings.TrimSpace(m.ProxyURL)
 	m.ServiceTier = normalizeServiceTier(m.ServiceTier)
+	imageInputMode, err := NormalizeImageInputMode(m.ImageInputMode)
+	if err != nil {
+		return err
+	}
+	m.ImageInputMode = imageInputMode
 	normalizeModelPrices(m)
 	res, err := db.conn.Exec(`
 		UPDATE models SET name=?, model_id=?, provider=?, base_url=?, api_key=?, refresh_token=?, proxy_url=?,
-		  endpoint=?, disable_auto_suffix=?, context_window=?, max_tokens=?, reasoning_effort=?,
+		  endpoint=?, disable_auto_suffix=?, context_window=?, max_tokens=?, reasoning_effort=?, image_input_mode=?,
 		  rate_multiplier=?, input_price=?, output_price=?, cache_input_price=?, cache_output_price=?,
 		  enable_continuation=?, codex_email=?, codex_plan_type=?, codex_account_id=?, access_token_expires_at=?, codex_usage_json=?,
 		  service_tier=?, enabled=?, sort_order=?, note=?, updated_at=?
 		WHERE id=?
 	`, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
-		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort,
+		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ImageInputMode,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
 		m.ServiceTier, enabled, m.SortOrder, m.Note, m.UpdatedAt, m.ID)
@@ -262,6 +273,25 @@ func normalizeServiceTier(serviceTier string) string {
 		return "fast"
 	}
 	return ""
+}
+
+const (
+	ImageInputAuto        = "auto"
+	ImageInputSupported   = "supported"
+	ImageInputUnsupported = "unsupported"
+)
+
+func NormalizeImageInputMode(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ImageInputAuto, nil
+	}
+	switch value {
+	case ImageInputAuto, ImageInputSupported, ImageInputUnsupported:
+		return value, nil
+	default:
+		return "", fmt.Errorf("unsupported image input mode %q", value)
+	}
 }
 
 func normalizeModelPrices(m *Model) {

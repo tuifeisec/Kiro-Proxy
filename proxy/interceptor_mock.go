@@ -4,6 +4,7 @@ import (
 	"io"
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
+	"kiro-proxy/store"
 	"math/rand"
 	"net/http"
 	"time"
@@ -46,6 +47,14 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+func supportedInputTypesForModel(model store.Model) []string {
+	mode, err := store.NormalizeImageInputMode(model.ImageInputMode)
+	if err == nil && mode == store.ImageInputUnsupported {
+		return []string{"TEXT"}
+	}
+	return []string{"TEXT", "IMAGE"}
+}
+
 // buildModelsResponse 构造 Kiro 模型列表响应（拦截 /ListAvailableModels）
 // 严格对齐 AWS 原生响应格式，IDE 依赖这些字段展示模型下拉
 //
@@ -80,7 +89,7 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 			"supportsPromptCaching":             true,
 		}
 
-		supportedInputTypes := []string{"TEXT", "IMAGE"}
+		supportedInputTypes := supportedInputTypesForModel(m)
 
 		rateMultiplier := m.RateMultiplier
 		if rateMultiplier <= 0 {

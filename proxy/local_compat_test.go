@@ -86,6 +86,20 @@ func TestLocalCompatConversationIDPrefersExplicitIdentifiers(t *testing.T) {
 	}
 }
 
+func TestLocalCompatImageStatsRecognizesProviderFormats(t *testing.T) {
+	body := []byte(`{
+		"messages":[
+			{"content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,YWJj"}}]},
+			{"content":[{"type":"image","source":{"type":"base64","data":"YQ=="}}]}
+		],
+		"input":[{"type":"message","content":[{"type":"input_image","image_url":"https://example.test/image.png"}]}]
+	}`)
+	count, bytes := localCompatImageStats(body)
+	if count != 3 || bytes != 4 {
+		t.Fatalf("image stats = (%d, %d), want (3, 4)", count, bytes)
+	}
+}
+
 func TestLocalCompatConversationIDUsesStableChatPrefix(t *testing.T) {
 	first := []byte(`{
 		"model":"group",

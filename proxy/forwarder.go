@@ -51,6 +51,7 @@ type Forwarder struct {
 	latency     *modelLatencyTracker
 	upstream    *upstreamBucketHealth
 	avoidance   *modelAvoidanceStore
+	imageCaps   *modelImageCapabilityStore
 	prefixAudit *prefixAuditTracker
 }
 
@@ -71,6 +72,7 @@ func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
 		latency:     newModelLatencyTracker(),
 		upstream:    newUpstreamBucketHealth(),
 		avoidance:   newModelAvoidanceStore(),
+		imageCaps:   newModelImageCapabilityStore(),
 		prefixAudit: newPrefixAuditTracker(),
 	}
 }
@@ -200,6 +202,24 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 	}
 	if route.Group == nil {
 		model := route.Model
+		imageCount, imageBytes := 0, 0
+		if pre != nil {
+			imageCount, imageBytes = conversationImageStats(pre.Conv)
+		}
+		hasImage := imageCount > 0
+		imageCapability, capabilitySource := f.imageCaps.effective(model, time.Now())
+		if hasImage && imageCapability == modelImageUnsupported {
+			logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过不支持图片的模型: model=%s", statsModelID(model)), LogMeta{
+				Model: statsModelID(model),
+				Metadata: map[string]interface{}{
+					"has_image":         true,
+					"image_count":       imageCount,
+					"image_bytes":       imageBytes,
+					"capability_source": capabilitySource,
+				},
+			})
+			return nil, fmt.Errorf("模型 %s 不支持图片输入", statsModelID(model))
+		}
 		lease, acquired := f.load.acquire(model.ID, route.CandidateLimits[model.ID])
 		if !acquired {
 			return nil, fmt.Errorf("模型 %s 已达到并发上限", statsModelID(model))
@@ -209,6 +229,14 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 		if err != nil {
 			lease.release()
 			return nil, err
+		}
+		if hasImage && resp.StatusCode == http.StatusBadRequest {
+			bodyDetail := preserveResponseBody(resp)
+			if isModelCapabilityMismatch(resp.StatusCode, bodyDetail) {
+				f.imageCaps.observe(model, modelImageUnsupported, time.Now())
+			}
+		} else if hasImage && resp.StatusCode < http.StatusBadRequest {
+			f.imageCaps.observe(model, modelImageSupported, time.Now())
 		}
 		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
 		route.Model = model
@@ -224,15 +252,35 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 
 func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
 	now := time.Now()
+	imageCount, imageBytes := 0, 0
 	conversationID := ""
 	if pre != nil && pre.Conv != nil {
 		conversationID = pre.Conv.ConversationID
+		imageCount, imageBytes = conversationImageStats(pre.Conv)
 	}
+	hasImage := imageCount > 0
 	affinityModelID := f.affinity.get(route.Group.ID, conversationID, now)
 	scopes := dispatchAvoidanceScopes(route.Group.ID, conversationID, requestClientIP(req))
 	candidates := orderedRouteCandidates(route, affinityModelID, f.avoidance, scopes, now)
 	candidates = f.latency.order(candidates, now)
 	candidates = f.upstream.order(candidates, now)
+	var skippedImageCandidates []skippedImageCandidate
+	candidates, skippedImageCandidates = imageCompatibleCandidates(candidates, hasImage, f.imageCaps, now)
+	for _, skipped := range skippedImageCandidates {
+		logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过不支持图片的候选: group=%s model=%s", route.Group.Name, statsModelID(skipped.model)), LogMeta{
+			Model: statsModelID(skipped.model),
+			Metadata: map[string]interface{}{
+				"group_id":          route.Group.ID,
+				"has_image":         true,
+				"image_count":       imageCount,
+				"image_bytes":       imageBytes,
+				"capability_source": skipped.source,
+			},
+		})
+	}
+	if hasImage && len(candidates) == 0 {
+		return nil, fmt.Errorf("模型组 %s 没有支持图片输入的可用候选", route.Group.Name)
+	}
 	deadline := now.Add(retryBudget)
 	attempted := 0
 	attemptsByGroup := make(map[string]int)
@@ -314,23 +362,30 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			pre.usage.setFailoverCount(attempted - 1)
 			pre.usage.setDispatchReason(dispatchSelectionReason(route, model, affinityModelID, capacityWaited, f.latency.isDegraded(affinityModelID, time.Now())))
 		}
+		_, capabilitySource := f.imageCaps.effective(model, time.Now())
 		logger.InfoWithMeta("dispatcher", fmt.Sprintf("尝试分组候选: group=%s candidate=%d model=%s", route.Group.Name, index, statsModelID(model)), LogMeta{
 			Model: statsModelID(model),
 			Metadata: map[string]interface{}{
-				"group_id":  route.Group.ID,
-				"group":     route.Group.Name,
-				"candidate": index,
+				"group_id":          route.Group.ID,
+				"group":             route.Group.Name,
+				"candidate":         index,
+				"has_image":         hasImage,
+				"image_count":       imageCount,
+				"image_bytes":       imageBytes,
+				"capability_source": capabilitySource,
 			},
 		})
 
 		var contResult *converter.ResponsesContinuationResult
 		var attemptResp *http.Response
 		configuredFirstByteTimeout := time.Duration(candidateGroup.FirstByteTimeoutMS) * time.Millisecond
-		firstByteTimeout := observedFirstByteTimeout(
+		firstByteTimeout := imageAwareFirstByteTimeout(
 			configuredFirstByteTimeout,
 			deadline,
 			time.Now(),
 			f.latency.isDegraded(model.ID, time.Now()),
+			hasImage,
+			len(candidates),
 		)
 		resp, firstByteDuration, err := requestWithFirstByteTimeout(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
 			var forwardErr error
@@ -390,16 +445,35 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 		if firstByteDuration > 0 {
 			f.latency.record(model.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
 		}
-		if shouldFailoverModelStatus(resp.StatusCode) {
-			bodyDetail := preserveResponseBody(resp)
-			failureClass := modelFailureForStatus(resp.StatusCode)
-			retryAfter := time.Duration(0)
-			if failureClass == modelFailureRateLimit {
-				retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+		bodyDetail := ""
+		capabilityMismatch := false
+		if resp.StatusCode == http.StatusBadRequest {
+			bodyDetail = preserveResponseBody(resp)
+			capabilityMismatch = hasImage && isModelCapabilityMismatch(resp.StatusCode, bodyDetail)
+		}
+		if shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch {
+			if bodyDetail == "" {
+				bodyDetail = preserveResponseBody(resp)
 			}
-			f.health.failure(model, failureClass, retryAfter, time.Now())
+			failureClass := modelFailureForStatus(resp.StatusCode)
+			if capabilityMismatch {
+				failureClass = modelFailureCapability
+				f.imageCaps.observe(model, modelImageUnsupported, time.Now())
+				f.health.neutral(model)
+				f.upstream.neutral(model, time.Now())
+			} else {
+				retryAfter := time.Duration(0)
+				if failureClass == modelFailureRateLimit {
+					retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+				}
+				f.health.failure(model, failureClass, retryAfter, time.Now())
+			}
 			f.affinity.clear(route.Group.ID, conversationID, model.ID)
-			markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+			if capabilityMismatch {
+				markConversationAvoidance(f.avoidance, route.Group.ID, conversationID, model.ID, time.Now())
+			} else {
+				markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+			}
 			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
 			if lastResp != nil {
 				lastResp.Body.Close()
@@ -408,7 +482,11 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			lastContResult = contResult
 			lastModel = model
 			if pre != nil && pre.usage != nil {
-				pre.usage.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+				if capabilityMismatch {
+					pre.usage.setFailoverReason("capability_mismatch")
+				} else {
+					pre.usage.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+				}
 			}
 			logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选返回可切换错误: group=%s model=%s status=%d", route.Group.Name, statsModelID(model), resp.StatusCode), LogMeta{
 				Model:  statsModelID(model),
@@ -430,6 +508,9 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 		}
 		if resp.StatusCode < http.StatusBadRequest {
 			if pre == nil || pre.Protocol != "kiro" {
+				if hasImage {
+					f.imageCaps.observe(model, modelImageSupported, time.Now())
+				}
 				f.upstream.recordSuccess(model, time.Now())
 				f.health.success(model)
 				f.affinity.set(route.Group.ID, conversationID, model.ID, time.Now())
@@ -459,6 +540,9 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			failureClass := modelFailureTransport
 			switch outcome {
 			case converter.StreamOutcomeCompleted:
+				if hasImage {
+					f.imageCaps.observe(model, modelImageSupported, now)
+				}
 				f.upstream.recordSuccess(model, now)
 				f.health.success(model)
 				f.affinity.set(route.Group.ID, conversationID, model.ID, now)
@@ -539,6 +623,13 @@ func markAvoidanceScopes(store *modelAvoidanceStore, scopes []string, modelID st
 	for _, scope := range scopes {
 		store.mark(scope, modelID, now)
 	}
+}
+
+func markConversationAvoidance(store *modelAvoidanceStore, groupID, conversationID, modelID string, now time.Time) {
+	if store == nil || groupID == "" || conversationID == "" {
+		return
+	}
+	store.mark("turn:"+groupID+":"+conversationID, modelID, now)
 }
 
 func clearAvoidanceScopes(store *modelAvoidanceStore, scopes []string, modelID string) {

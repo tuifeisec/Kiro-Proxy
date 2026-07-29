@@ -5,6 +5,8 @@ import IconEye from '../icons/IconEye.vue'
 import IconEyeOff from '../icons/IconEyeOff.vue'
 import IconClose from '../icons/IconClose.vue'
 import IconRefresh from '../icons/IconRefresh.vue'
+import IconSearch from '../icons/IconSearch.vue'
+import IconCheck from '../icons/IconCheck.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 
 const props = defineProps({
@@ -29,6 +31,7 @@ const defaultForm = () => ({
   context_window: 0,
   max_tokens: 0,
   reasoning_effort: '',
+  image_input_mode: 'auto',
   service_tier: '',
   rate_multiplier: 1.0,
   input_price: 5,
@@ -53,6 +56,7 @@ const upstreamModelsError = ref('')
 const upstreamModelsDialogVisible = ref(false)
 const modalRef = ref(null)
 const upstreamModelsDialogRef = ref(null)
+const focusedUpstreamIndex = ref(0)
 const initialSnapshot = ref('')
 const discardConfirmVisible = ref(false)
 let lastFocused = null
@@ -117,6 +121,27 @@ function onKeydown(event) {
     requestCancel()
     return
   }
+  if (upstreamModelsDialogVisible.value) {
+    const list = filteredUpstreamModels.value
+    if (!list.length) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      focusedUpstreamIndex.value = (focusedUpstreamIndex.value + 1) % list.length
+      scrollUpstreamIntoView(focusedUpstreamIndex.value)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      focusedUpstreamIndex.value = (focusedUpstreamIndex.value - 1 + list.length) % list.length
+      scrollUpstreamIntoView(focusedUpstreamIndex.value)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      selectUpstreamModel(list[focusedUpstreamIndex.value])
+      return
+    }
+  }
   trapFocus(event, upstreamModelsDialogVisible.value ? upstreamModelsDialogRef.value : modalRef.value)
 }
 
@@ -156,6 +181,10 @@ watch(
     if (!syncingUpstreamModels.value) resetUpstreamModels()
   }
 )
+
+watch(upstreamModelSearch, () => {
+  focusedUpstreamIndex.value = 0
+})
 
 const providerOptions = [
   { value: 'openai', label: 'OpenAI', icon: '◎' },
@@ -222,6 +251,19 @@ const filteredUpstreamModels = computed(() => {
   return upstreamModels.value.filter((model) => model.toLowerCase().includes(keyword))
 })
 
+function scrollUpstreamIntoView(index) {
+  nextTick(() => {
+    const container = upstreamModelsDialogRef.value?.querySelector('[data-upstream-list]')
+    if (!container) return
+    const items = container.querySelectorAll('[data-upstream-item]')
+    items[index]?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function focusUpstreamItem(index) {
+  focusedUpstreamIndex.value = index
+}
+
 const reasoningOptions = computed(() => {
   const options = [
     { value: '', label: '自动' },
@@ -234,6 +276,12 @@ const reasoningOptions = computed(() => {
   }
   return options
 })
+
+const imageInputOptions = [
+  { value: 'auto', label: '自动' },
+  { value: 'supported', label: '支持' },
+  { value: 'unsupported', label: '不支持' }
+]
 
 const codexServiceTierOptions = [
   { value: '', label: '标准' },
@@ -307,6 +355,7 @@ async function handleSyncUpstreamModels() {
     }
     upstreamModels.value = Array.isArray(data?.models) ? data.models : []
     upstreamModelSearch.value = ''
+    focusedUpstreamIndex.value = 0
     if (upstreamModels.value.length === 0) {
       upstreamModelsError.value = '上游未返回可用模型'
     } else {
@@ -336,6 +385,7 @@ function selectUpstreamModel(modelID) {
 function closeUpstreamModelsDialog() {
   upstreamModelsDialogVisible.value = false
   upstreamModelSearch.value = ''
+  focusedUpstreamIndex.value = 0
 }
 
 async function handleStartOAuth() {
@@ -556,10 +606,10 @@ async function handleExchangeOAuth() {
             </div>
           </section>
 
-          <section class="mt-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
-            <h3 class="mb-2 text-sm font-semibold text-[#111827]">模型能力参数</h3>
-            <div class="grid grid-cols-1 items-start gap-4 sm:grid-cols-[1.6fr_.72fr_.72fr_1.6fr]">
-              <div class="sm:border-r sm:border-[#e5e7eb] sm:pr-4">
+          <section class="mt-2.5 rounded-lg border border-[#e5e7eb] bg-white p-2.5">
+            <h3 class="mb-1 text-sm font-semibold text-[#111827]">模型能力参数</h3>
+            <div class="grid grid-cols-1 items-start gap-2.5 sm:grid-cols-[minmax(180px,1.45fr)_minmax(104px,.78fr)_minmax(104px,.78fr)]">
+              <div>
                 <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
                   推理强度
                   <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
@@ -569,37 +619,15 @@ async function handleExchangeOAuth() {
                     </span>
                   </span>
                 </label>
-                <div class="grid h-9 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]" :class="reasoningOptions.length === 5 ? 'grid-cols-5' : 'grid-cols-4'">
+                <div class="grid h-8 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]" :class="reasoningOptions.length === 5 ? 'grid-cols-5' : 'grid-cols-4'">
                   <button
                     v-for="opt in reasoningOptions"
                     :key="opt.value"
                     type="button"
-                    class="border-r border-[#e5e7eb] text-xs last:border-r-0"
+                    class="border-r border-[#e5e7eb] text-xs leading-none last:border-r-0"
                     :class="form.reasoning_effort === opt.value ? 'bg-[#eff6ff] text-[#2563eb] ring-1 ring-inset ring-[#93c5fd]' : 'text-[#374151] hover:bg-white'"
                     @click="form.reasoning_effort = opt.value"
                   >{{ opt.label }}</button>
-                </div>
-
-                <div v-if="form.provider === 'codex'" class="mt-3">
-                  <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
-                    Codex 速度模式
-                    <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
-                      i
-                      <span class="pointer-events-none absolute bottom-5 left-0 z-20 hidden w-52 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
-                        快速模式会向 Codex 上游发送 service_tier=priority；标准模式不发送该字段
-                      </span>
-                    </span>
-                  </label>
-                  <div class="grid h-9 grid-cols-2 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]">
-                    <button
-                      v-for="opt in codexServiceTierOptions"
-                      :key="opt.value"
-                      type="button"
-                      class="border-r border-[#e5e7eb] text-xs last:border-r-0"
-                      :class="form.service_tier === opt.value ? 'bg-[#ecfdf5] text-[#059669] ring-1 ring-inset ring-[#86efac]' : 'text-[#374151] hover:bg-white'"
-                      @click="form.service_tier = opt.value"
-                    >{{ opt.label }}</button>
-                  </div>
                 </div>
               </div>
 
@@ -608,7 +636,7 @@ async function handleExchangeOAuth() {
                   上下文窗口
                   <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
                     i
-                    <span class="pointer-events-none absolute bottom-5 left-1/2 z-20 hidden w-52 -translate-x-1/2 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                    <span class="pointer-events-none absolute bottom-5 right-0 z-20 hidden w-44 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block sm:w-48">
                       模型可处理的最大上下文 Token 数，0 表示使用默认值
                     </span>
                   </span>
@@ -623,8 +651,9 @@ async function handleExchangeOAuth() {
                   最大输出 Token
                   <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
                     i
-                    <span class="pointer-events-none absolute bottom-5 left-1/2 z-20 hidden w-52 -translate-x-1/2 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
-                      单次响应允许的最大输出 Token 数，0 表示使用默认值
+                    <span class="pointer-events-none absolute bottom-5 right-0 z-20 hidden w-44 whitespace-normal rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                      <span class="block">单次响应允许的最大输出 Token 数，</span>
+                      <span class="block">0 表示使用默认值</span>
                     </span>
                   </span>
                 </label>
@@ -632,18 +661,72 @@ async function handleExchangeOAuth() {
                   class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-2.5 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
                   placeholder="4096" />
               </div>
+            </div>
 
-              <div class="flex items-start gap-2.5 pt-0.5 sm:border-l sm:border-[#e5e7eb] sm:pl-4">
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center justify-between gap-3">
-                    <div class="truncate text-xs font-medium text-[#111827]">启用 continuation / previous_response_id</div>
-                    <label class="relative inline-flex shrink-0 cursor-pointer items-center">
-                      <input type="checkbox" v-model="form.enable_continuation" class="peer sr-only" />
-                      <div class="h-5 w-9 rounded-full bg-[#e5e7eb] after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#2563eb] peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
-                    </label>
+            <div class="mt-2.5 grid grid-cols-1 items-start gap-2.5 border-t border-[#eef2f7] pt-2.5 sm:grid-cols-[minmax(180px,.88fr)_minmax(0,1.12fr)]">
+              <div class="grid grid-cols-1 gap-2.5" :class="form.provider === 'codex' ? 'sm:grid-cols-2' : ''">
+                <div>
+                  <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
+                    图片输入
+                    <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                      i
+                      <span class="pointer-events-none absolute bottom-5 left-0 z-20 hidden w-52 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                        自动会根据上游响应学习能力；明确设置后，图片请求会在调度前过滤不兼容模型
+                      </span>
+                    </span>
+                  </label>
+                  <div class="grid h-8 grid-cols-3 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]">
+                    <button
+                      v-for="opt in imageInputOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="border-r border-[#e5e7eb] text-xs leading-none last:border-r-0"
+                      :class="form.image_input_mode === opt.value ? 'bg-[#eff6ff] text-[#2563eb] ring-1 ring-inset ring-[#93c5fd]' : 'text-[#374151] hover:bg-white'"
+                      @click="form.image_input_mode = opt.value"
+                    >{{ opt.label }}</button>
                   </div>
-                  <p class="mt-1 text-[11px] leading-4 text-[#9ca3af]">仅直连 OpenAI 官方 API 时建议启用；<br />使用中转站时建议关闭</p>
                 </div>
+
+                <div v-if="form.provider === 'codex'">
+                  <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-[#111827]">
+                    Codex 速度
+                    <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                      i
+                      <span class="pointer-events-none absolute bottom-5 left-0 z-20 hidden w-52 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                        快速模式会向 Codex 上游发送 service_tier=priority；标准模式不发送该字段
+                      </span>
+                    </span>
+                  </label>
+                  <div class="grid h-8 grid-cols-2 overflow-hidden rounded-md border border-[#e5e7eb] bg-[#f9fafb]">
+                    <button
+                      v-for="opt in codexServiceTierOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="border-r border-[#e5e7eb] text-xs leading-none last:border-r-0"
+                      :class="form.service_tier === opt.value ? 'bg-[#ecfdf5] text-[#059669] ring-1 ring-inset ring-[#86efac]' : 'text-[#374151] hover:bg-white'"
+                      @click="form.service_tier = opt.value"
+                    >{{ opt.label }}</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex min-h-[44px] items-center justify-between gap-3 sm:border-l sm:border-[#eef2f7] sm:pl-3.5">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-1 text-xs font-medium text-[#111827]">
+                    响应续接
+                    <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                      i
+                      <span class="pointer-events-none absolute bottom-5 right-0 z-20 hidden w-56 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                        启用 continuation / previous_response_id，仅适用于直连 OpenAI 官方 API
+                      </span>
+                    </span>
+                  </div>
+                  <p class="mt-1 text-[11px] leading-4 text-[#9ca3af]">直连 OpenAI 官方 API 时启用，中转服务保持关闭</p>
+                </div>
+                <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                  <input type="checkbox" v-model="form.enable_continuation" class="peer sr-only" />
+                  <div class="h-5 w-9 rounded-full bg-[#e5e7eb] after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#2563eb] peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
+                </label>
               </div>
             </div>
           </section>
@@ -720,7 +803,9 @@ async function handleExchangeOAuth() {
           <div class="flex shrink-0 items-center justify-between border-b border-[#eef2f7] px-4 py-3">
             <div class="min-w-0">
               <h3 id="upstream-models-title" class="text-sm font-semibold text-[#111827]">选择上游模型</h3>
-              <p class="mt-0.5 text-[11px] text-[#9ca3af]">已拉取 {{ upstreamModels.length }} 个模型</p>
+              <p class="mt-0.5 text-[11px] text-[#9ca3af]">
+                共 {{ upstreamModels.length }} 个模型<span v-if="upstreamModelSearch.trim()">，匹配 {{ filteredUpstreamModels.length }} 个</span>
+              </p>
             </div>
             <button
               type="button"
@@ -734,29 +819,66 @@ async function handleExchangeOAuth() {
           </div>
 
           <div class="shrink-0 border-b border-[#eef2f7] px-4 py-3">
-            <input
-              v-model="upstreamModelSearch"
-              class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white px-3 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
-              placeholder="搜索上游模型"
-            />
+            <div class="relative">
+              <IconSearch class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9ca3af]" />
+              <input
+                v-model="upstreamModelSearch"
+                class="h-9 w-full rounded-md border border-[#e5e7eb] bg-white pl-9 pr-9 text-xs text-[#111827] focus:border-[#93c5fd] focus:outline-none focus:ring-2 focus:ring-[#dbeafe]"
+                placeholder="搜索上游模型..."
+              />
+              <button
+                v-if="upstreamModelSearch"
+                type="button"
+                class="absolute right-3 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center text-[#9ca3af] hover:text-[#374151]"
+                aria-label="清除搜索"
+                title="清除"
+                @click="upstreamModelSearch = ''"
+              >
+                <IconClose class="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
 
-          <div class="min-h-0 flex-1 overflow-y-auto py-1">
+          <div class="min-h-0 flex-1 overflow-y-auto py-1" data-upstream-list>
             <button
-              v-for="modelID in filteredUpstreamModels"
+              v-for="(modelID, index) in filteredUpstreamModels"
               :key="modelID"
               type="button"
-              class="flex min-h-10 w-full items-center justify-between gap-4 px-4 py-2 text-left text-xs hover:bg-[#f8fafc]"
-              :class="form.model_id === modelID ? 'bg-[#eff6ff] text-[#2563eb]' : 'text-[#374151]'"
+              data-upstream-item
+              class="flex min-h-10 w-full items-center justify-between gap-4 px-4 py-2 text-left transition-colors"
+              :class="form.model_id === modelID
+                ? 'bg-[#eff6ff] text-[#2563eb]'
+                : focusedUpstreamIndex === index
+                  ? 'bg-[#f8fafc] text-[#111827]'
+                  : 'text-[#374151] hover:bg-[#f8fafc]'"
               @click="selectUpstreamModel(modelID)"
+              @mouseenter="focusUpstreamItem(index)"
             >
-              <span class="min-w-0 break-all">{{ modelID }}</span>
-              <span class="shrink-0 text-[10px] font-medium">{{ form.model_id === modelID ? '当前模型' : '选择' }}</span>
+              <span class="min-w-0 break-all font-mono text-[12px]">{{ modelID }}</span>
+              <IconCheck v-if="form.model_id === modelID" class="h-4 w-4 shrink-0 text-[#2563eb]" />
             </button>
-            <div v-if="filteredUpstreamModels.length === 0" class="px-4 py-10 text-center text-xs text-[#9ca3af]">没有匹配的模型</div>
+            <div v-if="filteredUpstreamModels.length === 0" class="flex flex-col items-center justify-center px-4 py-12 text-center">
+              <IconSearch class="mb-2 h-7 w-7 text-[#d1d5db]" />
+              <p class="text-xs font-medium text-[#6b7280]">没有匹配的模型</p>
+              <p class="mt-1 text-[11px] text-[#9ca3af]">尝试更换搜索关键词</p>
+            </div>
           </div>
 
-          <div class="flex shrink-0 justify-end border-t border-[#eef2f7] px-4 py-3">
+          <div class="flex shrink-0 items-center justify-between border-t border-[#eef2f7] px-4 py-2.5">
+            <div class="flex items-center gap-3 text-[10px] text-[#9ca3af]">
+              <span class="flex items-center gap-1">
+                <kbd class="rounded border border-[#e5e7eb] bg-[#f9fafb] px-1 py-0.5 font-sans text-[10px] leading-none">↑↓</kbd>
+                导航
+              </span>
+              <span class="flex items-center gap-1">
+                <kbd class="rounded border border-[#e5e7eb] bg-[#f9fafb] px-1 py-0.5 font-sans text-[10px] leading-none">Enter</kbd>
+                选择
+              </span>
+              <span class="flex items-center gap-1">
+                <kbd class="rounded border border-[#e5e7eb] bg-[#f9fafb] px-1 py-0.5 font-sans text-[10px] leading-none">Esc</kbd>
+                关闭
+              </span>
+            </div>
             <button
               type="button"
               class="h-9 rounded-md border border-[#e5e7eb] bg-white px-5 text-xs text-[#374151] hover:bg-[#f9fafb]"

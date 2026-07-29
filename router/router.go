@@ -184,6 +184,7 @@ func (r *Router) EnabledModels() []store.Model {
 		virtual := *route.Model
 		virtual.ID = group.ID
 		virtual.Name = group.Name
+		virtual.ImageInputMode = groupImageInputMode(route.Candidates)
 		result = append(result, virtual)
 	}
 	for _, m := range r.models {
@@ -192,6 +193,29 @@ func (r *Router) EnabledModels() []store.Model {
 		}
 	}
 	return result
+}
+
+func groupImageInputMode(candidates []*store.Model) string {
+	hasAuto := false
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		mode, err := store.NormalizeImageInputMode(candidate.ImageInputMode)
+		if err != nil {
+			mode = store.ImageInputAuto
+		}
+		switch mode {
+		case store.ImageInputSupported:
+			return store.ImageInputSupported
+		case store.ImageInputAuto:
+			hasAuto = true
+		}
+	}
+	if hasAuto {
+		return store.ImageInputAuto
+	}
+	return store.ImageInputUnsupported
 }
 
 // ResolveByID 按内部配置 ID 精确解析单个模型，不展开所属分组。

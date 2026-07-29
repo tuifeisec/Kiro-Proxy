@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"kiro-proxy/converter"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +22,8 @@ const (
 	modelAffinityTTL       = 2 * time.Hour
 	modelAvoidanceTTL      = 2 * time.Minute
 	modelAvoidanceFailures = 2
+	imageCapabilityTTL     = 6 * time.Hour
+	singleImageTimeout     = 45 * time.Second
 )
 
 var errFirstByteTimeout = errors.New("upstream first byte timeout")
@@ -32,12 +35,142 @@ const (
 	modelFailureRateLimit  modelFailureClass = "rate_limit"
 	modelFailureUpstream   modelFailureClass = "upstream"
 	modelFailureTransport  modelFailureClass = "transport"
+	modelFailureCapability modelFailureClass = "capability"
 )
 
 type modelCircuitState struct {
 	consecutiveFailures int
 	openUntil           time.Time
 	halfOpenInFlight    bool
+}
+
+type modelImageCapabilityState string
+
+const (
+	modelImageUnknown     modelImageCapabilityState = "unknown"
+	modelImageSupported   modelImageCapabilityState = "supported"
+	modelImageUnsupported modelImageCapabilityState = "unsupported"
+)
+
+type modelImageCapabilityObservation struct {
+	state     modelImageCapabilityState
+	expiresAt time.Time
+}
+
+type modelImageCapabilityStore struct {
+	mu      sync.Mutex
+	entries map[string]modelImageCapabilityObservation
+}
+
+func newModelImageCapabilityStore() *modelImageCapabilityStore {
+	return &modelImageCapabilityStore{entries: make(map[string]modelImageCapabilityObservation)}
+}
+
+func (s *modelImageCapabilityStore) effective(model *store.Model, now time.Time) (modelImageCapabilityState, string) {
+	if model == nil {
+		return modelImageUnknown, "unknown"
+	}
+	mode, err := store.NormalizeImageInputMode(model.ImageInputMode)
+	if err != nil {
+		mode = store.ImageInputAuto
+	}
+	switch mode {
+	case store.ImageInputSupported:
+		return modelImageSupported, "config"
+	case store.ImageInputUnsupported:
+		return modelImageUnsupported, "config"
+	}
+	if s == nil {
+		return modelImageUnknown, "unknown"
+	}
+	key := modelHealthKey(model)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	observation, ok := s.entries[key]
+	if !ok {
+		return modelImageUnknown, "unknown"
+	}
+	if !now.Before(observation.expiresAt) {
+		delete(s.entries, key)
+		return modelImageUnknown, "unknown"
+	}
+	return observation.state, "observed"
+}
+
+func (s *modelImageCapabilityStore) observe(model *store.Model, state modelImageCapabilityState, now time.Time) {
+	if s == nil || model == nil || state == modelImageUnknown {
+		return
+	}
+	mode, err := store.NormalizeImageInputMode(model.ImageInputMode)
+	if err == nil && mode != store.ImageInputAuto {
+		return
+	}
+	s.mu.Lock()
+	s.entries[modelHealthKey(model)] = modelImageCapabilityObservation{state: state, expiresAt: now.Add(imageCapabilityTTL)}
+	s.mu.Unlock()
+}
+
+type skippedImageCandidate struct {
+	model  *store.Model
+	source string
+}
+
+func imageCompatibleCandidates(candidates []*store.Model, hasImage bool, capabilities *modelImageCapabilityStore, now time.Time) ([]*store.Model, []skippedImageCandidate) {
+	if !hasImage {
+		return candidates, nil
+	}
+	supported := make([]*store.Model, 0, len(candidates))
+	unknown := make([]*store.Model, 0, len(candidates))
+	skipped := make([]skippedImageCandidate, 0)
+	for _, candidate := range candidates {
+		state, source := capabilities.effective(candidate, now)
+		switch state {
+		case modelImageSupported:
+			supported = append(supported, candidate)
+		case modelImageUnsupported:
+			skipped = append(skipped, skippedImageCandidate{model: candidate, source: source})
+		default:
+			unknown = append(unknown, candidate)
+		}
+	}
+	return append(supported, unknown...), skipped
+}
+
+func conversationImageStats(conv *converter.ParsedConversation) (int, int) {
+	if conv == nil {
+		return 0, 0
+	}
+	count := 0
+	bytes := 0
+	visit := func(images []converter.KiroImage) {
+		for _, image := range images {
+			count++
+			bytes += decodedBase64Length(image.Source.Bytes)
+		}
+	}
+	visit(conv.CurrentImages)
+	for _, entry := range conv.History {
+		visit(entry.Images)
+	}
+	return count, bytes
+}
+
+func decodedBase64Length(value string) int {
+	value = strings.TrimSpace(value)
+	length := len(value)
+	if length == 0 {
+		return 0
+	}
+	decoded := length / 4 * 3
+	if strings.HasSuffix(value, "==") {
+		decoded -= 2
+	} else if strings.HasSuffix(value, "=") {
+		decoded--
+	}
+	if decoded < 0 {
+		return 0
+	}
+	return decoded
 }
 
 type modelHealthTracker struct {
@@ -632,6 +765,14 @@ func observedFirstByteTimeout(configured time.Duration, deadline, now time.Time,
 	return candidateFirstByteTimeout(observed, deadline, now)
 }
 
+func imageAwareFirstByteTimeout(configured time.Duration, deadline, now time.Time, degraded bool, hasImage bool, compatibleCandidates int) time.Duration {
+	timeout := observedFirstByteTimeout(configured, deadline, now, degraded)
+	if !hasImage || compatibleCandidates != 1 || timeout >= singleImageTimeout {
+		return timeout
+	}
+	return candidateFirstByteTimeout(singleImageTimeout, deadline, now)
+}
+
 func dispatchSelectionReason(route *router.Route, model *store.Model, affinityModelID string, capacityWait time.Duration, affinityDegraded bool) string {
 	if route == nil || model == nil {
 		return ""
@@ -677,6 +818,28 @@ func shouldFailoverModelStatus(status int) bool {
 	default:
 		return false
 	}
+}
+
+func isModelCapabilityMismatch(status int, body string) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	normalized := strings.ToLower(body)
+	if strings.Contains(normalized, "only support text input") ||
+		strings.Contains(normalized, "only supports text input") ||
+		strings.Contains(normalized, "only accepts text input") ||
+		strings.Contains(normalized, "text input only") {
+		return true
+	}
+	if !strings.Contains(normalized, "image") {
+		return false
+	}
+	return strings.Contains(normalized, "image_url is only supported") ||
+		strings.Contains(normalized, "do not support image") ||
+		strings.Contains(normalized, "does not support image") ||
+		strings.Contains(normalized, "doesn't support image") ||
+		strings.Contains(normalized, "image input is not supported") ||
+		strings.Contains(normalized, "vision is not supported")
 }
 
 func modelFailureForStatus(status int) modelFailureClass {

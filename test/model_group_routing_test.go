@@ -91,6 +91,44 @@ func TestModelGroupPersistenceAndRouting(t *testing.T) {
 	}
 }
 
+func TestModelGroupAdvertisesCombinedImageCapability(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "model-group-image-capability.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	textOnly := createRoutingModel(t, db, "Text only", "text-only")
+	textOnly.ImageInputMode = store.ImageInputUnsupported
+	if err := db.UpdateModel(textOnly); err != nil {
+		t.Fatal(err)
+	}
+	vision := createRoutingModel(t, db, "Vision", "vision")
+	vision.ImageInputMode = store.ImageInputSupported
+	if err := db.UpdateModel(vision); err != nil {
+		t.Fatal(err)
+	}
+
+	group := &store.ModelGroup{
+		Name: "Mixed capability", Enabled: true,
+		Members: []store.ModelGroupMember{{ModelID: textOnly.ID}, {ModelID: vision.ID}},
+	}
+	if err := db.CreateModelGroup(group); err != nil {
+		t.Fatal(err)
+	}
+
+	models := router.New(db).EnabledModels()
+	for _, model := range models {
+		if model.Name == group.Name {
+			if model.ImageInputMode != store.ImageInputSupported {
+				t.Fatalf("group image mode = %q, want supported", model.ImageInputMode)
+			}
+			return
+		}
+	}
+	t.Fatalf("group %q was not advertised", group.Name)
+}
+
 func TestModelGroupAdvancedDispatchConfiguration(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "advanced-model-groups.db"))
 	if err != nil {

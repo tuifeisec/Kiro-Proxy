@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"io"
+	"kiro-proxy/converter"
 	"kiro-proxy/store"
 	"net/http"
 	"net/http/httptest"
@@ -97,6 +98,107 @@ func TestInternalServerErrorIsRetryableAndFailoverEligible(t *testing.T) {
 	}
 	if !shouldFailoverModelStatus(http.StatusInternalServerError) {
 		t.Fatal("HTTP 500 should fail over to another group candidate")
+	}
+}
+
+func TestModelCapabilityMismatchIsFailoverEligible(t *testing.T) {
+	capabilityErrors := []string{
+		`{"error":{"message":"Invalid content type. image_url is only supported by certain models"}}`,
+		`{"error":{"message":"Model do not support image input"}}`,
+		`{"error":{"message":"Model only support text input"}}`,
+		`{"error":{"message":"Model only supports text input"}}`,
+	}
+	for _, body := range capabilityErrors {
+		if !isModelCapabilityMismatch(http.StatusBadRequest, body) {
+			t.Fatalf("capability mismatch should fail over to another group candidate: %s", body)
+		}
+	}
+	if isModelCapabilityMismatch(http.StatusBadRequest, `{"error":{"message":"invalid request parameter"}}`) {
+		t.Fatal("ordinary HTTP 400 should not fail over")
+	}
+	if isModelCapabilityMismatch(http.StatusUnprocessableEntity, capabilityErrors[0]) {
+		t.Fatal("unexpected status should not be treated as an image capability mismatch")
+	}
+}
+
+func TestImageCompatibleCandidatesUseConfigurationAndObservations(t *testing.T) {
+	now := time.Now()
+	configuredSupported := &store.Model{ID: "supported", ImageInputMode: store.ImageInputSupported}
+	auto := &store.Model{ID: "auto", ImageInputMode: store.ImageInputAuto}
+	configuredUnsupported := &store.Model{ID: "unsupported", ImageInputMode: store.ImageInputUnsupported}
+	capabilities := newModelImageCapabilityStore()
+
+	candidates, skipped := imageCompatibleCandidates(
+		[]*store.Model{auto, configuredUnsupported, configuredSupported},
+		true,
+		capabilities,
+		now,
+	)
+	if len(candidates) != 2 || candidates[0] != configuredSupported || candidates[1] != auto {
+		t.Fatalf("confirmed image model should precede unknown model: %+v", candidates)
+	}
+	if len(skipped) != 1 || skipped[0].model != configuredUnsupported || skipped[0].source != "config" {
+		t.Fatalf("configured unsupported model was not skipped: %+v", skipped)
+	}
+
+	capabilities.observe(auto, modelImageUnsupported, now)
+	candidates, skipped = imageCompatibleCandidates(
+		[]*store.Model{auto, configuredUnsupported, configuredSupported},
+		true,
+		capabilities,
+		now,
+	)
+	if len(candidates) != 1 || candidates[0] != configuredSupported {
+		t.Fatalf("observed unsupported model should be skipped: %+v", candidates)
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("expected configured and observed skips, got %+v", skipped)
+	}
+
+	textCandidates, textSkipped := imageCompatibleCandidates(
+		[]*store.Model{auto, configuredUnsupported, configuredSupported},
+		false,
+		capabilities,
+		now,
+	)
+	if len(textCandidates) != 3 || len(textSkipped) != 0 {
+		t.Fatalf("text routing must ignore image capability: candidates=%d skipped=%d", len(textCandidates), len(textSkipped))
+	}
+}
+
+func TestConversationImageStatsIncludesHistory(t *testing.T) {
+	conv := &converter.ParsedConversation{
+		CurrentImages: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "YWJj"}}},
+		History: []converter.ParsedHistoryEntry{{
+			Images: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "YQ=="}}},
+		}},
+	}
+	count, bytes := conversationImageStats(conv)
+	if count != 2 || bytes != 4 {
+		t.Fatalf("image stats = (%d, %d), want (2, 4)", count, bytes)
+	}
+}
+
+func TestImageAwareFirstByteTimeoutUsesSingleCandidateBudget(t *testing.T) {
+	now := time.Now()
+	deadline := now.Add(2 * time.Minute)
+	if got := imageAwareFirstByteTimeout(10*time.Second, deadline, now, false, true, 1); got != singleImageTimeout {
+		t.Fatalf("single image candidate timeout = %v, want %v", got, singleImageTimeout)
+	}
+	if got := imageAwareFirstByteTimeout(10*time.Second, deadline, now, false, true, 2); got != 20*time.Second {
+		t.Fatalf("multiple image candidate timeout = %v, want 20s", got)
+	}
+	if got := imageAwareFirstByteTimeout(10*time.Second, deadline, now, false, false, 1); got != 20*time.Second {
+		t.Fatalf("text timeout = %v, want 20s", got)
+	}
+}
+
+func TestSupportedInputTypesFollowImageConfiguration(t *testing.T) {
+	if got := supportedInputTypesForModel(store.Model{ImageInputMode: store.ImageInputUnsupported}); len(got) != 1 || got[0] != "TEXT" {
+		t.Fatalf("unsupported model inputs = %#v", got)
+	}
+	if got := supportedInputTypesForModel(store.Model{ImageInputMode: store.ImageInputAuto}); len(got) != 2 || got[1] != "IMAGE" {
+		t.Fatalf("auto model inputs = %#v", got)
 	}
 }
 
