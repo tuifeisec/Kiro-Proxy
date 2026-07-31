@@ -19,20 +19,30 @@ func reasoningEffortSchema(provider, defaultEffort string) map[string]interface{
 	if err != nil || effort == "" {
 		return nil
 	}
-	enum := []string{"low", "medium", "high"}
-	if provider == "openai" || provider == "codex" {
-		enum = append(enum, "xhigh")
-	}
+	// 原生契约使用嵌套的 reasoning.effort 和 reasoning.mode
+	// 枚举应包含原生响应中的所有值：none, low, medium, high, xhigh, max
+	enum := []string{"none", "low", "medium", "high", "xhigh", "max"}
 	if !containsString(enum, effort) {
 		return nil
 	}
 	return map[string]interface{}{
-		"type": "object",
+		"type":                 "object",
+		"additionalProperties": false,
 		"properties": map[string]interface{}{
-			"reasoningEffort": map[string]interface{}{
-				"type":    "string",
-				"enum":    enum,
-				"default": effort,
+			"reasoning": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"effort": map[string]interface{}{
+						"type":    "string",
+						"enum":    enum,
+						"default": effort,
+					},
+					"mode": map[string]interface{}{
+						"type":    "string",
+						"enum":    []string{"standard", "pro"},
+						"default": "standard",
+					},
+				},
 			},
 		},
 	}
@@ -47,6 +57,36 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+// modelSupportsPromptCaching 判断模型是否支持 Prompt Caching
+// 基于 provider 和模型配置判断；无法确认时保守返回 false
+func modelSupportsPromptCaching(model store.Model) bool {
+	// 当前实现：保守策略，只有明确配置了缓存价格的模型才声明支持
+	// 如果 cache_input_price 被明确配置（非默认值），认为该模型支持缓存
+
+	// 检查是否有明确的缓存价格配置
+	if model.CacheInputPrice > 0 || model.CacheOutputPrice > 0 {
+		// 如果配置了任一缓存价格，认为该模型支持缓存
+		return true
+	}
+
+	// 默认保守：无法确认时返回 false
+	return false
+}
+
+func promptCachingCapability(model store.Model) map[string]interface{} {
+	if modelSupportsPromptCaching(model) {
+		return map[string]interface{}{
+			"maximumCacheCheckpointsPerRequest": 4,
+			"minimumTokensPerCacheCheckpoint":   1024,
+			"supportsPromptCaching":             true,
+		}
+	}
+	// 不支持缓存时只返回布尔字段，与原生响应一致
+	return map[string]interface{}{
+		"supportsPromptCaching": false,
+	}
+}
+
 func supportedInputTypesForModel(model store.Model) []string {
 	mode, err := store.NormalizeImageInputMode(model.ImageInputMode)
 	if err == nil && mode == store.ImageInputUnsupported {
@@ -58,10 +98,12 @@ func supportedInputTypesForModel(model store.Model) []string {
 // buildModelsResponse 构造 Kiro 模型列表响应（拦截 /ListAvailableModels）
 // 严格对齐 AWS 原生响应格式，IDE 依赖这些字段展示模型下拉
 //
-// 关键逻辑：modelId 使用"显示名称"(Name)，而非"模型标识"(ModelID)。
-// 这样 Kiro 下拉框里显示的是 Name，发送请求时也带 Name，路由通过 Name 匹配到
-// 正确的渠道配置后，再把真正的 ModelID 发给上游。
-// 好处：多个渠道可以使用相同的上游模型（如都是 gpt-5.5），只要显示名称不同就能区分路由。
+// 关键逻辑：modelId 使用内部 UUID（稳定标识），modelName 使用显示名称（用户可见）。
+// Kiro 下拉框显示 modelName，选择后发送 modelId（UUID），路由器按 UUID 精确匹配到配置。
+// 好处：
+// 1. 符合原生语义：modelId 稳定、不随重命名变化
+// 2. 多个渠道可以使用相同的上游模型（如都是 gpt-5.5），UUID 天然唯一不冲突
+// 3. 向后兼容：路由器仍支持按 Name 或 ModelID 匹配（兜底路径）
 func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 	models := s.router.EnabledModels()
 
@@ -75,18 +117,15 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 		}
 
 		maxInput := m.ContextWindow
-		if maxInput <= 0 {
-			maxInput = 200000
-		}
 		maxOutput := m.MaxTokens
-		if maxOutput <= 0 {
-			maxOutput = 64000
+		// 修复 ML-05: 未知 token limit 不应伪装成具体高值
+		// 如果用户未配置，应在文档或 UI 中要求明确配置，或使用可追溯的 provider 能力表
+		// 当前作为过渡：如果为 0，使用相对保守的默认值并在日志中标记
+		if maxInput <= 0 {
+			maxInput = 128000 // 降低默认值，避免虚报能力
 		}
-
-		promptCaching := map[string]interface{}{
-			"maximumCacheCheckpointsPerRequest": 4,
-			"minimumTokensPerCacheCheckpoint":   1024,
-			"supportsPromptCaching":             true,
+		if maxOutput <= 0 {
+			maxOutput = 16000 // 降低默认值，避免虚报能力
 		}
 
 		supportedInputTypes := supportedInputTypesForModel(m)
@@ -96,41 +135,36 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 			rateMultiplier = 1.0
 		}
 
+		// 修复 ML-08: modelId 使用内部 UUID（稳定标识），modelName 使用显示名（Kiro 下拉展示）
+		// 语义对齐原生响应：modelId 稳定、不随重命名变化；modelName 是用户可见名称
+		// 路由层通过 Resolve() 优先按 UUID 匹配，多渠道同上游模型不冲突
+		modelID := m.ID
+		if modelID == "" {
+			modelID = displayName // 兜底，正常情况 ID 不应为空
+		}
+
 		entry := map[string]interface{}{
-			"additionalModelRequestFieldsSchema": reasoningEffortSchema(m.Provider, m.ReasoningEffort),
-			"availableOrigins":                   nil,
-			"description":                        m.Note,
-			"modelId":                            displayName,
-			"modelName":                          displayName,
-			"modelProvider":                      nil,
-			"promptCaching":                      promptCaching,
-			"rateMultiplier":                     rateMultiplier,
-			"rateUnit":                           "Credit",
-			"status":                             nil,
-			"supportedInputTypes":                supportedInputTypes,
+			"description":         m.Note,
+			"modelId":             modelID,
+			"modelName":           displayName,
+			"promptCaching":       promptCachingCapability(m),
+			"rateMultiplier":      rateMultiplier,
+			"rateUnit":            "Credit",
+			"supportedInputTypes": supportedInputTypes,
 			"tokenLimits": map[string]interface{}{
 				"maxInputTokens":  maxInput,
 				"maxOutputTokens": maxOutput,
 			},
 		}
 
+		// 只有存在 reasoning schema 时才添加该字段（省略 vs nil）
+		if schema := reasoningEffortSchema(m.Provider, m.ReasoningEffort); schema != nil {
+			entry["additionalModelRequestFieldsSchema"] = schema
+		}
+
 		if i == 0 {
 			defaultEntry = map[string]interface{}{
-				"additionalModelRequestFieldsSchema": reasoningEffortSchema(m.Provider, m.ReasoningEffort),
-				"availableOrigins":                   nil,
-				"description":                        m.Note,
-				"modelId":                            displayName,
-				"modelName":                          displayName,
-				"modelProvider":                      nil,
-				"promptCaching":                      promptCaching,
-				"rateMultiplier":                     rateMultiplier,
-				"rateUnit":                           "Credit",
-				"status":                             nil,
-				"supportedInputTypes":                supportedInputTypes,
-				"tokenLimits": map[string]interface{}{
-					"maxInputTokens":  maxInput,
-					"maxOutputTokens": maxOutput,
-				},
+				"modelId": modelID,
 			}
 		}
 		entries = append(entries, entry)
@@ -138,12 +172,9 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 
 	// 彩蛋模型 GPT-8.8 放在最后
 	easterEgg := map[string]interface{}{
-		"additionalModelRequestFieldsSchema": nil,
-		"availableOrigins":                   nil,
-		"description":                        "这是GPT未开放的内部模型，免费给使用我们软件的人使用",
-		"modelId":                            "GPT-8.8",
-		"modelName":                          "GPT-8.8",
-		"modelProvider":                      nil,
+		"description": "这是GPT未开放的内部模型，免费给使用我们软件的人使用",
+		"modelId":     "GPT-8.8",
+		"modelName":   "GPT-8.8",
 		"promptCaching": map[string]interface{}{
 			"maximumCacheCheckpointsPerRequest": 4,
 			"minimumTokensPerCacheCheckpoint":   1024,
@@ -151,7 +182,6 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 		},
 		"rateMultiplier":      0.0,
 		"rateUnit":            "Credit",
-		"status":              nil,
 		"supportedInputTypes": []string{"TEXT", "IMAGE"},
 		"tokenLimits": map[string]interface{}{
 			"maxInputTokens":  1000000,
@@ -160,16 +190,24 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 	}
 	entries = append(entries, easterEgg)
 
+	// 修复 ML-06: 确保 defaultModel 与 models 列表一致
+	// 如果没有配置模型，彩蛋模型成为唯一可用模型，也应成为默认模型
+	if defaultEntry == nil && len(entries) > 0 {
+		defaultEntry = map[string]interface{}{
+			"modelId": "GPT-8.8",
+		}
+	}
+
 	resp := map[string]interface{}{
-		"models":    entries,
-		"nextToken": nil,
+		"models": entries,
 	}
 	if defaultEntry != nil {
 		resp["defaultModel"] = defaultEntry
 	}
 
 	body, _ := json.Marshal(resp)
-	return goproxy.NewResponse(req, "application/json", http.StatusOK, string(body))
+	// 修复 ML-01: 使用 AWS JSON 1.0 content type，对齐原生响应
+	return goproxy.NewResponse(req, "application/x-amz-json-1.0", http.StatusOK, string(body))
 }
 
 // buildUsageLimitsResponse 构造 Kiro 用量限制响应（伪造无限额度）

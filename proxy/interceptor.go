@@ -98,7 +98,25 @@ func (s *Server) setupInterceptor() {
 		}
 
 		// 特殊协议
+		if protocol == "kiro-management-root" {
+			// 新版 management 根路径：需验证 POST + X-Amz-Target
+			if req.Method == http.MethodPost && req.Header.Get("X-Amz-Target") == "KiroControlPlaneBearerService.ListAvailableModels" {
+				s.logger.Info("interceptor", "返回模型列表")
+				resp := s.buildModelsResponse(req)
+				if resp != nil && resp.Body != nil {
+					respBody, _ := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					resp.Body = io.NopCloser(bytes.NewReader(respBody))
+					s.logger.Debug("interceptor", "[kiro-models] 伪造响应体", string(respBody))
+				}
+				return req, resp
+			}
+			// 不匹配时放行
+			s.logger.Debug("interceptor", fmt.Sprintf("management 根路径不匹配模型列表 operation，放行: method=%s, target=%s", req.Method, req.Header.Get("X-Amz-Target")))
+			return req, nil
+		}
 		if protocol == "kiro-models" {
+			// 旧版 AWS path：保持兼容
 			s.logger.Info("interceptor", "返回模型列表")
 			resp := s.buildModelsResponse(req)
 			if resp != nil && resp.Body != nil {
