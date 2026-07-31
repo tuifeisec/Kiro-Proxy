@@ -261,26 +261,18 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 	hasImage := imageCount > 0
 	affinityModelID := f.affinity.get(route.Group.ID, conversationID, now)
 	scopes := dispatchAvoidanceScopes(route.Group.ID, conversationID, requestClientIP(req))
-	candidates := orderedRouteCandidates(route, affinityModelID, f.avoidance, scopes, now)
-	candidates = f.latency.order(candidates, now)
-	candidates = f.upstream.order(candidates, now)
-	var skippedImageCandidates []skippedImageCandidate
-	candidates, skippedImageCandidates = imageCompatibleCandidates(candidates, hasImage, f.imageCaps, now)
-	for _, skipped := range skippedImageCandidates {
-		logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过不支持图片的候选: group=%s model=%s", route.Group.Name, statsModelID(skipped.model)), LogMeta{
-			Model: statsModelID(skipped.model),
-			Metadata: map[string]interface{}{
-				"group_id":          route.Group.ID,
-				"has_image":         true,
-				"image_count":       imageCount,
-				"image_bytes":       imageBytes,
-				"capability_source": skipped.source,
-			},
-		})
+
+	// 使用阶段信息，而不是摊平后的全局候选数组
+	stages := route.Stages
+	if len(stages) == 0 {
+		// 向后兼容：如果没有阶段信息，构造单阶段
+		stages = []router.RouteStage{{
+			GroupID:    route.Group.ID,
+			GroupName:  route.Group.Name,
+			Candidates: route.Candidates,
+		}}
 	}
-	if hasImage && len(candidates) == 0 {
-		return nil, fmt.Errorf("模型组 %s 没有支持图片输入的可用候选", route.Group.Name)
-	}
+
 	deadline := now.Add(retryBudget)
 	attempted := 0
 	attemptsByGroup := make(map[string]int)
@@ -289,286 +281,366 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 	var lastContResult *converter.ResponsesContinuationResult
 	var lastModel *store.Model
 
-	for index, model := range candidates {
-		if model == nil {
-			continue
-		}
+	// 按阶段遍历，每个阶段内应用调度策略
+	for stageIndex, stage := range stages {
 		if !candidateHasBudget(deadline, time.Now()) {
 			break
 		}
-		candidateGroup := routeGroupForCandidate(route, model)
-		if attemptsByGroup[candidateGroup.ID] >= candidateGroup.MaxAttempts {
+
+		candidateGroup := stage.GroupID
+		groupMaxAttempts := route.Group.MaxAttempts
+		if candidateGroup != route.Group.ID {
+			// 这是 fallback 阶段，查找对应分组配置
+			for _, g := range route.CandidateGroups {
+				if g != nil && g.ID == candidateGroup {
+					groupMaxAttempts = g.MaxAttempts
+					break
+				}
+			}
+		}
+
+		if attemptsByGroup[candidateGroup] >= groupMaxAttempts {
+			logger.Info("dispatcher", fmt.Sprintf("跳过已达最大尝试次数的阶段: stage=%d group=%s attempts=%d", stageIndex, stage.GroupName, attemptsByGroup[candidateGroup]))
 			continue
 		}
-		allowed, circuitState := f.health.allow(model, time.Now())
-		if !allowed {
-			if pre != nil && pre.usage != nil {
-				pre.usage.setFailoverReason("circuit_" + circuitState)
-			}
-			logger.WarnWithMeta("dispatcher", fmt.Sprintf("跳过熔断模型: group=%s model=%s state=%s", route.Group.Name, statsModelID(model), circuitState), LogMeta{
-				Model: statsModelID(model),
+
+		// 阶段内应用调度策略（亲和、延迟、上游健康、图片能力）
+		stageCandidates := orderedRouteCandidates(&router.Route{
+			Model:           stage.Candidates[0],
+			Candidates:      stage.Candidates,
+			CandidateLimits: route.CandidateLimits,
+			CandidateGroups: route.CandidateGroups,
+			Group:           route.Group,
+		}, affinityModelID, f.avoidance, scopes, now)
+		stageCandidates = f.latency.order(stageCandidates, now)
+		stageCandidates = f.upstream.order(stageCandidates, now)
+		var skippedImageCandidates []skippedImageCandidate
+		stageCandidates, skippedImageCandidates = imageCompatibleCandidates(stageCandidates, hasImage, f.imageCaps, now)
+
+		for _, skipped := range skippedImageCandidates {
+			logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过不支持图片的候选: stage=%d group=%s model=%s", stageIndex, stage.GroupName, statsModelID(skipped.model)), LogMeta{
+				Model: statsModelID(skipped.model),
 				Metadata: map[string]interface{}{
-					"group_id":  route.Group.ID,
-					"group":     route.Group.Name,
-					"candidate": index,
-					"circuit":   circuitState,
+					"stage":             stageIndex,
+					"stage_group":       stage.GroupName,
+					"has_image":         true,
+					"image_count":       imageCount,
+					"image_bytes":       imageBytes,
+					"capability_source": skipped.source,
 				},
 			})
-			continue
 		}
-		capacityWait := time.Duration(0)
-		if model.ID == affinityModelID {
-			capacityWait = affinityCapacityWait
-		}
-		capacityStarted := time.Now()
-		lease, acquired := f.load.acquireWithWait(req.Context(), model.ID, route.CandidateLimits[model.ID], capacityWait)
-		capacityWaited := time.Since(capacityStarted)
-		if pre != nil && pre.usage != nil && capacityWait > 0 {
-			pre.usage.addCapacityWait(capacityWaited)
-		}
-		if !acquired {
-			f.health.neutral(model)
-			if req.Context().Err() != nil {
-				return nil, req.Context().Err()
-			}
-			if pre != nil && pre.usage != nil {
-				pre.usage.setFailoverReason("capacity_full")
-			}
-			logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过并发已满候选: group=%s model=%s", route.Group.Name, statsModelID(model)), LogMeta{
-				Model:    statsModelID(model),
-				Metadata: map[string]interface{}{"group_id": route.Group.ID, "candidate": index, "max_concurrency": route.CandidateLimits[model.ID]},
-			})
-			continue
-		}
-		bucketAllowed, bucketState := f.upstream.allow(model, time.Now())
-		if !bucketAllowed {
-			lease.release()
-			f.health.neutral(model)
-			if pre != nil && pre.usage != nil {
-				pre.usage.setFailoverReason("upstream_bucket_" + bucketState)
-			}
-			logger.WarnWithMeta("dispatcher", fmt.Sprintf("跳过上游地址异常候选: group=%s model=%s state=%s", route.Group.Name, statsModelID(model), bucketState), LogMeta{
-				Model:    statsModelID(model),
-				Metadata: map[string]interface{}{"group_id": route.Group.ID, "candidate": index, "upstream_bucket": bucketState},
-			})
+
+		if hasImage && len(stageCandidates) == 0 {
+			logger.Warn("dispatcher", fmt.Sprintf("阶段 %d (%s) 没有支持图片的可用候选，进入下一阶段", stageIndex, stage.GroupName))
 			continue
 		}
 
-		attempted++
-		attemptsByGroup[candidateGroup.ID]++
-		route.Model = model
-		bindUsageModel(pre, model)
-		if pre != nil && pre.usage != nil {
-			pre.usage.setFailoverCount(attempted - 1)
-			pre.usage.setDispatchReason(dispatchSelectionReason(route, model, affinityModelID, capacityWaited, f.latency.isDegraded(affinityModelID, time.Now())))
-		}
-		_, capabilitySource := f.imageCaps.effective(model, time.Now())
-		logger.InfoWithMeta("dispatcher", fmt.Sprintf("尝试分组候选: group=%s candidate=%d model=%s", route.Group.Name, index, statsModelID(model)), LogMeta{
-			Model: statsModelID(model),
-			Metadata: map[string]interface{}{
-				"group_id":          route.Group.ID,
-				"group":             route.Group.Name,
-				"candidate":         index,
-				"has_image":         hasImage,
-				"image_count":       imageCount,
-				"image_bytes":       imageBytes,
-				"capability_source": capabilitySource,
-			},
-		})
+		// 在阶段内尝试候选
+		stageSuccess := false
+		for candidateIndex, model := range stageCandidates {
+			if model == nil {
+				continue
+			}
+			if !candidateHasBudget(deadline, time.Now()) {
+				break
+			}
 
-		var contResult *converter.ResponsesContinuationResult
-		var attemptResp *http.Response
-		configuredFirstByteTimeout := time.Duration(candidateGroup.FirstByteTimeoutMS) * time.Millisecond
-		firstByteTimeout := imageAwareFirstByteTimeout(
-			configuredFirstByteTimeout,
-			deadline,
-			time.Now(),
-			f.latency.isDegraded(model.ID, time.Now()),
-			hasImage,
-			len(candidates),
-		)
-		resp, firstByteDuration, err := requestWithFirstByteTimeout(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
-			var forwardErr error
-			attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, false)
-			return attemptResp, forwardErr
-		}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
-			if !isSSEResponse(attemptResp) {
-				return waitForUpstreamFirstByte(attemptResp, remaining)
+			if attemptsByGroup[candidateGroup] >= groupMaxAttempts {
+				break
 			}
-			return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, model.Endpoint, remaining, 0)
-		})
-		if err != nil {
-			lease.release()
-			if req.Context().Err() != nil {
-				return nil, req.Context().Err()
+
+			allowed, circuitState := f.health.allow(model, time.Now())
+			if !allowed {
+				if pre != nil && pre.usage != nil {
+					pre.usage.setFailoverReason("circuit_" + circuitState)
+				}
+				logger.WarnWithMeta("dispatcher", fmt.Sprintf("跳过熔断模型: stage=%d group=%s model=%s state=%s", stageIndex, stage.GroupName, statsModelID(model), circuitState), LogMeta{
+					Model: statsModelID(model),
+					Metadata: map[string]interface{}{
+						"stage":       stageIndex,
+						"stage_group": stage.GroupName,
+						"candidate":   candidateIndex,
+						"circuit":     circuitState,
+					},
+				})
+				continue
 			}
-			lastErr = err
-			failureClass := "candidate_error"
-			if errors.Is(err, errFirstByteTimeout) {
-				failureClass = "first_byte_slow"
-				f.latency.record(model.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
+
+			capacityWait := time.Duration(0)
+			if model.ID == affinityModelID {
+				capacityWait = affinityCapacityWait
+			}
+			capacityStarted := time.Now()
+			lease, acquired := f.load.acquireWithWait(req.Context(), model.ID, route.CandidateLimits[model.ID], capacityWait)
+			capacityWaited := time.Since(capacityStarted)
+			if pre != nil && pre.usage != nil && capacityWait > 0 {
+				pre.usage.addCapacityWait(capacityWaited)
+			}
+			if !acquired {
 				f.health.neutral(model)
-				f.upstream.neutral(model, time.Now())
-				if f.latency.isDegraded(model.ID, time.Now()) {
+				if req.Context().Err() != nil {
+					return nil, req.Context().Err()
+				}
+				if pre != nil && pre.usage != nil {
+					pre.usage.setFailoverReason("capacity_full")
+				}
+				logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过并发已满候选: stage=%d group=%s model=%s", stageIndex, stage.GroupName, statsModelID(model)), LogMeta{
+					Model:    statsModelID(model),
+					Metadata: map[string]interface{}{"stage": stageIndex, "stage_group": stage.GroupName, "candidate": candidateIndex, "max_concurrency": route.CandidateLimits[model.ID]},
+				})
+				continue
+			}
+
+			bucketAllowed, bucketState := f.upstream.allow(model, time.Now())
+			if !bucketAllowed {
+				lease.release()
+				f.health.neutral(model)
+				if pre != nil && pre.usage != nil {
+					pre.usage.setFailoverReason("upstream_bucket_" + bucketState)
+				}
+				logger.WarnWithMeta("dispatcher", fmt.Sprintf("跳过上游地址异常候选: stage=%d group=%s model=%s state=%s", stageIndex, stage.GroupName, statsModelID(model), bucketState), LogMeta{
+					Model:    statsModelID(model),
+					Metadata: map[string]interface{}{"stage": stageIndex, "stage_group": stage.GroupName, "candidate": candidateIndex, "upstream_bucket": bucketState},
+				})
+				continue
+			}
+
+			attempted++
+			attemptsByGroup[candidateGroup]++
+			route.Model = model
+			bindUsageModel(pre, model)
+			if pre != nil && pre.usage != nil {
+				pre.usage.setFailoverCount(attempted - 1)
+				pre.usage.setDispatchReason(dispatchSelectionReason(route, model, affinityModelID, capacityWaited, f.latency.isDegraded(affinityModelID, time.Now())))
+			}
+			_, capabilitySource := f.imageCaps.effective(model, time.Now())
+			logger.InfoWithMeta("dispatcher", fmt.Sprintf("尝试分组候选: stage=%d group=%s candidate=%d model=%s", stageIndex, stage.GroupName, candidateIndex, statsModelID(model)), LogMeta{
+				Model: statsModelID(model),
+				Metadata: map[string]interface{}{
+					"stage":             stageIndex,
+					"stage_group":       stage.GroupName,
+					"candidate":         candidateIndex,
+					"has_image":         hasImage,
+					"image_count":       imageCount,
+					"image_bytes":       imageBytes,
+					"capability_source": capabilitySource,
+				},
+			})
+
+			var contResult *converter.ResponsesContinuationResult
+			var attemptResp *http.Response
+
+			// 查找当前候选所属的真实分组配置
+			actualCandidateGroup := route.Group
+			if cg, ok := route.CandidateGroups[model.ID]; ok && cg != nil {
+				actualCandidateGroup = cg
+			}
+
+			configuredFirstByteTimeout := time.Duration(actualCandidateGroup.FirstByteTimeoutMS) * time.Millisecond
+			firstByteTimeout := imageAwareFirstByteTimeout(
+				configuredFirstByteTimeout,
+				deadline,
+				time.Now(),
+				f.latency.isDegraded(model.ID, time.Now()),
+				hasImage,
+				len(stageCandidates),
+			)
+			resp, firstByteDuration, err := requestWithFirstByteTimeout(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+				var forwardErr error
+				attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, false)
+				return attemptResp, forwardErr
+			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
+				if !isSSEResponse(attemptResp) {
+					return waitForUpstreamFirstByte(attemptResp, remaining)
+				}
+				return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, model.Endpoint, remaining, 0)
+			})
+			if err != nil {
+				lease.release()
+				if req.Context().Err() != nil {
+					return nil, req.Context().Err()
+				}
+				lastErr = err
+				failureClass := "candidate_error"
+				if errors.Is(err, errFirstByteTimeout) {
+					failureClass = "first_byte_slow"
+					f.latency.record(model.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
+					f.health.neutral(model)
+					f.upstream.neutral(model, time.Now())
+					if f.latency.isDegraded(model.ID, time.Now()) {
+						f.affinity.clear(route.Group.ID, conversationID, model.ID)
+					}
+				} else if isUpstreamProtocolFailure(err) {
+					failureClass = string(modelFailureUpstream)
+					f.health.failure(model, modelFailureUpstream, 0, time.Now())
+					f.upstream.neutral(model, time.Now())
 					f.affinity.clear(route.Group.ID, conversationID, model.ID)
+					markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+				} else if isUpstreamTransportFailure(err) {
+					failureClass = string(modelFailureTransport)
+					f.health.failure(model, modelFailureTransport, 0, time.Now())
+					f.upstream.recordFailure(model, time.Now())
+					f.affinity.clear(route.Group.ID, conversationID, model.ID)
+					markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+				} else {
+					f.health.neutral(model)
+					f.upstream.neutral(model, time.Now())
 				}
-			} else if isUpstreamProtocolFailure(err) {
-				failureClass = string(modelFailureUpstream)
-				f.health.failure(model, modelFailureUpstream, 0, time.Now())
-				f.upstream.neutral(model, time.Now())
-				f.affinity.clear(route.Group.ID, conversationID, model.ID)
-				markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
-			} else if isUpstreamTransportFailure(err) {
-				failureClass = string(modelFailureTransport)
-				f.health.failure(model, modelFailureTransport, 0, time.Now())
-				f.upstream.recordFailure(model, time.Now())
-				f.affinity.clear(route.Group.ID, conversationID, model.ID)
-				markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
-			} else {
-				f.health.neutral(model)
-				f.upstream.neutral(model, time.Now())
+				if pre != nil && pre.usage != nil {
+					pre.usage.setFailoverReason(failureClass)
+				}
+				logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选网络失败: stage=%d group=%s model=%s error=%v", stageIndex, stage.GroupName, statsModelID(model), err), LogMeta{
+					Model: statsModelID(model),
+					Metadata: map[string]interface{}{
+						"stage":         stageIndex,
+						"stage_group":   stage.GroupName,
+						"failure_class": failureClass,
+						"candidate":     candidateIndex,
+					},
+				})
+				continue
 			}
-			if pre != nil && pre.usage != nil {
-				pre.usage.setFailoverReason(failureClass)
+			resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
+			if firstByteDuration > 0 {
+				f.latency.record(model.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
 			}
-			logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选网络失败: group=%s model=%s error=%v", route.Group.Name, statsModelID(model), err), LogMeta{
-				Model: statsModelID(model),
-				Metadata: map[string]interface{}{
-					"group_id":      route.Group.ID,
-					"failure_class": failureClass,
-					"candidate":     index,
-				},
-			})
-			continue
-		}
-		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
-		if firstByteDuration > 0 {
-			f.latency.record(model.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
-		}
-		bodyDetail := ""
-		capabilityMismatch := false
-		if resp.StatusCode == http.StatusBadRequest {
-			bodyDetail = preserveResponseBody(resp)
-			capabilityMismatch = hasImage && isModelCapabilityMismatch(resp.StatusCode, bodyDetail)
-		}
-		if shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch {
-			if bodyDetail == "" {
+			bodyDetail := ""
+			capabilityMismatch := false
+			if resp.StatusCode == http.StatusBadRequest {
 				bodyDetail = preserveResponseBody(resp)
+				capabilityMismatch = hasImage && isModelCapabilityMismatch(resp.StatusCode, bodyDetail)
 			}
-			failureClass := modelFailureForStatus(resp.StatusCode)
-			if capabilityMismatch {
-				failureClass = modelFailureCapability
-				f.imageCaps.observe(model, modelImageUnsupported, time.Now())
-				f.health.neutral(model)
-				f.upstream.neutral(model, time.Now())
-			} else {
-				retryAfter := time.Duration(0)
-				if failureClass == modelFailureRateLimit {
-					retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+			if shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch {
+				if bodyDetail == "" {
+					bodyDetail = preserveResponseBody(resp)
 				}
-				f.health.failure(model, failureClass, retryAfter, time.Now())
+				failureClass := modelFailureForStatus(resp.StatusCode)
+				if capabilityMismatch {
+					failureClass = modelFailureCapability
+					f.imageCaps.observe(model, modelImageUnsupported, time.Now())
+					f.health.neutral(model)
+					f.upstream.neutral(model, time.Now())
+				} else {
+					retryAfter := time.Duration(0)
+					if failureClass == modelFailureRateLimit {
+						retryAfter = modelRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+					}
+					f.health.failure(model, failureClass, retryAfter, time.Now())
+				}
+				f.affinity.clear(route.Group.ID, conversationID, model.ID)
+				if capabilityMismatch {
+					markConversationAvoidance(f.avoidance, route.Group.ID, conversationID, model.ID, time.Now())
+				} else {
+					markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+				}
+				lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
+				if lastResp != nil {
+					lastResp.Body.Close()
+				}
+				lastResp = resp
+				lastContResult = contResult
+				lastModel = model
+				if pre != nil && pre.usage != nil {
+					if capabilityMismatch {
+						pre.usage.setFailoverReason("capability_mismatch")
+					} else {
+						pre.usage.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+					}
+				}
+				logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选返回可切换错误: stage=%d group=%s model=%s status=%d", stageIndex, stage.GroupName, statsModelID(model), resp.StatusCode), LogMeta{
+					Model:  statsModelID(model),
+					Status: resp.StatusCode,
+					Metadata: map[string]interface{}{
+						"stage":         stageIndex,
+						"stage_group":   stage.GroupName,
+						"failure_class": string(failureClass),
+						"candidate":     candidateIndex,
+					},
+				}, bodyDetail)
+				continue
 			}
-			f.affinity.clear(route.Group.ID, conversationID, model.ID)
-			if capabilityMismatch {
-				markConversationAvoidance(f.avoidance, route.Group.ID, conversationID, model.ID, time.Now())
-			} else {
-				markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
+			if resp.StatusCode < http.StatusBadRequest && pre != nil && pre.usage != nil {
+				pre.usage.markFirstByte(time.Now())
 			}
-			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
+
 			if lastResp != nil {
 				lastResp.Body.Close()
 			}
-			lastResp = resp
-			lastContResult = contResult
-			lastModel = model
-			if pre != nil && pre.usage != nil {
-				if capabilityMismatch {
-					pre.usage.setFailoverReason("capability_mismatch")
-				} else {
-					pre.usage.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
+			if resp.StatusCode < http.StatusBadRequest {
+				if pre == nil || pre.Protocol != "kiro" {
+					if hasImage {
+						f.imageCaps.observe(model, modelImageSupported, time.Now())
+					}
+					f.upstream.recordSuccess(model, time.Now())
+					f.health.success(model)
+					f.affinity.set(route.Group.ID, conversationID, model.ID, time.Now())
+					clearAvoidanceScopes(f.avoidance, scopes, model.ID)
+					resp.Body = &observedUpstreamBody{
+						ReadCloser: resp.Body,
+						ctx:        req.Context(),
+						onFailure: func(readErr error) {
+							f.health.failure(model, modelFailureTransport, 0, time.Now())
+							f.upstream.recordFailure(model, time.Now())
+							f.affinity.clear(route.Group.ID, conversationID, model.ID)
+							logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选响应流中断: stage=%d group=%s model=%s error=%v", stageIndex, stage.GroupName, statsModelID(model), readErr), LogMeta{
+								Model: statsModelID(model),
+								Metadata: map[string]interface{}{
+									"stage":         stageIndex,
+									"stage_group":   stage.GroupName,
+									"failure_class": string(modelFailureTransport),
+								},
+							})
+						},
+					}
 				}
+			} else {
+				f.health.neutral(model)
 			}
-			logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选返回可切换错误: group=%s model=%s status=%d", route.Group.Name, statsModelID(model), resp.StatusCode), LogMeta{
-				Model:  statsModelID(model),
-				Status: resp.StatusCode,
-				Metadata: map[string]interface{}{
-					"group_id":      route.Group.ID,
-					"failure_class": string(failureClass),
-					"candidate":     index,
-				},
-			}, bodyDetail)
-			continue
-		}
-		if resp.StatusCode < http.StatusBadRequest && pre != nil && pre.usage != nil {
-			pre.usage.markFirstByte(time.Now())
+
+			// 成功响应，直接返回（不继续尝试后续阶段）
+			stageSuccess = true
+			return f.finalizeForwardResponse(req.Context(), resp, pre, model, logger, contResult, func(outcome converter.StreamOutcome) {
+				now := time.Now()
+				failureClass := modelFailureTransport
+				switch outcome {
+				case converter.StreamOutcomeCompleted:
+					if hasImage {
+						f.imageCaps.observe(model, modelImageSupported, now)
+					}
+					f.upstream.recordSuccess(model, now)
+					f.health.success(model)
+					f.affinity.set(route.Group.ID, conversationID, model.ID, now)
+					clearAvoidanceScopes(f.avoidance, scopes, model.ID)
+					return
+				case converter.StreamOutcomeClientCanceled:
+					f.health.neutral(model)
+					f.upstream.neutral(model, now)
+					return
+				case converter.StreamOutcomeUpstreamProtocolFailure:
+					failureClass = modelFailureUpstream
+				case converter.StreamOutcomeMissingTerminal, converter.StreamOutcomeReadFailure:
+					f.upstream.recordFailure(model, now)
+				}
+				f.health.failure(model, failureClass, 0, now)
+				f.affinity.clear(route.Group.ID, conversationID, model.ID)
+				markAvoidanceScopes(f.avoidance, scopes, model.ID, now)
+				logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选流式终态异常: stage=%d group=%s model=%s outcome=%s", stageIndex, stage.GroupName, statsModelID(model), outcome), LogMeta{
+					Model: statsModelID(model),
+					Metadata: map[string]interface{}{
+						"stage":          stageIndex,
+						"stage_group":    stage.GroupName,
+						"failure_class":  string(failureClass),
+						"stream_outcome": string(outcome),
+					},
+				})
+			})
 		}
 
-		if lastResp != nil {
-			lastResp.Body.Close()
+		// 如果阶段内成功，直接返回，不继续后续阶段
+		if stageSuccess {
+			break
 		}
-		if resp.StatusCode < http.StatusBadRequest {
-			if pre == nil || pre.Protocol != "kiro" {
-				if hasImage {
-					f.imageCaps.observe(model, modelImageSupported, time.Now())
-				}
-				f.upstream.recordSuccess(model, time.Now())
-				f.health.success(model)
-				f.affinity.set(route.Group.ID, conversationID, model.ID, time.Now())
-				clearAvoidanceScopes(f.avoidance, scopes, model.ID)
-				resp.Body = &observedUpstreamBody{
-					ReadCloser: resp.Body,
-					ctx:        req.Context(),
-					onFailure: func(readErr error) {
-						f.health.failure(model, modelFailureTransport, 0, time.Now())
-						f.upstream.recordFailure(model, time.Now())
-						f.affinity.clear(route.Group.ID, conversationID, model.ID)
-						logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选响应流中断: group=%s model=%s error=%v", route.Group.Name, statsModelID(model), readErr), LogMeta{
-							Model: statsModelID(model),
-							Metadata: map[string]interface{}{
-								"group_id":      route.Group.ID,
-								"failure_class": string(modelFailureTransport),
-							},
-						})
-					},
-				}
-			}
-		} else {
-			f.health.neutral(model)
-		}
-		return f.finalizeForwardResponse(req.Context(), resp, pre, model, logger, contResult, func(outcome converter.StreamOutcome) {
-			now := time.Now()
-			failureClass := modelFailureTransport
-			switch outcome {
-			case converter.StreamOutcomeCompleted:
-				if hasImage {
-					f.imageCaps.observe(model, modelImageSupported, now)
-				}
-				f.upstream.recordSuccess(model, now)
-				f.health.success(model)
-				f.affinity.set(route.Group.ID, conversationID, model.ID, now)
-				clearAvoidanceScopes(f.avoidance, scopes, model.ID)
-				return
-			case converter.StreamOutcomeClientCanceled:
-				f.health.neutral(model)
-				f.upstream.neutral(model, now)
-				return
-			case converter.StreamOutcomeUpstreamProtocolFailure:
-				failureClass = modelFailureUpstream
-			case converter.StreamOutcomeMissingTerminal, converter.StreamOutcomeReadFailure:
-				f.upstream.recordFailure(model, now)
-			}
-			f.health.failure(model, failureClass, 0, now)
-			f.affinity.clear(route.Group.ID, conversationID, model.ID)
-			markAvoidanceScopes(f.avoidance, scopes, model.ID, now)
-			logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选流式终态异常: group=%s model=%s outcome=%s", route.Group.Name, statsModelID(model), outcome), LogMeta{
-				Model: statsModelID(model),
-				Metadata: map[string]interface{}{
-					"group_id":       route.Group.ID,
-					"failure_class":  string(failureClass),
-					"stream_outcome": string(outcome),
-				},
-			})
-		})
 	}
 
 	if lastResp != nil && lastModel != nil {

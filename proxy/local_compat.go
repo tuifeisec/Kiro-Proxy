@@ -659,18 +659,20 @@ func parseLocalCompatRequest(body []byte) (localCompatRequest, error) {
 }
 
 func localCompatImageStats(body []byte) (int, int) {
-	var payload interface{}
+	var payload map[string]interface{}
 	if json.Unmarshal(body, &payload) != nil {
 		return 0, 0
 	}
+
 	count := 0
 	bytes := 0
-	var visit func(interface{})
-	visit = func(value interface{}) {
+
+	var visitContent func(interface{})
+	visitContent = func(value interface{}) {
 		switch typed := value.(type) {
 		case []interface{}:
 			for _, item := range typed {
-				visit(item)
+				visitContent(item)
 			}
 		case map[string]interface{}:
 			blockType, _ := typed["type"].(string)
@@ -684,12 +686,36 @@ func localCompatImageStats(body []byte) (int, int) {
 					bytes += localCompatImageValueBytes(source["data"])
 				}
 			}
-			for _, item := range typed {
-				visit(item)
+			// 递归扫描 content 数组（OpenAI 多模态格式 / Anthropic 格式）
+			if content, ok := typed["content"]; ok {
+				visitContent(content)
 			}
 		}
 	}
-	visit(payload)
+
+	// 只扫描协议规定的合法消息内容路径，不扫描 tools/metadata/schema：
+	//   - /v1/chat/completions 和 /v1/messages：messages[].content[]
+	//   - /v1/responses：input[].content[]（字段名是 input，不是 messages）
+	for _, field := range []string{"messages", "input"} {
+		items, ok := payload[field]
+		if !ok {
+			continue
+		}
+		itemArray, ok := items.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, item := range itemArray {
+			itemMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if content, ok := itemMap["content"]; ok {
+				visitContent(content)
+			}
+		}
+	}
+
 	return count, bytes
 }
 

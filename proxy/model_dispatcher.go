@@ -119,21 +119,31 @@ func imageCompatibleCandidates(candidates []*store.Model, hasImage bool, capabil
 	if !hasImage {
 		return candidates, nil
 	}
-	supported := make([]*store.Model, 0, len(candidates))
-	unknown := make([]*store.Model, 0, len(candidates))
+	compatible := make([]*store.Model, 0, len(candidates))
+	degraded := make([]*store.Model, 0)
 	skipped := make([]skippedImageCandidate, 0)
+
 	for _, candidate := range candidates {
 		state, source := capabilities.effective(candidate, now)
-		switch state {
-		case modelImageSupported:
-			supported = append(supported, candidate)
-		case modelImageUnsupported:
+
+		// 只有配置明确为 unsupported 才硬过滤
+		if state == modelImageUnsupported && source == "config" {
 			skipped = append(skipped, skippedImageCandidate{model: candidate, source: source})
-		default:
-			unknown = append(unknown, candidate)
+			continue
 		}
+
+		// observed unsupported 软降级到最后，但仍保留（允许复探）
+		if state == modelImageUnsupported && source == "observed" {
+			degraded = append(degraded, candidate)
+			continue
+		}
+
+		// supported/unknown/auto 保持原顺序（稳定过滤）
+		compatible = append(compatible, candidate)
 	}
-	return append(supported, unknown...), skipped
+
+	// 软降级的候选排在最后，但仍可被尝试
+	return append(compatible, degraded...), skipped
 }
 
 func conversationImageStats(conv *converter.ParsedConversation) (int, int) {

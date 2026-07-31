@@ -128,19 +128,21 @@ func TestImageCompatibleCandidatesUseConfigurationAndObservations(t *testing.T) 
 	configuredUnsupported := &store.Model{ID: "unsupported", ImageInputMode: store.ImageInputUnsupported}
 	capabilities := newModelImageCapabilityStore()
 
+	// 无观察：配置 unsupported 硬过滤，其余按原始顺序稳定保留
 	candidates, skipped := imageCompatibleCandidates(
 		[]*store.Model{auto, configuredUnsupported, configuredSupported},
 		true,
 		capabilities,
 		now,
 	)
-	if len(candidates) != 2 || candidates[0] != configuredSupported || candidates[1] != auto {
-		t.Fatalf("confirmed image model should precede unknown model: %+v", candidates)
+	if len(candidates) != 2 || candidates[0] != auto || candidates[1] != configuredSupported {
+		t.Fatalf("stable order: auto should precede supported (original order preserved): %+v", candidates)
 	}
 	if len(skipped) != 1 || skipped[0].model != configuredUnsupported || skipped[0].source != "config" {
 		t.Fatalf("configured unsupported model was not skipped: %+v", skipped)
 	}
 
+	// 观察到 auto 不支持图片：软降级到末尾，仍保留在 candidates（允许复探）
 	capabilities.observe(auto, modelImageUnsupported, now)
 	candidates, skipped = imageCompatibleCandidates(
 		[]*store.Model{auto, configuredUnsupported, configuredSupported},
@@ -148,13 +150,16 @@ func TestImageCompatibleCandidatesUseConfigurationAndObservations(t *testing.T) 
 		capabilities,
 		now,
 	)
-	if len(candidates) != 1 || candidates[0] != configuredSupported {
-		t.Fatalf("observed unsupported model should be skipped: %+v", candidates)
+	// configuredSupported 保持在前；auto 软降级到末尾但仍在列表中
+	if len(candidates) != 2 || candidates[0] != configuredSupported || candidates[1] != auto {
+		t.Fatalf("observed unsupported should be soft-demoted to end, not hard-skipped: %+v", candidates)
 	}
-	if len(skipped) != 2 {
-		t.Fatalf("expected configured and observed skips, got %+v", skipped)
+	// only config-unsupported goes to skipped; observed-unsupported stays in candidates
+	if len(skipped) != 1 || skipped[0].model != configuredUnsupported {
+		t.Fatalf("only configured unsupported should be in skipped, got %+v", skipped)
 	}
 
+	// 无图片请求：忽略能力标签
 	textCandidates, textSkipped := imageCompatibleCandidates(
 		[]*store.Model{auto, configuredUnsupported, configuredSupported},
 		false,
