@@ -33,10 +33,12 @@ const (
 	statusRetryBaseDelay = time.Second
 	maxRetryDelay        = 10 * time.Second
 	// 网络异常仍只重试一次；快速返回的 502/503/504 最多重试三次。
-	retryBudget          = 125 * time.Second
-	defaultMaxTokens     = 200000
-	affinityCapacityWait = 750 * time.Millisecond
-	firstByteGraceLimit  = 60 * time.Second
+	minimumRetryBudget          = 125 * time.Second
+	defaultMaxTokens            = 200000
+	affinityCapacityWait        = 750 * time.Millisecond
+	firstByteGraceLimit         = 5 * time.Minute
+	singleModelFirstByteTimeout = 5 * time.Minute
+	upstreamReadIdleTimeout     = 5 * time.Minute
 )
 
 // Forwarder 负责转发请求到上游
@@ -57,7 +59,7 @@ type Forwarder struct {
 
 // NewForwarder 创建转发器
 func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
-	client, _ := upstreamproxy.NewClient("", 10*time.Minute)
+	client, _ := upstreamproxy.NewClient("", 0)
 	clients := make(map[string]*http.Client)
 	if client != nil {
 		clients[""] = client
@@ -77,6 +79,78 @@ func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
 	}
 }
 
+func requestWithProtocolFallback(
+	parent context.Context,
+	timeout time.Duration,
+	send func(context.Context) (*http.Response, error),
+	probe responsePrecommitProbe,
+) (*http.Response, time.Duration, error) {
+	startedAt := time.Now()
+	resp, duration, err := requestWithFirstByteTimeout(parent, timeout, send, probe)
+	if err == nil || !upstreamproxy.IsHTTP2Failure(err) || parent.Err() != nil {
+		return resp, duration, err
+	}
+
+	retryTimeout := timeout
+	if timeout > 0 {
+		retryTimeout -= time.Since(startedAt)
+		if retryTimeout <= 0 {
+			return nil, 0, err
+		}
+	}
+	resp, _, retryErr := requestWithFirstByteTimeout(parent, retryTimeout, send, probe)
+	if retryErr != nil {
+		return nil, 0, retryErr
+	}
+	return resp, time.Since(startedAt), nil
+}
+
+func modelGroupRetryBudget(route *router.Route) time.Duration {
+	if route == nil || route.Group == nil {
+		return minimumRetryBudget
+	}
+	stages := route.Stages
+	if len(stages) == 0 {
+		stages = []router.RouteStage{{
+			GroupID:    route.Group.ID,
+			Candidates: route.Candidates,
+		}}
+	}
+
+	budget := time.Duration(0)
+	for _, stage := range stages {
+		group := route.Group
+		if stage.GroupID != "" && stage.GroupID != route.Group.ID {
+			for _, candidateGroup := range route.CandidateGroups {
+				if candidateGroup != nil && candidateGroup.ID == stage.GroupID {
+					group = candidateGroup
+					break
+				}
+			}
+		}
+		attempts := group.MaxAttempts
+		if attempts <= 0 {
+			attempts = 1
+		}
+		if len(stage.Candidates) > 0 && attempts > len(stage.Candidates) {
+			attempts = len(stage.Candidates)
+		}
+		configured := time.Duration(group.FirstByteTimeoutMS) * time.Millisecond
+		if configured <= 0 {
+			configured = 10 * time.Second
+		}
+		perAttempt := configured * 2
+		if perAttempt < configured || perAttempt > firstByteGraceLimit {
+			perAttempt = firstByteGraceLimit
+		}
+		budget += perAttempt * time.Duration(attempts)
+	}
+	if budget < minimumRetryBudget {
+		return minimumRetryBudget
+	}
+	return budget
+}
+
 func (f *Forwarder) clientForProxy(proxyAddr string) (*http.Client, error) {
 	proxyAddr = strings.TrimSpace(proxyAddr)
 
@@ -93,7 +167,7 @@ func (f *Forwarder) clientForProxy(proxyAddr string) (*http.Client, error) {
 		return client, nil
 	}
 
-	client, err := upstreamproxy.NewClient(proxyAddr, 10*time.Minute)
+	client, err := upstreamproxy.NewClient(proxyAddr, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +299,18 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 			return nil, fmt.Errorf("模型 %s 已达到并发上限", statsModelID(model))
 		}
 		bindUsageModel(pre, model)
-		resp, contResult, err := f.forwardCandidate(req.Context(), pre, model, logger, true)
+		var contResult *converter.ResponsesContinuationResult
+		resp, _, err := requestWithProtocolFallback(req.Context(), singleModelFirstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+			var forwardErr error
+			var attemptResp *http.Response
+			attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, singleModelFirstByteTimeout)
+			return attemptResp, forwardErr
+		}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
+			if !isSSEResponse(attemptResp) {
+				return waitForUpstreamFirstByte(attemptResp, remaining)
+			}
+			return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, model.Endpoint, remaining, 0)
+		})
 		if err != nil {
 			lease.release()
 			return nil, err
@@ -273,7 +358,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 		}}
 	}
 
-	deadline := now.Add(retryBudget)
+	deadline := now.Add(modelGroupRetryBudget(route))
 	attempted := 0
 	attemptsByGroup := make(map[string]int)
 	var lastErr error
@@ -446,9 +531,9 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				hasImage,
 				len(stageCandidates),
 			)
-			resp, firstByteDuration, err := requestWithFirstByteTimeout(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+			resp, firstByteDuration, err := requestWithProtocolFallback(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
 				var forwardErr error
-				attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, false)
+				attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, 0)
 				return attemptResp, forwardErr
 			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
 				if !isSSEResponse(attemptResp) {
@@ -710,7 +795,7 @@ func clearAvoidanceScopes(store *modelAvoidanceStore, scopes []string, modelID s
 	}
 }
 
-func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model *store.Model, logger *TrafficLogger, retry bool) (*http.Response, *converter.ResponsesContinuationResult, error) {
+func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model *store.Model, logger *TrafficLogger, retryBudget time.Duration) (*http.Response, *converter.ResponsesContinuationResult, error) {
 	logger.Info("converter", fmt.Sprintf("开始转换: provider=%s, model_id=%s", model.Provider, model.ModelID))
 	conversionStarted := time.Now()
 	upstreamBody, upstreamURL, err := convertRequest(pre, model)
@@ -758,7 +843,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 			sessionID = pre.Conv.ConversationID
 		}
 	}
-	resp, err := f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retry)
+	resp, err := f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retryBudget)
 	if err != nil {
 		return nil, contResult, err
 	}
@@ -774,7 +859,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 			}
 			upstreamBody = contResult.FallbackBody
 			contResult.UsedContinuation = false
-			resp, err = f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retry)
+			resp, err = f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retryBudget)
 			if err != nil {
 				return nil, contResult, err
 			}
@@ -785,9 +870,9 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 	return resp, contResult, nil
 }
 
-func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body []byte, model *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retry bool) (*http.Response, error) {
-	if retry {
-		return f.sendWithRetry(ctx, url, body, model, logger, sessionID, usage)
+func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body []byte, model *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration) (*http.Response, error) {
+	if retryBudget > 0 {
+		return f.sendWithRetryBudget(ctx, url, body, model, logger, sessionID, usage, retryBudget)
 	}
 	return f.doRequest(ctx, url, body, model, sessionID, usage)
 }
@@ -823,6 +908,13 @@ func preserveResponseBody(resp *http.Response) string {
 
 // sendWithRetry 发送请求，失败重试
 func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
+	return f.sendWithRetryBudget(ctx, url, body, m, logger, sessionID, usage, minimumRetryBudget)
+}
+
+func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration) (*http.Response, error) {
+	if retryBudget <= 0 {
+		retryBudget = minimumRetryBudget
+	}
 	lastErr := context.DeadlineExceeded
 	deadline := time.Now().Add(retryBudget)
 	transportRetries := 0
@@ -1045,7 +1137,11 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 		usage.beginAttempt()
 		req = req.WithContext(usage.traceContext(ctx))
 	}
-	return client.Do(req)
+	resp, err := client.Do(req)
+	if err == nil {
+		wrapUpstreamReadIdleTimeout(resp, upstreamReadIdleTimeout)
+	}
+	return resp, err
 }
 
 func truncate(s string, max int) string {

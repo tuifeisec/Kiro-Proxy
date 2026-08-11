@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"io"
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
@@ -324,6 +325,15 @@ func buildKiroTextStreamResponse(req *http.Request, text, modelID string, typewr
 		pw.Write(metaFrame)
 	}()
 
+	return newKiroEventStreamResponse(req, pr)
+}
+
+func buildKiroExceptionStreamResponse(req *http.Request, exceptionType, message string) *http.Response {
+	body := append(converter.InitialResponseFrame(""), converter.ExceptionFrame(exceptionType, message)...)
+	return newKiroEventStreamResponse(req, io.NopCloser(bytes.NewReader(body)))
+}
+
+func newKiroEventStreamResponse(req *http.Request, body io.ReadCloser) *http.Response {
 	resp := &http.Response{
 		StatusCode:    200,
 		Status:        "200 OK",
@@ -331,7 +341,7 @@ func buildKiroTextStreamResponse(req *http.Request, text, modelID string, typewr
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        make(http.Header),
-		Body:          pr,
+		Body:          body,
 		ContentLength: -1,
 		Request:       req,
 	}

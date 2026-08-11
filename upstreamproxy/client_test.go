@@ -6,7 +6,15 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 )
+
+type readErrorBody struct {
+	err error
+}
+
+func (b *readErrorBody) Read([]byte) (int, error) { return 0, b.err }
+func (b *readErrorBody) Close() error             { return nil }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -17,7 +25,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestHandshakeFallbackReplaysBody(t *testing.T) {
 	primaryCalls := 0
 	fallbackCalls := 0
-	transport := &handshakeFallbackTransport{
+	transport := &protocolFallbackTransport{
 		primary: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			primaryCalls++
 			return nil, errors.New("net/http: TLS handshake timeout")
@@ -52,7 +60,7 @@ func TestHandshakeFallbackReplaysBody(t *testing.T) {
 func TestHandshakeFallbackIgnoresOtherErrors(t *testing.T) {
 	fallbackCalls := 0
 	wantErr := errors.New("dial failed")
-	transport := &handshakeFallbackTransport{
+	transport := &protocolFallbackTransport{
 		primary: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return nil, wantErr
 		}),
@@ -72,5 +80,95 @@ func TestHandshakeFallbackIgnoresOtherErrors(t *testing.T) {
 	}
 	if fallbackCalls != 0 {
 		t.Fatalf("fallback calls = %d; want 0", fallbackCalls)
+	}
+}
+
+func TestHTTP2BodyFailureUsesHTTP1ForNextRequest(t *testing.T) {
+	primaryCalls := 0
+	fallbackCalls := 0
+	transport := &protocolFallbackTransport{
+		primary: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			primaryCalls++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				ProtoMajor: 2,
+				Body:       &readErrorBody{err: errors.New("http2: response body closed")},
+				Request:    req,
+			}, nil
+		}),
+		fallback: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			fallbackCalls++
+			return &http.Response{StatusCode: http.StatusOK, ProtoMajor: 1, Body: http.NoBody, Request: req}, nil
+		}),
+	}
+
+	first, err := http.NewRequest(http.MethodPost, "https://example.test/v1/responses", bytes.NewBufferString("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := transport.RoundTrip(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(resp.Body); !IsHTTP2Failure(err) {
+		t.Fatalf("body error = %v, want HTTP/2 failure", err)
+	}
+
+	second, err := http.NewRequest(http.MethodPost, "https://example.test/v1/responses", bytes.NewBufferString("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = transport.RoundTrip(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if primaryCalls != 1 || fallbackCalls != 1 {
+		t.Fatalf("calls = primary %d, fallback %d; want 1/1", primaryCalls, fallbackCalls)
+	}
+}
+
+func TestHTTP2RoundTripFailureReplaysOnHTTP1(t *testing.T) {
+	primaryCalls := 0
+	fallbackCalls := 0
+	transport := &protocolFallbackTransport{
+		primary: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			primaryCalls++
+			return nil, errors.New("http2: client connection lost")
+		}),
+		fallback: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			fallbackCalls++
+			body, err := io.ReadAll(req.Body)
+			if err != nil || string(body) != "payload" {
+				return nil, errors.New("fallback request body mismatch")
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+		}),
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://example.test/v1/responses", bytes.NewBufferString("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if primaryCalls != 1 || fallbackCalls != 1 {
+		t.Fatalf("calls = primary %d, fallback %d; want 1/1", primaryCalls, fallbackCalls)
+	}
+}
+
+func TestStreamingTransportHasLongHeaderTimeoutAndHTTP2Keepalive(t *testing.T) {
+	transport := newTransport(nil, true)
+	if transport.ResponseHeaderTimeout <= time.Minute {
+		t.Fatalf("response header timeout = %v, want more than one minute", transport.ResponseHeaderTimeout)
+	}
+	if transport.HTTP2 == nil || transport.HTTP2.SendPingTimeout <= 0 || transport.HTTP2.PingTimeout <= 0 {
+		t.Fatalf("HTTP/2 keepalive is not configured: %+v", transport.HTTP2)
+	}
+	fallback := newTransport(nil, false)
+	if fallback.Protocols == nil || !fallback.Protocols.HTTP1() || fallback.Protocols.HTTP2() {
+		t.Fatalf("fallback protocols = %v, want HTTP/1 only", fallback.Protocols)
 	}
 }

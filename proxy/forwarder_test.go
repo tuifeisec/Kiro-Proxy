@@ -1,9 +1,12 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"kiro-proxy/converter"
+	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +27,13 @@ type closeTrackingBody struct {
 	closed atomic.Bool
 }
 
+type fixedErrorBody struct {
+	err error
+}
+
+func (b *fixedErrorBody) Read([]byte) (int, error) { return 0, b.err }
+func (b *fixedErrorBody) Close() error             { return nil }
+
 func (b *closeTrackingBody) Close() error {
 	b.closed.Store(true)
 	return nil
@@ -41,6 +51,22 @@ func TestProbeSSEPrecommitClosesBodyWhenContextAlreadyCanceled(t *testing.T) {
 	}
 	if !body.closed.Load() {
 		t.Fatal("probe did not close response body")
+	}
+}
+
+func TestBuildKiroExceptionStreamResponseUsesFailureEvent(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", nil)
+	resp := buildKiroExceptionStreamResponse(req, "upstream_forward_failed", "upstream unavailable")
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read exception stream: %v", err)
+	}
+	if !bytes.Contains(body, []byte("exceptionEvent")) || !bytes.Contains(body, []byte("upstream_forward_failed")) {
+		t.Fatalf("exception event missing: %q", body)
+	}
+	if bytes.Contains(body, []byte("assistantResponseEvent")) || bytes.Contains(body, []byte("metadataEvent")) {
+		t.Fatalf("failure stream contains normal completion frames: %q", body)
 	}
 }
 
@@ -198,6 +224,76 @@ func TestImageAwareFirstByteTimeoutUsesSingleCandidateBudget(t *testing.T) {
 	}
 }
 
+func TestModelGroupRetryBudgetScalesWithConfiguredFirstByteTimeout(t *testing.T) {
+	group := &store.ModelGroup{ID: "group", FirstByteTimeoutMS: 180000, MaxAttempts: 2}
+	route := &router.Route{
+		Group: group,
+		Stages: []router.RouteStage{{
+			GroupID:    group.ID,
+			Candidates: []*store.Model{{ID: "one"}, {ID: "two"}},
+		}},
+	}
+	if got, want := modelGroupRetryBudget(route), 10*time.Minute; got != want {
+		t.Fatalf("retry budget = %v, want %v", got, want)
+	}
+	if singleModelFirstByteTimeout <= time.Minute {
+		t.Fatalf("single model first-byte timeout = %v, want more than one minute", singleModelFirstByteTimeout)
+	}
+}
+
+func TestRequestWithProtocolFallbackRetriesHTTP2PrecommitFailure(t *testing.T) {
+	var attempts atomic.Int32
+	send := func(ctx context.Context) (*http.Response, error) {
+		if attempts.Add(1) == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &fixedErrorBody{err: errors.New("http2: response body closed")},
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")),
+		}, nil
+	}
+
+	resp, _, err := requestWithProtocolFallback(context.Background(), time.Second, send, func(ctx context.Context, resp *http.Response, timeout time.Duration) error {
+		return probeSSEPrecommit(ctx, resp, "openai", "/responses", timeout, 0)
+	})
+	if err != nil {
+		t.Fatalf("protocol fallback failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts.Load())
+	}
+}
+
+func TestStreamIdleTimeoutClosesStalledBody(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   reader,
+	}
+	wrapUpstreamReadIdleTimeout(resp, 20*time.Millisecond)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := resp.Body.Read(make([]byte, 1))
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, errUpstreamReadIdleTimeout) {
+			t.Fatalf("read error = %v, want stream idle timeout", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled stream was not closed")
+	}
+}
+
 func TestSupportedInputTypesFollowImageConfiguration(t *testing.T) {
 	if got := supportedInputTypesForModel(store.Model{ImageInputMode: store.ImageInputUnsupported}); len(got) != 1 || got[0] != "TEXT" {
 		t.Fatalf("unsupported model inputs = %#v", got)
@@ -244,6 +340,52 @@ func TestSendWithRetryRecoversAfterInternalServerError(t *testing.T) {
 	}
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("request count = %d, want 2", got)
+	}
+}
+
+func TestForwardSingleModelPreservesTransientStatusRetry(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "temporary upstream failure", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\"}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+	}))
+	defer server.Close()
+
+	logger, err := NewTrafficLogger("", nil)
+	if err != nil {
+		t.Fatalf("create logger: %v", err)
+	}
+	defer logger.Close()
+	model := &store.Model{
+		ID:       "single-model",
+		ModelID:  "upstream-model",
+		Provider: "openai",
+		BaseURL:  server.URL,
+		Endpoint: "/responses",
+		APIKey:   "test",
+		Enabled:  true,
+	}
+	forwarder := NewForwarder(nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "http://proxy.test/responses", nil)
+	resp, err := forwarder.Forward(req, &Preflight{
+		Body:     []byte(`{"model":"requested","stream":true}`),
+		Protocol: "responses",
+	}, &router.Route{Model: model, Candidates: []*store.Model{model}}, logger)
+	if err != nil {
+		t.Fatalf("single-model forward failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read forwarded response: %v", err)
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("request count = %d, want 2", requests.Load())
 	}
 }
 
@@ -377,7 +519,7 @@ func TestSendWithRetryRetriesSSEFailureBeforeFirstEvent(t *testing.T) {
 	}
 }
 
-func TestSendWithRetryRetriesFailureAfterResponsesMetadata(t *testing.T) {
+func TestSendWithRetryCommitsAfterResponsesMetadata(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -407,10 +549,10 @@ func TestSendWithRetryRetriesFailureAfterResponsesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read committed response: %v", err)
 	}
-	if requests.Load() != 2 {
-		t.Fatalf("request count = %d, want 2", requests.Load())
+	if requests.Load() != 1 {
+		t.Fatalf("request count = %d, want 1", requests.Load())
 	}
-	if !strings.Contains(string(stream), "resp_ok") || !strings.Contains(string(stream), "response.output_text.delta") || strings.Contains(string(stream), "late failure") {
-		t.Fatalf("probe did not replay the complete stream: %s", stream)
+	if !strings.Contains(string(stream), "resp_started") || !strings.Contains(string(stream), "late failure") || strings.Contains(string(stream), "resp_ok") {
+		t.Fatalf("probe did not commit the first live stream: %s", stream)
 	}
 }

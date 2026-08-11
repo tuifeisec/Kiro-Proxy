@@ -144,7 +144,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	var lastPrepared *localCompatPreparedCandidate
 	var lastModel *store.Model
 	var lastErr error
-	deadline := time.Now().Add(retryBudget)
+	deadline := time.Now().Add(modelGroupRetryBudget(route))
 
 	for index, candidate := range candidates {
 		if candidate == nil {
@@ -235,7 +235,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 				len(candidates),
 			)
 			var firstByteDuration time.Duration
-			resp, firstByteDuration, err = requestWithFirstByteTimeout(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+			resp, firstByteDuration, err = requestWithProtocolFallback(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
 				return s.forwarder.doRequest(attemptCtx, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, "local-compat", usageRecord)
 			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
 				if !clientWantsStream || !isSSEResponse(attemptResp) {
@@ -249,7 +249,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 				s.forwarder.latency.record(candidate.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
 			}
 		} else {
-			resp, err = s.forwarder.sendWithRetry(r.Context(), candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, s.logger, "local-compat", usageRecord)
+			resp, err = s.forwarder.sendWithRetryBudget(r.Context(), candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, s.logger, "local-compat", usageRecord, singleModelFirstByteTimeout)
 		}
 		if err != nil {
 			lease.release()

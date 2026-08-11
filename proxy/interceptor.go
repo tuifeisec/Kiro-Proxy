@@ -229,7 +229,11 @@ func (s *Server) setupInterceptor() {
 				},
 			})
 			s.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(route.Model), true)
-			return req, errorResponse(req, http.StatusBadGateway, "upstream error: "+err.Error())
+			return req, buildKiroExceptionStreamResponse(
+				req,
+				"upstream_forward_failed",
+				"模型转发失败："+err.Error(),
+			)
 		}
 		s.rememberMainModel(pre, route)
 

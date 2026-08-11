@@ -152,7 +152,7 @@ function saveGroup() {
     name,
     description: groupDescription.value.trim(),
     enabled: groupEnabled.value,
-    first_byte_timeout_ms: Math.min(60000, Math.max(10000, Math.floor(Number(firstByteTimeoutMs.value) || 10000))),
+    first_byte_timeout_ms: Math.min(300000, Math.max(10000, Math.floor(Number(firstByteTimeoutMs.value) || 10000))),
     max_attempts: Math.min(16, Math.max(1, Math.floor(Number(maxAttempts.value) || 1))),
     fallback_group_id: fallbackGroupID.value || '',
     members: selectedModelIDs.value.map((modelID, priority) => ({
@@ -504,8 +504,8 @@ function memberName(member) {
               <div class="grid gap-3 sm:grid-cols-3">
               <label class="block text-[11px] font-medium text-[#475569]">
                 首字慢阈值（ms）
-                <input v-model.number="firstByteTimeoutMs" type="number" min="10000" max="60000" step="1000" class="mt-1.5 h-9 w-full ui-control bg-white px-3 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" />
-                <span class="mt-1 block font-normal text-[#94a3b8]">10,000-60,000</span>
+                <input v-model.number="firstByteTimeoutMs" type="number" min="10000" max="300000" step="1000" class="mt-1.5 h-9 w-full ui-control bg-white px-3 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" />
+                <span class="mt-1 block font-normal text-[#94a3b8]">10,000-300,000</span>
               </label>
               <label class="block text-[11px] font-medium text-[#475569]">
                 最多尝试次数

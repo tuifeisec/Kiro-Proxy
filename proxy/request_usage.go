@@ -285,6 +285,8 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 		r.traceMu.Unlock()
 		if r.item.FirstByteMS > r.item.ResponseHeaderMS {
 			r.item.StreamWaitMS = r.item.FirstByteMS - r.item.ResponseHeaderMS
+		} else if r.item.FirstByteMS == 0 && r.item.ResponseHeaderMS > 0 && r.item.DurationMS > r.item.ResponseHeaderMS {
+			r.item.StreamWaitMS = r.item.DurationMS - r.item.ResponseHeaderMS
 		}
 		r.item.ErrorMessage = sanitizeUsageError(errorMessage)
 		if err := r.db.InsertRequestUsage(&r.item); err != nil {

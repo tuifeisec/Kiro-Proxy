@@ -229,6 +229,29 @@ func TestModelGroupRejectsAggressiveFirstByteTimeout(t *testing.T) {
 	}
 }
 
+func TestModelGroupAllowsFiveMinuteFirstByteTimeout(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "model-group-long-timeout.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	model := createRoutingModel(t, db, "Slow Reasoning", "slow-reasoning")
+	group := &store.ModelGroup{
+		Name:               "Long First Byte",
+		Enabled:            true,
+		FirstByteTimeoutMS: 300000,
+		Members:            []store.ModelGroupMember{{ModelID: model.ID}},
+	}
+	if err := db.CreateModelGroup(group); err != nil {
+		t.Fatalf("five-minute first byte timeout was rejected: %v", err)
+	}
+	group.FirstByteTimeoutMS = 300001
+	if err := db.UpdateModelGroup(group); err == nil {
+		t.Fatal("expected timeout above five minutes to be rejected")
+	}
+}
+
 func TestModelGroupStatusTracksFirstByteAndConcurrency(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(10 * time.Millisecond)

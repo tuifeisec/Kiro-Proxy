@@ -251,7 +251,7 @@ func classifyResponsesProbeEvent(eventType string, payload map[string]json.RawMe
 		}
 		return false, nil
 	case "response.created", "response.in_progress", "response.queued":
-		return false, nil
+		return true, nil
 	}
 	return false, nil
 }

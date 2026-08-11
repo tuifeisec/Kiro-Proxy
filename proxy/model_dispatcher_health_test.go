@@ -67,7 +67,7 @@ func TestObservedFirstByteTimeoutAddsGraceBeforeDegradation(t *testing.T) {
 	if got := observedFirstByteTimeout(10*time.Second, deadline, now, false); got != 20*time.Second {
 		t.Fatalf("expected observation grace, got %v", got)
 	}
-	if got := observedFirstByteTimeout(40*time.Second, deadline, now, false); got != firstByteGraceLimit {
+	if got := observedFirstByteTimeout(3*time.Minute, now.Add(10*time.Minute), now, false); got != firstByteGraceLimit {
 		t.Fatalf("expected grace cap, got %v", got)
 	}
 	if got := observedFirstByteTimeout(10*time.Second, deadline, now, true); got != 10*time.Second {

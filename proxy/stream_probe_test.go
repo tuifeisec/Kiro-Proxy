@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestReadUntilValidSSEEventBuffersResponsesMetadata(t *testing.T) {
+func TestReadUntilValidSSEEventAcceptsResponsesMetadata(t *testing.T) {
 	stream := "event: response.created\r\ndata: {\"type\":\"response.created\"}\r\n\r\n" +
 		": heartbeat\r\n\r\n" +
 		"event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\r\ndata: \"delta\":\"ok\"}\r\n\r\n"
@@ -20,13 +20,13 @@ func TestReadUntilValidSSEEventBuffersResponsesMetadata(t *testing.T) {
 	}
 }
 
-func TestReadUntilValidSSEEventRejectsFailureAfterMetadata(t *testing.T) {
+func TestReadUntilValidSSEEventCommitsBeforeFailureAfterMetadata(t *testing.T) {
 	stream := "event: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
 		"event: response.failed\ndata: {\"type\":\"response.failed\"}\n\n"
 
 	_, err := readUntilValidSSEEvent(strings.NewReader(stream), sseProbeResponses, len(stream)+1)
-	if !errors.Is(err, errSSEPrecommitUpstream) {
-		t.Fatalf("error = %v, want upstream precommit failure", err)
+	if err != nil {
+		t.Fatalf("metadata should commit the response before the later failure: %v", err)
 	}
 }
 

@@ -171,8 +171,8 @@ func (db *DB) saveModelGroup(group *ModelGroup, create bool) error {
 	if group.FirstByteTimeoutMS == 0 {
 		group.FirstByteTimeoutMS = 10000
 	}
-	if group.FirstByteTimeoutMS < 10000 || group.FirstByteTimeoutMS > 60000 {
-		return fmt.Errorf("first byte timeout must be between 10000 and 60000 milliseconds")
+	if group.FirstByteTimeoutMS < 10000 || group.FirstByteTimeoutMS > 300000 {
+		return fmt.Errorf("first byte timeout must be between 10000 and 300000 milliseconds")
 	}
 	if group.MaxAttempts == 0 {
 		group.MaxAttempts = 4
