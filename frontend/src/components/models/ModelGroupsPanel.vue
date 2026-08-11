@@ -146,6 +146,11 @@ function saveGroup() {
     validationError.value = '请至少选择一个模型'
     return
   }
+  const fallbackGroup = props.groups.find((group) => group.id === fallbackGroupID.value)
+  if (fallbackGroup?.enabled === false) {
+    validationError.value = '回退组已停用，请启用该分组或重新选择'
+    return
+  }
   validationError.value = ''
   emit('save', {
     id: editingID.value,
@@ -277,7 +282,9 @@ function groupConcurrencyText(group) {
 
 function fallbackGroupName(group) {
   if (!group.fallback_group_id) return '无回退组'
-  return props.groups.find((item) => item.id === group.fallback_group_id)?.name || group.fallback_group_id
+  const fallback = props.groups.find((item) => item.id === group.fallback_group_id)
+  if (!fallback) return group.fallback_group_id
+  return `${fallback.name}${fallback.enabled === false ? '（已停用）' : ''}`
 }
 
 function memberName(member) {
@@ -505,18 +512,18 @@ function memberName(member) {
               <label class="block text-[11px] font-medium text-[#475569]">
                 首字慢阈值（ms）
                 <input v-model.number="firstByteTimeoutMs" type="number" min="10000" max="300000" step="1000" class="mt-1.5 h-9 w-full ui-control bg-white px-3 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" />
-                <span class="mt-1 block font-normal text-[#94a3b8]">10,000-300,000</span>
+                <span class="mt-1 block font-normal text-[#94a3b8]">软阈值 10,000-300,000；健康候选通常观察约 2 倍，单一图片候选至少 45 秒</span>
               </label>
               <label class="block text-[11px] font-medium text-[#475569]">
                 最多尝试次数
                 <input v-model.number="maxAttempts" type="number" min="1" max="16" class="mt-1.5 h-9 w-full ui-control bg-white px-3 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" />
-                <span class="mt-1 block font-normal text-[#94a3b8]">1-16 个候选</span>
+                <span class="mt-1 block font-normal text-[#94a3b8]">每个候选最多一次，实际不超过当前组可用成员数</span>
               </label>
               <label class="block text-[11px] font-medium text-[#475569]">
                 候选耗尽回退组
                 <select v-model="fallbackGroupID" class="mt-1.5 h-9 w-full ui-control bg-white px-2 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]">
                   <option value="">不使用回退组</option>
-                  <option v-for="group in groups.filter((item) => item.id !== editingID)" :key="group.id" :value="group.id">{{ group.name }}</option>
+                  <option v-for="group in groups.filter((item) => item.id !== editingID)" :key="group.id" :value="group.id" :disabled="group.enabled === false">{{ group.name }}{{ group.enabled === false ? '（已停用）' : '' }}</option>
                 </select>
                 <span class="mt-1 block font-normal text-[#94a3b8]">当前组耗尽后继续调度</span>
               </label>

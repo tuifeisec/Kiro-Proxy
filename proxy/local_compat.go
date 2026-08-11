@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"kiro-proxy/codex"
+	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"net"
 	"net/http"
@@ -105,11 +106,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		affinityModelID = s.forwarder.affinity.get(route.Group.ID, conversationID, time.Now())
 		scopes = dispatchAvoidanceScopes(route.Group.ID, conversationID, requestClientIP(r))
 	}
-	candidates := orderedRouteCandidates(route, affinityModelID, s.forwarder.avoidance, scopes, time.Now())
-	if route.Group != nil {
-		candidates = s.forwarder.latency.order(candidates, time.Now())
-		candidates = s.forwarder.upstream.order(candidates, time.Now())
-	}
+	candidates := s.orderedLocalCompatCandidates(route, affinityModelID, scopes, time.Now())
 	var skippedImageCandidates []skippedImageCandidate
 	candidates, skippedImageCandidates = imageCompatibleCandidates(candidates, hasImage, s.forwarder.imageCaps, time.Now())
 	groupName := requestMeta.Model
@@ -467,6 +464,33 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		return
 	}
 	s.logger.InfoWithMeta("local-compat", fmt.Sprintf("本地兼容接口完成: api=%s status=%d in=%d out=%d", api, status, usage.InputTokens, usage.OutputTokens), LogMeta{Model: modelKey, Status: status, LatencyMS: time.Since(start).Milliseconds()})
+}
+
+func (s *Server) orderedLocalCompatCandidates(route *router.Route, affinityModelID string, scopes []string, now time.Time) []*store.Model {
+	if route == nil || route.Group == nil || len(route.Stages) == 0 {
+		candidates := orderedRouteCandidates(route, affinityModelID, s.forwarder.avoidance, scopes, now)
+		if route != nil && route.Group != nil {
+			candidates = s.forwarder.latency.order(candidates, now)
+			candidates = s.forwarder.upstream.order(candidates, now)
+		}
+		return candidates
+	}
+
+	candidates := make([]*store.Model, 0, len(route.Candidates))
+	for _, stage := range route.Stages {
+		if len(stage.Candidates) == 0 {
+			continue
+		}
+		stageCandidates := orderedRouteCandidates(&router.Route{
+			Model:      stage.Candidates[0],
+			Candidates: stage.Candidates,
+			Group:      route.Group,
+		}, affinityModelID, s.forwarder.avoidance, scopes, now)
+		stageCandidates = s.forwarder.latency.order(stageCandidates, now)
+		stageCandidates = s.forwarder.upstream.order(stageCandidates, now)
+		candidates = append(candidates, stageCandidates...)
+	}
+	return candidates
 }
 
 func localCompatConversationID(r *http.Request, body []byte, api localCompatAPI) string {
