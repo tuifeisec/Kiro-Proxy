@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -17,6 +20,8 @@ type logsQueryResponse struct {
 	Date  string     `json:"date"`
 	Limit int        `json:"limit"`
 }
+
+const maxLogLineBytes = 16 << 20
 
 // handleLogs 从当前 JSONL 日志文件按统计日期查询日志。
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +69,7 @@ func parseLogsLimit(raw string) int {
 }
 
 func queryLogEntriesByDate(logFile, date string, limit int) ([]LogEntry, error) {
-	if strings.TrimSpace(logFile) == "" {
+	if strings.TrimSpace(logFile) == "" || limit <= 0 {
 		return []LogEntry{}, nil
 	}
 
@@ -77,35 +82,65 @@ func queryLogEntriesByDate(logFile, date string, limit int) ([]LogEntry, error) 
 	}
 	defer f.Close()
 
-	matched := make([]LogEntry, 0, limit)
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), defaultMaxLogDetailBytes+256*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	matched := make([]LogEntry, limit)
+	matchedCount := 0
+	next := 0
+	reader := bufio.NewReaderSize(f, 64*1024)
+	for {
+		line, tooLong, readErr := readLogLine(reader, maxLogLineBytes)
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					break
+				}
+				return nil, fmt.Errorf("扫描日志文件失败: %w", readErr)
+			}
 			continue
 		}
+		if !tooLong {
+			var entry LogEntry
+			if err := json.Unmarshal(line, &entry); err == nil && entryDate(entry) == date {
+				matched[next] = entry
+				next = (next + 1) % limit
+				if matchedCount < limit {
+					matchedCount++
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("扫描日志文件失败: %w", readErr)
+		}
+	}
 
-		var entry LogEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-		if entryDate(entry) != date {
-			continue
-		}
-		matched = append(matched, entry)
+	result := make([]LogEntry, 0, matchedCount)
+	for i := 0; i < matchedCount; i++ {
+		index := (next - 1 - i + limit) % limit
+		result = append(result, matched[index])
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("扫描日志文件失败: %w", err)
-	}
+	return result, nil
+}
 
-	for i, j := 0, len(matched)-1; i < j; i, j = i+1, j-1 {
-		matched[i], matched[j] = matched[j], matched[i]
+func readLogLine(reader *bufio.Reader, limit int) ([]byte, bool, error) {
+	var line []byte
+	tooLong := false
+	for {
+		fragment, isPrefix, err := reader.ReadLine()
+		if !tooLong {
+			if len(line)+len(fragment) > limit {
+				line = nil
+				tooLong = true
+			} else {
+				line = append(line, fragment...)
+			}
+		}
+		if err != nil || !isPrefix {
+			return line, tooLong, err
+		}
 	}
-	if len(matched) > limit {
-		matched = matched[:limit]
-	}
-	return matched, nil
 }
 
 func entryDate(entry LogEntry) string {

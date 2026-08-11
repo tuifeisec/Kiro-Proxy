@@ -17,10 +17,12 @@ import (
 	"kiro-proxy/rules"
 	"kiro-proxy/store"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elazarl/goproxy"
@@ -33,25 +35,31 @@ var upgrader = websocket.Upgrader{
 
 // Server 代理服务器（MITM + Web UI）
 type Server struct {
-	cfg                 *rules.Config
-	proxy               *goproxy.ProxyHttpServer
-	hub                 *Hub
-	logger              *TrafficLogger
-	router              *router.Router
-	forwarder           *Forwarder
-	stats               *store.Stats
-	db                  *store.DB
-	apiServer           *api.Server
-	staticFS            fs.FS // 嵌入的前端静态文件
-	uiServer            *http.Server
-	mitmServer          *http.Server
-	classifierMu        sync.RWMutex
-	conversationModels  map[string]string
-	lastMainModel       string
-	licenseClient       *license.Client
-	responsesFallbackMu sync.Mutex
-	responsesFallback   map[string]fallbackResponseState
-	closeOnce           sync.Once
+	cfg                  *rules.Config
+	proxy                *goproxy.ProxyHttpServer
+	hub                  *Hub
+	logger               *TrafficLogger
+	router               *router.Router
+	forwarder            *Forwarder
+	stats                *store.Stats
+	db                   *store.DB
+	apiServer            *api.Server
+	staticFS             fs.FS // 嵌入的前端静态文件
+	uiServer             *http.Server
+	mitmServer           *http.Server
+	startMu              sync.Mutex
+	serverMu             sync.Mutex
+	uiRunning            atomic.Bool
+	mitmRunning          atomic.Bool
+	closing              atomic.Bool
+	classifierMu         sync.RWMutex
+	conversationModels   map[string]conversationModelEntry
+	conversationPrunedAt time.Time
+	lastMainModel        string
+	licenseClient        *license.Client
+	responsesFallbackMu  sync.Mutex
+	responsesFallback    map[string]fallbackResponseState
+	closeOnce            sync.Once
 }
 
 // NewServer 创建并初始化代理服务器
@@ -97,7 +105,7 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
 		db:                 db,
 		apiServer:          apiSrv,
 		staticFS:           staticFS,
-		conversationModels: make(map[string]string),
+		conversationModels: make(map[string]conversationModelEntry),
 		licenseClient:      license.NewClient(os.Getenv("KIRO_LICENSE_SERVER")),
 		responsesFallback:  make(map[string]fallbackResponseState),
 	}
@@ -113,6 +121,12 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
 //   - :Port      MITM 代理
 //   - :Port+1    Web UI (HTTP + WebSocket)
 func (s *Server) Start() error {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	if s.closing.Load() {
+		return nil
+	}
+
 	log.Printf("[server] BUILD VERSION: 2026-05-30-v10-clean")
 
 	mux := http.NewServeMux()
@@ -156,27 +170,113 @@ func (s *Server) Start() error {
 	}
 	mux.Handle("/", staticHandler)
 
-	uiAddr := fmt.Sprintf(":%d", s.UIPort())
-	mitmAddr := fmt.Sprintf(":%d", s.cfg.Proxy.Port)
-	s.uiServer = &http.Server{Addr: uiAddr, Handler: mux}
-	s.mitmServer = &http.Server{Addr: mitmAddr, Handler: s.proxy}
+	bindHost := s.proxyBindHost()
+	uiAddr := fmt.Sprintf("%s:%d", bindHost, s.UIPort())
+	mitmAddr := fmt.Sprintf("%s:%d", bindHost, s.cfg.Proxy.Port)
+	uiListener, err := net.Listen("tcp", uiAddr)
+	if err != nil {
+		return fmt.Errorf("Web UI 启动失败: %w", err)
+	}
+	mitmListener, err := net.Listen("tcp", mitmAddr)
+	if err != nil {
+		_ = uiListener.Close()
+		return fmt.Errorf("MITM 代理启动失败: %w", err)
+	}
+	if s.closing.Load() {
+		_ = uiListener.Close()
+		_ = mitmListener.Close()
+		return nil
+	}
 
-	errCh := make(chan error, 2)
+	uiServer := newHTTPServer(uiAddr, mux)
+	mitmServer := newHTTPServer(mitmAddr, s.proxy)
+	s.serverMu.Lock()
+	if s.closing.Load() {
+		s.serverMu.Unlock()
+		_ = uiListener.Close()
+		_ = mitmListener.Close()
+		return nil
+	}
+	s.uiServer = uiServer
+	s.mitmServer = mitmServer
+	s.uiRunning.Store(true)
+	s.mitmRunning.Store(true)
+	s.serverMu.Unlock()
+
+	type serveResult struct {
+		name string
+		err  error
+	}
+	resultCh := make(chan serveResult, 2)
 	go func() {
-		log.Printf("[server] Web UI: http://127.0.0.1%s", uiAddr)
-		if err := s.uiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("Web UI 启动失败: %w", err)
+		log.Printf("[server] Web UI: http://%s:%d", s.proxyDisplayHost(), s.UIPort())
+		err := uiServer.Serve(uiListener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
 		}
+		s.uiRunning.Store(false)
+		resultCh <- serveResult{name: "Web UI", err: err}
+	}()
+	go func() {
+		log.Printf("[server] MITM 代理: http://%s:%d", s.proxyDisplayHost(), s.cfg.Proxy.Port)
+		err := mitmServer.Serve(mitmListener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		s.mitmRunning.Store(false)
+		resultCh <- serveResult{name: "MITM 代理", err: err}
 	}()
 
-	go func() {
-		log.Printf("[server] MITM 代理: http://127.0.0.1%s", mitmAddr)
-		if err := s.mitmServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("MITM 代理启动失败: %w", err)
-		}
-	}()
+	first := <-resultCh
+	shutdownHTTPServers(uiServer, mitmServer)
+	second := <-resultCh
 
-	return <-errCh
+	s.serverMu.Lock()
+	if s.uiServer == uiServer {
+		s.uiServer = nil
+	}
+	if s.mitmServer == mitmServer {
+		s.mitmServer = nil
+	}
+	s.serverMu.Unlock()
+	if s.closing.Load() {
+		return nil
+	}
+	if first.err != nil {
+		return fmt.Errorf("%s 异常退出: %w", first.name, first.err)
+	}
+	if second.err != nil {
+		return fmt.Errorf("%s 异常退出: %w", second.name, second.err)
+	}
+	return fmt.Errorf("服务监听器意外停止")
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+}
+
+func shutdownHTTPServers(servers ...*http.Server) {
+	var wg sync.WaitGroup
+	for _, server := range servers {
+		if server == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(server *http.Server) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := server.Shutdown(ctx); err != nil {
+				_ = server.Close()
+			}
+		}(server)
+	}
+	wg.Wait()
 }
 
 // UIPort 返回 Web UI/API 监听端口。
@@ -187,21 +287,15 @@ func (s *Server) UIPort() int {
 // Close 释放资源，并关闭 MITM 与 Web UI HTTP server。
 func (s *Server) Close() {
 	s.closeOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
+		s.closing.Store(true)
+		s.serverMu.Lock()
+		uiServer := s.uiServer
+		mitmServer := s.mitmServer
+		s.serverMu.Unlock()
+		s.hub.Close()
+		shutdownHTTPServers(uiServer, mitmServer)
 
-		if s.uiServer != nil {
-			if err := s.uiServer.Shutdown(ctx); err != nil {
-				log.Printf("[server] Web UI 关闭失败: %v", err)
-			}
-		}
-		if s.mitmServer != nil {
-			if err := s.mitmServer.Shutdown(ctx); err != nil {
-				log.Printf("[server] MITM 代理关闭失败: %v", err)
-			}
-		}
-
-		s.stats.Flush() // 退出前持久化统计
+		s.stats.Close()
 		s.logger.Close()
 	})
 }
@@ -222,35 +316,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 	}()
 
-	// 定时 ping，检测连接是否还活着（窗口关闭后 write 会失败）
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.hub.writeMu.Lock()
-				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				err := conn.WriteMessage(websocket.PingMessage, nil)
-				s.hub.writeMu.Unlock()
-				if err != nil {
-					conn.Close()
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-
 	// 读循环：检测客户端断开
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
 		}
 	}
-	close(done)
 }
 
 // loadCA 将 PEM 格式的 CA 证书和私钥注入 goproxy

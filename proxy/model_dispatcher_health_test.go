@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -22,6 +23,50 @@ func TestModelHealthNeutralReleasesHalfOpenSlot(t *testing.T) {
 	allowed, state = tracker.allow(model, now.Add(modelOpenDuration))
 	if !allowed || state != "half-open" {
 		t.Fatalf("expected cancelled probe slot to be reusable, got allowed=%v state=%q", allowed, state)
+	}
+}
+
+func TestModelAffinityStorePrunesAndCapsEntries(t *testing.T) {
+	store := newModelAffinityStore()
+	now := time.Now()
+	store.set("group", "expired", "model", now.Add(-modelAffinityTTL-time.Second))
+	store.set("group", "current", "model", now)
+	if len(store.entries) != 1 {
+		t.Fatalf("expired affinity was not pruned: %d entries", len(store.entries))
+	}
+
+	for i := 0; i < modelAffinityMaxItems; i++ {
+		store.set("group", "conversation-"+strconv.Itoa(i), "model", now.Add(time.Duration(i+1)*time.Nanosecond))
+	}
+	if len(store.entries) != modelAffinityMaxItems {
+		t.Fatalf("affinity capacity exceeded: %d", len(store.entries))
+	}
+	if got := store.get("group", "current", now); got != "" {
+		t.Fatalf("oldest affinity was not evicted: %q", got)
+	}
+}
+
+func TestConversationModelEntriesArePrunedAndCapped(t *testing.T) {
+	now := time.Now()
+	server := &Server{conversationModels: make(map[string]conversationModelEntry)}
+	server.conversationModels["expired"] = conversationModelEntry{modelName: "old", lastSeen: now.Add(-conversationModelTTL - time.Second)}
+	server.pruneConversationModelsLocked(now)
+	if len(server.conversationModels) != 0 {
+		t.Fatal("expired conversation model was not pruned")
+	}
+
+	for i := 0; i < conversationModelMaxItems; i++ {
+		server.conversationModels["conversation-"+strconv.Itoa(i)] = conversationModelEntry{
+			modelName: "model",
+			lastSeen:  now.Add(time.Duration(i) * time.Nanosecond),
+		}
+	}
+	server.rememberModelName(&Preflight{ConversationID: "latest"}, "model")
+	if len(server.conversationModels) != conversationModelMaxItems {
+		t.Fatalf("conversation model capacity exceeded: %d", len(server.conversationModels))
+	}
+	if _, exists := server.conversationModels["conversation-0"]; exists {
+		t.Fatal("oldest conversation model was not evicted")
 	}
 }
 

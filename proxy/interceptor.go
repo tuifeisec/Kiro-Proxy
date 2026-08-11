@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"kiro-proxy/converter"
@@ -16,6 +17,20 @@ import (
 
 	"github.com/elazarl/goproxy"
 )
+
+const (
+	mitmRequestBodyLimit      = 32 << 20
+	conversationModelTTL      = 24 * time.Hour
+	conversationModelMaxItems = 4096
+	conversationPruneInterval = 5 * time.Minute
+)
+
+type conversationModelEntry struct {
+	modelName string
+	lastSeen  time.Time
+}
+
+var errMITMRequestBodyTooLarge = errors.New("MITM request body too large")
 
 // Preflight 一次解析的结果，贯穿整个请求生命周期
 type Preflight struct {
@@ -29,17 +44,9 @@ type Preflight struct {
 	usage          *requestUsageRecorder
 }
 
-// isKiroConversationRequest 检查 runtime 根路径请求是否具有对话操作的稳定结构。
-// 读取后恢复 body，确保后续解析或原样放行不受影响。
-func isKiroConversationRequest(req *http.Request) bool {
-	if req.Body == nil {
-		return false
-	}
-
-	body, err := io.ReadAll(req.Body)
-	req.Body.Close()
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	if err != nil || len(body) == 0 {
+// isKiroConversationBody 检查 runtime 根路径请求是否具有对话操作的稳定结构。
+func isKiroConversationBody(body []byte) bool {
+	if len(body) == 0 {
 		return false
 	}
 
@@ -71,8 +78,17 @@ func (s *Server) setupInterceptor() {
 		s.logger.Debug("proxy", fmt.Sprintf("%s %s%s", req.Method, host, path))
 
 		protocol := router.DetectProtocol(host, path)
+		var preReadBody []byte
 		if protocol == "kiro-runtime-root" {
-			if req.Method == http.MethodPost && isKiroConversationRequest(req) {
+			if req.Method == http.MethodPost {
+				var err error
+				preReadBody, err = readAndRestoreMITMRequestBody(req)
+				if err != nil {
+					s.logger.Error("interceptor", "读取请求体失败: "+err.Error())
+					return req, errorResponse(req, requestBodyErrorStatus(err), "invalid request body")
+				}
+			}
+			if req.Method == http.MethodPost && isKiroConversationBody(preReadBody) {
 				protocol = "kiro"
 			} else {
 				protocol = "kiro-passthrough"
@@ -87,11 +103,14 @@ func (s *Server) setupInterceptor() {
 		// 抓包模式：只记录不转发，放行到原始服务器
 		if IsCaptureMode() {
 			// 始终记录请求详情；有 body 时读取后恢复，避免影响后续放行。
-			var body []byte
-			if req.Body != nil {
-				body, _ = io.ReadAll(req.Body)
-				req.Body.Close()
-				req.Body = io.NopCloser(bytes.NewReader(body))
+			body := preReadBody
+			if body == nil && req.Body != nil {
+				var err error
+				body, err = readAndRestoreMITMRequestBody(req)
+				if err != nil {
+					s.logger.Error("capture", "读取请求体失败: "+err.Error())
+					return req, errorResponse(req, requestBodyErrorStatus(err), "invalid request body")
+				}
 			}
 			s.logger.Debug("capture", fmt.Sprintf("[请求] %s %s%s", req.Method, host, path), formatCaptureRequestDetail(req, protocol, body))
 			return req, nil // 放行
@@ -140,23 +159,27 @@ func (s *Server) setupInterceptor() {
 		}
 		if protocol == "kiro-passthrough" {
 			// 记录 passthrough 请求体
-			if req.Body != nil {
-				body, _ := io.ReadAll(req.Body)
-				req.Body.Close()
-				req.Body = io.NopCloser(bytes.NewReader(body))
-				if len(body) > 0 {
-					s.logger.Debug("interceptor", fmt.Sprintf("[kiro-passthrough] 请求体: %s %s%s", req.Method, host, path), string(body))
+			body := preReadBody
+			if body == nil && req.Body != nil {
+				var err error
+				body, err = readAndRestoreMITMRequestBody(req)
+				if err != nil {
+					s.logger.Error("interceptor", "读取 passthrough 请求体失败: "+err.Error())
+					return req, errorResponse(req, requestBodyErrorStatus(err), "invalid request body")
 				}
+			}
+			if len(body) > 0 {
+				s.logger.Debug("interceptor", fmt.Sprintf("[kiro-passthrough] 请求体: %s %s%s", req.Method, host, path), string(body))
 			}
 			s.logger.Debug("interceptor", fmt.Sprintf("放行到原始服务器: %s%s", host, path))
 			return req, nil // 不拦截，让请求正常发到 AWS
 		}
 
 		// 一次性读取 body
-		pre, err := s.parseRequest(req, protocol)
+		pre, err := s.parseRequest(req, protocol, preReadBody)
 		if err != nil {
 			s.logger.Error("interceptor", "解析请求失败: "+err.Error())
-			return req, errorResponse(req, http.StatusBadRequest, "invalid request body")
+			return req, errorResponse(req, requestBodyErrorStatus(err), "invalid request body")
 		}
 
 		s.logger.InfoBytes("interceptor", fmt.Sprintf("解析完成: model=%s, classifier=%v, convId=%s",
@@ -252,20 +275,20 @@ func (s *Server) setupInterceptor() {
 }
 
 // parseRequest 一次性读取并解析请求
-func (s *Server) parseRequest(req *http.Request, protocol string) (*Preflight, error) {
+func (s *Server) parseRequest(req *http.Request, protocol string, preReadBody []byte) (*Preflight, error) {
 	pre := &Preflight{
 		Protocol:  protocol,
 		StartTime: time.Now(),
 	}
 
 	// 读取 body
-	if req.Body != nil {
-		body, err := io.ReadAll(req.Body)
-		req.Body.Close()
+	if preReadBody != nil {
+		pre.Body = preReadBody
+	} else if req.Body != nil {
+		body, err := readAndRestoreMITMRequestBody(req)
 		if err != nil {
 			return nil, err
 		}
-		req.Body = io.NopCloser(bytes.NewReader(body))
 		pre.Body = body
 	}
 
@@ -297,6 +320,33 @@ func (s *Server) parseRequest(req *http.Request, protocol string) (*Preflight, e
 		}
 	}
 	return pre, nil
+}
+
+func readAndRestoreMITMRequestBody(req *http.Request) ([]byte, error) {
+	return readAndRestoreMITMRequestBodyWithLimit(req, mitmRequestBodyLimit)
+}
+
+func readAndRestoreMITMRequestBodyWithLimit(req *http.Request, limit int64) ([]byte, error) {
+	if req == nil || req.Body == nil {
+		return nil, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(req.Body, limit+1))
+	_ = req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return body, err
+	}
+	if int64(len(body)) > limit {
+		return body, errMITMRequestBodyTooLarge
+	}
+	return body, nil
+}
+
+func requestBodyErrorStatus(err error) int {
+	if errors.Is(err, errMITMRequestBodyTooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }
 
 // setupCaptureResponse 注册响应拦截器（抓包模式下记录响应）
@@ -377,19 +427,55 @@ func (s *Server) rememberModelName(pre *Preflight, modelName string) {
 	defer s.classifierMu.Unlock()
 
 	if pre.ConversationID != "" {
-		s.conversationModels[pre.ConversationID] = modelName
+		now := time.Now()
+		if s.conversationPrunedAt.IsZero() || now.Sub(s.conversationPrunedAt) >= conversationPruneInterval || len(s.conversationModels) >= conversationModelMaxItems {
+			s.pruneConversationModelsLocked(now)
+			s.conversationPrunedAt = now
+		}
+		if _, exists := s.conversationModels[pre.ConversationID]; !exists && len(s.conversationModels) >= conversationModelMaxItems {
+			s.evictOldestConversationModelLocked()
+		}
+		s.conversationModels[pre.ConversationID] = conversationModelEntry{modelName: modelName, lastSeen: now}
 	}
 	s.lastMainModel = modelName
 }
 
 func (s *Server) mainModelForConversation(conversationID string) string {
-	s.classifierMu.RLock()
-	defer s.classifierMu.RUnlock()
+	s.classifierMu.Lock()
+	defer s.classifierMu.Unlock()
 
 	if conversationID != "" {
-		if model := s.conversationModels[conversationID]; model != "" {
-			return model
+		if entry, exists := s.conversationModels[conversationID]; exists {
+			now := time.Now()
+			if now.Sub(entry.lastSeen) <= conversationModelTTL {
+				entry.lastSeen = now
+				s.conversationModels[conversationID] = entry
+				return entry.modelName
+			}
+			delete(s.conversationModels, conversationID)
 		}
 	}
 	return s.lastMainModel
+}
+
+func (s *Server) pruneConversationModelsLocked(now time.Time) {
+	for conversationID, entry := range s.conversationModels {
+		if now.Sub(entry.lastSeen) > conversationModelTTL {
+			delete(s.conversationModels, conversationID)
+		}
+	}
+}
+
+func (s *Server) evictOldestConversationModelLocked() {
+	oldestID := ""
+	var oldest time.Time
+	for conversationID, entry := range s.conversationModels {
+		if oldestID == "" || entry.lastSeen.Before(oldest) {
+			oldestID = conversationID
+			oldest = entry.lastSeen
+		}
+	}
+	if oldestID != "" {
+		delete(s.conversationModels, oldestID)
+	}
 }

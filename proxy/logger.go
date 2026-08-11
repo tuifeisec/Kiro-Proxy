@@ -54,6 +54,7 @@ type TrafficLogger struct {
 	fileMu         sync.Mutex
 	queueMu        sync.Mutex
 	file           *os.File
+	filePath       string
 	fileSize       int64
 	hub            *Hub
 	seq            int64
@@ -70,7 +71,10 @@ type LogOptions struct {
 	MaxDetailBytes int
 }
 
-const maxTrafficLogBytes int64 = 100 * 1024 * 1024
+const (
+	maxTrafficLogBytes    int64 = 100 * 1024 * 1024
+	maxFullLogDetailBytes       = 16 << 20
+)
 
 func NewTrafficLogger(logFile string, hub *Hub, opts ...LogOptions) (*TrafficLogger, error) {
 	tl := &TrafficLogger{hub: hub}
@@ -86,6 +90,7 @@ func NewTrafficLogger(logFile string, hub *Hub, opts ...LogOptions) (*TrafficLog
 			return nil, fmt.Errorf("读取日志文件信息失败: %w", err)
 		}
 		tl.file = f
+		tl.filePath = logFile
 		tl.fileSize = info.Size()
 	}
 	if tl.file != nil || tl.hub != nil {
@@ -147,15 +152,12 @@ func (tl *TrafficLogger) writeFile(data []byte) {
 
 	entrySize := int64(len(data) + 1)
 	if tl.fileSize+entrySize > maxTrafficLogBytes {
-		if err := tl.file.Truncate(0); err != nil {
-			log.Printf("[logger] 清理超限流量日志失败: %v", err)
-			return
+		if err := tl.rotateFile(); err != nil {
+			log.Printf("[logger] 轮转超限流量日志失败: %v", err)
+			if tl.file == nil {
+				return
+			}
 		}
-		if _, err := tl.file.Seek(0, 0); err != nil {
-			log.Printf("[logger] 重置流量日志写入位置失败: %v", err)
-			return
-		}
-		tl.fileSize = 0
 	}
 
 	n, err := tl.file.Write(append(data, '\n'))
@@ -164,6 +166,44 @@ func (tl *TrafficLogger) writeFile(data []byte) {
 		return
 	}
 	tl.fileSize += int64(n)
+}
+
+func (tl *TrafficLogger) rotateFile() error {
+	if tl.file == nil || tl.filePath == "" {
+		return nil
+	}
+	if err := tl.file.Close(); err != nil {
+		return err
+	}
+	tl.file = nil
+	backupPath := tl.filePath + ".1"
+	reopenCurrent := func() {
+		file, err := os.OpenFile(tl.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return
+		}
+		tl.file = file
+		if info, err := file.Stat(); err == nil {
+			tl.fileSize = info.Size()
+		}
+	}
+	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+		reopenCurrent()
+		return err
+	}
+	if err := os.Rename(tl.filePath, backupPath); err != nil {
+		reopenCurrent()
+		return err
+	}
+	file, err := os.OpenFile(tl.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		_ = os.Rename(backupPath, tl.filePath)
+		reopenCurrent()
+		return err
+	}
+	tl.file = file
+	tl.fileSize = 0
+	return nil
 }
 
 // Log 记录一条日志（推送到 WebSocket + 写文件 + 控制台）
@@ -317,17 +357,21 @@ func firstLogOptions(opts ...LogOptions) LogOptions {
 func (tl *TrafficLogger) prepareDetailString(detail string) string {
 	opts := tl.Options()
 	if opts.DetailMode == "full" {
-		return detail
+		return truncateLogDetail(detail, maxFullLogDetailBytes)
 	}
 	return truncateLogDetail(detail, opts.MaxDetailBytes)
 }
 
 func (tl *TrafficLogger) prepareDetailBytes(detail []byte) string {
 	opts := tl.Options()
-	if opts.DetailMode == "full" || len(detail) <= opts.MaxDetailBytes {
+	limit := opts.MaxDetailBytes
+	if opts.DetailMode == "full" {
+		limit = maxFullLogDetailBytes
+	}
+	if len(detail) <= limit {
 		return string(detail)
 	}
-	return string(detail[:opts.MaxDetailBytes]) + fmt.Sprintf("\n... [truncated log detail: %d -> %d bytes]", len(detail), opts.MaxDetailBytes)
+	return string(detail[:limit]) + fmt.Sprintf("\n... [truncated log detail: %d -> %d bytes]", len(detail), limit)
 }
 
 const defaultMaxLogDetailBytes = 64 * 1024
@@ -363,7 +407,7 @@ func (tl *TrafficLogger) LogWithMetaLazyDetail(level, category, message string, 
 		opts := tl.Options()
 		maxBytes := opts.MaxDetailBytes
 		if opts.DetailMode == "full" {
-			maxBytes = 0
+			maxBytes = maxFullLogDetailBytes
 		}
 		det = detail(maxBytes)
 	}

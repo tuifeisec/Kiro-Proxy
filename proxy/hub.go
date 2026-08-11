@@ -11,60 +11,122 @@ import (
 // Hub 管理所有 WebSocket 连接，负责广播消息
 type Hub struct {
 	mu       sync.RWMutex
-	clients  map[*websocket.Conn]struct{}
-	writeMu  sync.Mutex // 串行化 WriteMessage，避免并发写同一连接 panic
-	lastSeen time.Time  // 最后一次有客户端连接的时间
+	clients  map[*websocket.Conn]*hubClient
+	lastSeen time.Time // 最后一次有客户端连接的时间
+	closed   bool
+	workerWG sync.WaitGroup
+}
+
+type hubClient struct {
+	hub       *Hub
+	conn      *websocket.Conn
+	send      chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:  make(map[*websocket.Conn]struct{}),
+		clients:  make(map[*websocket.Conn]*hubClient),
 		lastSeen: time.Now(),
 	}
 }
 
 func (h *Hub) Register(conn *websocket.Conn) {
+	client := &hubClient{hub: h, conn: conn, send: make(chan []byte, 128), done: make(chan struct{})}
 	h.mu.Lock()
-	h.clients[conn] = struct{}{}
+	if h.closed {
+		h.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
+	h.clients[conn] = client
+	h.workerWG.Add(1)
 	h.lastSeen = time.Now()
 	h.mu.Unlock()
 	log.Printf("[WS] 客户端连接，当前连接数: %d", h.count())
+	go client.run()
 }
 
 func (h *Hub) Unregister(conn *websocket.Conn) {
 	h.mu.Lock()
-	delete(h.clients, conn)
+	client, existed := h.clients[conn]
+	if existed {
+		delete(h.clients, conn)
+	}
 	if len(h.clients) == 0 {
 		h.lastSeen = time.Now()
 	}
 	h.mu.Unlock()
-	log.Printf("[WS] 客户端断开，当前连接数: %d", h.count())
+	if existed {
+		client.close()
+		log.Printf("[WS] 客户端断开，当前连接数: %d", h.count())
+	}
 }
 
 func (h *Hub) Broadcast(data []byte) {
-	// 先拿连接快照，避免长时间持锁
 	h.mu.RLock()
-	conns := make([]*websocket.Conn, 0, len(h.clients))
-	for conn := range h.clients {
-		conns = append(conns, conn)
+	clients := make([]*hubClient, 0, len(h.clients))
+	for _, client := range h.clients {
+		clients = append(clients, client)
 	}
 	h.mu.RUnlock()
 
-	if len(conns) == 0 {
-		return
-	}
-
-	// 串行化写，gorilla websocket 不允许并发写同一连接
-	h.writeMu.Lock()
-	defer h.writeMu.Unlock()
-	for _, conn := range conns {
-		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			// 写失败的连接移除
-			h.Unregister(conn)
-			conn.Close()
+	for _, client := range clients {
+		select {
+		case <-client.done:
+		case client.send <- data:
+		default:
+			// 客户端消费速度持续落后时主动断开，避免影响日志 worker。
+			h.Unregister(client.conn)
 		}
 	}
+}
+
+func (h *Hub) Close() {
+	h.mu.Lock()
+	h.closed = true
+	clients := make([]*hubClient, 0, len(h.clients))
+	for conn, client := range h.clients {
+		delete(h.clients, conn)
+		clients = append(clients, client)
+	}
+	h.lastSeen = time.Now()
+	h.mu.Unlock()
+	for _, client := range clients {
+		client.close()
+	}
+	h.workerWG.Wait()
+}
+
+func (c *hubClient) run() {
+	defer c.hub.workerWG.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		var messageType int
+		var data []byte
+		select {
+		case data = <-c.send:
+			messageType = websocket.TextMessage
+		case <-ticker.C:
+			messageType = websocket.PingMessage
+		case <-c.done:
+			return
+		}
+		_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := c.conn.WriteMessage(messageType, data); err != nil {
+			c.hub.Unregister(c.conn)
+			return
+		}
+	}
+}
+
+func (c *hubClient) close() {
+	c.closeOnce.Do(func() {
+		close(c.done)
+		_ = c.conn.Close()
+	})
 }
 
 // ClientCount 返回当前连接数

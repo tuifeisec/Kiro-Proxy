@@ -31,12 +31,102 @@ type fixedErrorBody struct {
 	err error
 }
 
+type blockingCloseBody struct {
+	closed     chan struct{}
+	closeCalls atomic.Int32
+}
+
 func (b *fixedErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b *fixedErrorBody) Close() error             { return nil }
+
+func (b *blockingCloseBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingCloseBody) Close() error {
+	b.closeCalls.Add(1)
+	select {
+	case <-b.closed:
+	default:
+		close(b.closed)
+	}
+	return nil
+}
 
 func (b *closeTrackingBody) Close() error {
 	b.closed.Store(true)
 	return nil
+}
+
+func TestReadUpstreamErrorBodyWithLimits(t *testing.T) {
+	t.Run("small body", func(t *testing.T) {
+		body := &closeTrackingBody{Reader: strings.NewReader("upstream error")}
+		got, err := readUpstreamErrorBodyWithLimits(body, 1024, time.Second)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if string(got) != "upstream error" {
+			t.Fatalf("unexpected body: %q", got)
+		}
+		if !body.closed.Load() {
+			t.Fatal("body was not closed")
+		}
+	})
+
+	t.Run("size limit", func(t *testing.T) {
+		body := &closeTrackingBody{Reader: strings.NewReader("123456")}
+		got, err := readUpstreamErrorBodyWithLimits(body, 5, time.Second)
+		if !errors.Is(err, errUpstreamErrorBodyTooLarge) {
+			t.Fatalf("expected size error, got %v", err)
+		}
+		if string(got) != "12345" {
+			t.Fatalf("unexpected truncated body: %q", got)
+		}
+	})
+
+	t.Run("timeout closes body", func(t *testing.T) {
+		body := &blockingCloseBody{closed: make(chan struct{})}
+		started := time.Now()
+		_, err := readUpstreamErrorBodyWithLimits(body, 1024, 20*time.Millisecond)
+		if !errors.Is(err, errUpstreamErrorBodyTimeout) {
+			t.Fatalf("expected timeout error, got %v", err)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("timeout did not unblock read promptly: %v", elapsed)
+		}
+		if calls := body.closeCalls.Load(); calls != 1 {
+			t.Fatalf("body close called %d times", calls)
+		}
+	})
+}
+
+func TestReadAndRestoreMITMRequestBodyWithLimit(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://example.com", strings.NewReader("123456"))
+	body, err := readAndRestoreMITMRequestBodyWithLimit(req, 5)
+	if !errors.Is(err, errMITMRequestBodyTooLarge) {
+		t.Fatalf("expected request body size error, got %v", err)
+	}
+	if string(body) != "123456" {
+		t.Fatalf("unexpected captured body: %q", body)
+	}
+	restored, readErr := io.ReadAll(req.Body)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(restored) != "123456" {
+		t.Fatalf("request body was not restored: %q", restored)
+	}
+}
+
+func TestIsKiroConversationBody(t *testing.T) {
+	body := []byte(`{"conversationState":{"currentMessage":{"userInputMessage":{"content":"hello"}}}}`)
+	if !isKiroConversationBody(body) {
+		t.Fatal("valid Kiro runtime request was not detected")
+	}
+	if isKiroConversationBody([]byte(`{"conversationState":{}}`)) {
+		t.Fatal("incomplete runtime request was detected as a conversation")
+	}
 }
 
 func TestProbeSSEPrecommitClosesBodyWhenContextAlreadyCanceled(t *testing.T) {

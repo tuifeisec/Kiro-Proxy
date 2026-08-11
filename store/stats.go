@@ -7,6 +7,8 @@
 package store
 
 import (
+	"errors"
+	"log"
 	"math"
 	"sort"
 	"strconv"
@@ -26,7 +28,14 @@ type Stats struct {
 	CreditsBits   atomic.Uint64 // float64 bits
 	startTime     time.Time
 	db            *DB
-	dirty         atomic.Bool // 是否有未持久化的变更
+	revision      atomic.Uint64
+	flushed       atomic.Uint64
+	flushMu       sync.Mutex
+	recordMu      sync.RWMutex
+	pendingClear  atomic.Bool
+	stop          chan struct{}
+	workerWG      sync.WaitGroup
+	closeOnce     sync.Once
 
 	// 按日期+模型的详细统计（内存中维护，定期刷盘）
 	dailyMu    sync.Mutex
@@ -52,6 +61,7 @@ func NewStats(db *DB) *Stats {
 		startTime:  time.Now(),
 		db:         db,
 		dailyStats: make(map[string]*DailyModelStats),
+		stop:       make(chan struct{}),
 	}
 	s.loadFromDB()
 	s.startAutoSave()
@@ -117,12 +127,19 @@ func (s *Stats) startAutoSave() {
 	if s.db == nil {
 		return
 	}
+	s.workerWG.Add(1)
 	go func() {
+		defer s.workerWG.Done()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			if s.dirty.CompareAndSwap(true, false) {
-				s.Flush()
+		for {
+			select {
+			case <-ticker.C:
+				if s.revision.Load() != s.flushed.Load() {
+					s.Flush()
+				}
+			case <-s.stop:
+				return
 			}
 		}
 	}()
@@ -133,16 +150,48 @@ func (s *Stats) Flush() {
 	if s.db == nil {
 		return
 	}
-	s.db.SetSetting("stat_total_requests", strconv.FormatInt(s.TotalRequests.Load(), 10))
-	s.db.SetSetting("stat_total_errors", strconv.FormatInt(s.TotalErrors.Load(), 10))
-	s.db.SetSetting("stat_input_tokens", strconv.FormatInt(s.InputTokens.Load(), 10))
-	s.db.SetSetting("stat_output_tokens", strconv.FormatInt(s.OutputTokens.Load(), 10))
-	s.db.SetSetting("stat_cache_read", strconv.FormatInt(s.CacheRead.Load(), 10))
-	s.db.SetSetting("stat_cache_write", strconv.FormatInt(s.CacheWrite.Load(), 10))
-	s.db.SetSetting("stat_credits", strconv.FormatFloat(s.loadCredits(), 'f', 6, 64))
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	revision := s.revision.Load()
+	if s.pendingClear.Load() {
+		if err := s.db.ClearDailyStats(); err != nil {
+			log.Printf("[stats] 清空日统计重试失败，将在下次周期重试: %v", err)
+			return
+		}
+		s.pendingClear.Store(false)
+	}
+
+	settings := map[string]string{
+		"stat_total_requests": strconv.FormatInt(s.TotalRequests.Load(), 10),
+		"stat_total_errors":   strconv.FormatInt(s.TotalErrors.Load(), 10),
+		"stat_input_tokens":   strconv.FormatInt(s.InputTokens.Load(), 10),
+		"stat_output_tokens":  strconv.FormatInt(s.OutputTokens.Load(), 10),
+		"stat_cache_read":     strconv.FormatInt(s.CacheRead.Load(), 10),
+		"stat_cache_write":    strconv.FormatInt(s.CacheWrite.Load(), 10),
+		"stat_credits":        strconv.FormatFloat(s.loadCredits(), 'f', 6, 64),
+	}
+	var flushErr error
+	for key, value := range settings {
+		if err := s.db.SetSetting(key, value); err != nil {
+			flushErr = errors.Join(flushErr, err)
+		}
+	}
 
 	// 刷盘日统计
-	s.flushDailyStats()
+	flushErr = errors.Join(flushErr, s.flushDailyStats())
+	if flushErr != nil {
+		log.Printf("[stats] 持久化失败，将在下次周期重试: %v", flushErr)
+		return
+	}
+	s.flushed.Store(revision)
+}
+
+func (s *Stats) Close() {
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		s.workerWG.Wait()
+		s.Flush()
+	})
 }
 
 // RecordRequest 记录一次请求完成（含缓存 token）
@@ -156,6 +205,9 @@ func (s *Stats) RecordRequestFull(inputTokens, outputTokens, cacheRead, cacheWri
 }
 
 func (s *Stats) RecordRequestFullWithCredits(inputTokens, outputTokens, cacheRead, cacheWrite int, credits float64, modelID string, isError bool) {
+	s.recordMu.RLock()
+	defer s.recordMu.RUnlock()
+
 	s.TotalRequests.Add(1)
 	if isError {
 		s.TotalErrors.Add(1)
@@ -165,7 +217,6 @@ func (s *Stats) RecordRequestFullWithCredits(inputTokens, outputTokens, cacheRea
 	s.CacheRead.Add(int64(cacheRead))
 	s.CacheWrite.Add(int64(cacheWrite))
 	s.addCredits(credits)
-	s.dirty.Store(true)
 
 	// 按日期+模型记录
 	if modelID != "" {
@@ -189,10 +240,11 @@ func (s *Stats) RecordRequestFullWithCredits(inputTokens, outputTokens, cacheRea
 		ds.Credits += credits
 		s.dailyMu.Unlock()
 	}
+	s.revision.Add(1)
 }
 
 // flushDailyStats 将内存中的增量日统计写入数据库
-func (s *Stats) flushDailyStats() {
+func (s *Stats) flushDailyStats() error {
 	today := statsDay(time.Now())
 
 	s.dailyMu.Lock()
@@ -220,9 +272,28 @@ func (s *Stats) flushDailyStats() {
 	}
 	s.dailyMu.Unlock()
 
-	for _, ds := range snapshot {
-		s.db.UpsertDailyStats(ds)
+	var flushErr error
+	for key, ds := range snapshot {
+		if err := s.db.UpsertDailyStats(ds); err != nil {
+			flushErr = errors.Join(flushErr, err)
+			s.dailyMu.Lock()
+			current := s.dailyStats[key]
+			if current == nil {
+				copyStats := *ds
+				s.dailyStats[key] = &copyStats
+			} else {
+				current.Requests += ds.Requests
+				current.Errors += ds.Errors
+				current.InputTokens += ds.InputTokens
+				current.OutputTokens += ds.OutputTokens
+				current.CacheRead += ds.CacheRead
+				current.CacheWrite += ds.CacheWrite
+				current.Credits += ds.Credits
+			}
+			s.dailyMu.Unlock()
+		}
 	}
+	return flushErr
 }
 
 // Snapshot 返回当前统计快照
@@ -265,6 +336,11 @@ func cacheHitRatio(cacheRead, inputTokens int64) float64 {
 
 // Clear 清空累计统计和按日模型统计。
 func (s *Stats) Clear() error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	s.recordMu.Lock()
+	defer s.recordMu.Unlock()
+
 	s.TotalRequests.Store(0)
 	s.TotalErrors.Store(0)
 	s.InputTokens.Store(0)
@@ -276,11 +352,14 @@ func (s *Stats) Clear() error {
 	s.dailyMu.Lock()
 	s.dailyStats = make(map[string]*DailyModelStats)
 	s.dailyMu.Unlock()
+	revision := s.revision.Add(1)
 
 	if s.db == nil {
-		s.dirty.Store(false)
+		s.pendingClear.Store(false)
+		s.flushed.Store(revision)
 		return nil
 	}
+	s.pendingClear.Store(true)
 
 	keys := []string{
 		"stat_total_requests",
@@ -293,15 +372,14 @@ func (s *Stats) Clear() error {
 	}
 	for _, key := range keys {
 		if err := s.db.SetSetting(key, "0"); err != nil {
-			s.dirty.Store(true)
 			return err
 		}
 	}
 	if err := s.db.ClearDailyStats(); err != nil {
-		s.dirty.Store(true)
 		return err
 	}
-	s.dirty.Store(false)
+	s.pendingClear.Store(false)
+	s.flushed.Store(revision)
 	return nil
 }
 

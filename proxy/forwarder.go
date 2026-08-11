@@ -39,6 +39,13 @@ const (
 	firstByteGraceLimit         = 5 * time.Minute
 	singleModelFirstByteTimeout = 5 * time.Minute
 	upstreamReadIdleTimeout     = 5 * time.Minute
+	upstreamErrorBodyTimeout    = 10 * time.Second
+	upstreamErrorBodyLimit      = 1 << 20
+)
+
+var (
+	errUpstreamErrorBodyTimeout  = errors.New("upstream error response body timeout")
+	errUpstreamErrorBodyTooLarge = errors.New("upstream error response body too large")
 )
 
 // Forwarder 负责转发请求到上游
@@ -849,8 +856,10 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 	}
 
 	if contResult != nil && contResult.UsedContinuation && resp.StatusCode >= 400 && resp.StatusCode < 500 {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		body, readErr := readUpstreamErrorBody(resp.Body)
+		if readErr != nil {
+			logger.Warn("forwarder", fmt.Sprintf("读取续传错误响应受限: %v", readErr))
+		}
 		bodyStr := string(body)
 		if shouldRetryWithoutContinuation(bodyStr) {
 			logger.Warn("forwarder", fmt.Sprintf("续传请求被上游拒绝，清理状态并回退全量: %s", truncate(bodyStr, 200)))
@@ -899,11 +908,42 @@ func preserveResponseBody(resp *http.Response) string {
 	if resp == nil || resp.Body == nil {
 		return ""
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
+	body, _ := readUpstreamErrorBody(resp.Body)
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	resp.ContentLength = int64(len(body))
 	return truncate(string(body), 500)
+}
+
+func readUpstreamErrorBody(body io.ReadCloser) ([]byte, error) {
+	return readUpstreamErrorBodyWithLimits(body, upstreamErrorBodyLimit, upstreamErrorBodyTimeout)
+}
+
+func readUpstreamErrorBodyWithLimits(body io.ReadCloser, limit int64, timeout time.Duration) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+
+	timedOut := make(chan struct{})
+	timer := time.AfterFunc(timeout, func() {
+		close(timedOut)
+		_ = body.Close()
+	})
+	data, readErr := io.ReadAll(io.LimitReader(body, limit+1))
+	timerStopped := timer.Stop()
+	if timerStopped {
+		_ = body.Close()
+	} else {
+		<-timedOut
+	}
+
+	if int64(len(data)) > limit {
+		data = data[:limit]
+		return data, errUpstreamErrorBodyTooLarge
+	}
+	if !timerStopped {
+		return data, errUpstreamErrorBodyTimeout
+	}
+	return data, readErr
 }
 
 // sendWithRetry 发送请求，失败重试

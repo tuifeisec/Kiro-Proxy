@@ -39,8 +39,8 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 	proxyPort := s.cfg.Proxy.Port
 	uiPort := s.UIPort()
 	snapshot := s.stats.Snapshot()
-	proxyRunning := s.mitmServer != nil
-	uiRunning := true
+	proxyRunning := s.mitmRunning.Load()
+	uiRunning := s.uiRunning.Load()
 
 	json.NewEncoder(w).Encode(serviceStatusResp{
 		Running:           proxyRunning && uiRunning,

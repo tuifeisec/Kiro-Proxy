@@ -20,6 +20,8 @@ const (
 	modelFailureThreshold  = 3
 	modelOpenDuration      = 60 * time.Second
 	modelAffinityTTL       = 2 * time.Hour
+	modelAffinityMaxItems  = 4096
+	modelAffinityPruneTime = 5 * time.Minute
 	modelAvoidanceTTL      = 2 * time.Minute
 	modelAvoidanceFailures = 2
 	imageCapabilityTTL     = 6 * time.Hour
@@ -326,8 +328,9 @@ type modelAffinityEntry struct {
 }
 
 type modelAffinityStore struct {
-	mu      sync.Mutex
-	entries map[string]modelAffinityEntry
+	mu           sync.Mutex
+	entries      map[string]modelAffinityEntry
+	lastPrunedAt time.Time
 }
 
 type modelLoadTracker struct {
@@ -560,7 +563,27 @@ func (s *modelAffinityStore) set(groupID, conversationID, modelID string, now ti
 		return
 	}
 	s.mu.Lock()
-	s.entries[groupID+"|"+conversationID] = modelAffinityEntry{modelID: modelID, expiresAt: now.Add(modelAffinityTTL)}
+	key := groupID + "|" + conversationID
+	if s.lastPrunedAt.IsZero() || now.Sub(s.lastPrunedAt) >= modelAffinityPruneTime || len(s.entries) >= modelAffinityMaxItems {
+		for entryKey, entry := range s.entries {
+			if !now.Before(entry.expiresAt) {
+				delete(s.entries, entryKey)
+			}
+		}
+		s.lastPrunedAt = now
+	}
+	if _, exists := s.entries[key]; !exists && len(s.entries) >= modelAffinityMaxItems {
+		oldestKey := ""
+		var oldestExpiry time.Time
+		for entryKey, entry := range s.entries {
+			if oldestKey == "" || entry.expiresAt.Before(oldestExpiry) {
+				oldestKey = entryKey
+				oldestExpiry = entry.expiresAt
+			}
+		}
+		delete(s.entries, oldestKey)
+	}
+	s.entries[key] = modelAffinityEntry{modelID: modelID, expiresAt: now.Add(modelAffinityTTL)}
 	s.mu.Unlock()
 }
 

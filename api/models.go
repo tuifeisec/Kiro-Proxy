@@ -194,6 +194,42 @@ func isMasked(key string) bool {
 
 var codexOAuthSessions sync.Map
 
+const (
+	codexOAuthSessionTTL      = 10 * time.Minute
+	codexOAuthSessionMaxItems = 256
+)
+
+func storeCodexOAuthSession(session *codex.OAuthSession) {
+	now := time.Now()
+	type storedSession struct {
+		state     string
+		createdAt time.Time
+	}
+	active := make([]storedSession, 0, codexOAuthSessionMaxItems)
+	codexOAuthSessions.Range(func(key, value interface{}) bool {
+		state, stateOK := key.(string)
+		stored, sessionOK := value.(*codex.OAuthSession)
+		if !stateOK || !sessionOK || now.Sub(stored.CreatedAt) > codexOAuthSessionTTL {
+			codexOAuthSessions.Delete(key)
+			return true
+		}
+		active = append(active, storedSession{state: state, createdAt: stored.CreatedAt})
+		return true
+	})
+	for len(active) >= codexOAuthSessionMaxItems {
+		oldest := 0
+		for i := 1; i < len(active); i++ {
+			if active[i].createdAt.Before(active[oldest].createdAt) {
+				oldest = i
+			}
+		}
+		codexOAuthSessions.Delete(active[oldest].state)
+		active[oldest] = active[len(active)-1]
+		active = active[:len(active)-1]
+	}
+	codexOAuthSessions.Store(session.State, session)
+}
+
 func (s *Server) handleStartCodexOAuth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -204,7 +240,7 @@ func (s *Server) handleStartCodexOAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "创建 Codex OAuth 会话失败: "+err.Error())
 		return
 	}
-	codexOAuthSessions.Store(session.State, session)
+	storeCodexOAuthSession(session)
 	writeOK(w, codex.OAuthStart{State: session.State, AuthURL: authURL})
 }
 
@@ -252,7 +288,7 @@ func (s *Server) handleExchangeCodexOAuth(w http.ResponseWriter, r *http.Request
 		return
 	}
 	session, ok := rawSession.(*codex.OAuthSession)
-	if !ok || time.Since(session.CreatedAt) > 10*time.Minute {
+	if !ok || time.Since(session.CreatedAt) > codexOAuthSessionTTL {
 		codexOAuthSessions.Delete(state)
 		writeError(w, http.StatusBadRequest, "Codex OAuth 会话已过期，请重新生成授权链接")
 		return

@@ -17,8 +17,10 @@ import (
 // wrapKiroStream 将上游 SSE 流包装为 Kiro AWS Event Stream
 func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre *Preflight, m *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult, onStreamOutcome func(converter.StreamOutcome)) (*http.Response, error) {
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		body, readErr := readUpstreamErrorBody(resp.Body)
+		if readErr != nil {
+			logger.Warn("forwarder", fmt.Sprintf("读取上游错误响应受限: %v", readErr))
+		}
 		logger.ErrorWithMeta("forwarder", fmt.Sprintf("上游错误 %d", resp.StatusCode), LogMeta{
 			Model:     statsModelID(m),
 			Status:    resp.StatusCode,
