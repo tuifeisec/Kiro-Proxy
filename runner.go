@@ -57,7 +57,14 @@ func startApp(configFile string, port int, dbPath string) (*appRunner, error) {
 	}
 
 	var staticFS fs.FS = frontendFS
-	srv := proxy.NewServer(cfg, db, staticFS)
+	srv, err := proxy.NewServer(cfg, db, staticFS)
+	if err != nil {
+		db.Close()
+		if logFile != nil {
+			logFile.Close()
+		}
+		return nil, fmt.Errorf("代理服务器初始化失败: %w", err)
+	}
 	runner := &appRunner{db: db, server: srv, logFile: logFile}
 
 	fmt.Printf(`

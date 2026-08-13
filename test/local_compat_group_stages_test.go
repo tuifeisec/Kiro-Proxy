@@ -78,7 +78,10 @@ func TestLocalCompatFallbackAffinityDoesNotBypassPrimaryGroup(t *testing.T) {
 	cfg := rules.DefaultConfig()
 	cfg.Proxy.Port = proxyPort
 	cfg.Proxy.LogFile = ""
-	server := proxy.NewServer(cfg, db, nil)
+	server, err := proxy.NewServer(cfg, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	startResult := make(chan error, 1)
 	go func() { startResult <- server.Start() }()
 	defer func() {

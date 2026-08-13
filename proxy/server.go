@@ -16,6 +16,7 @@ import (
 	"kiro-proxy/router"
 	"kiro-proxy/rules"
 	"kiro-proxy/store"
+	"kiro-proxy/upstreamproxy"
 	"log"
 	"net"
 	"net/http"
@@ -64,7 +65,7 @@ type Server struct {
 
 // NewServer 创建并初始化代理服务器
 // staticFS 传入嵌入的 frontend/dist 文件系统，nil 时回退到磁盘
-func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
+func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) (*Server, error) {
 	stats := store.NewStats(db)
 	hub := NewHub()
 
@@ -82,6 +83,14 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
 
 	p := goproxy.NewProxyHttpServer()
 	p.Verbose = cfg.Proxy.Verbose
+	if rawProxyURL := strings.TrimSpace(cfg.Proxy.ForwardProxyURL); rawProxyURL != "" {
+		forwardProxyURL, err := upstreamproxy.ParseProxyURL(rawProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("无效的放行流量出站代理地址 %q: %w", rawProxyURL, err)
+		}
+		p.Tr.Proxy = http.ProxyURL(forwardProxyURL)
+		log.Printf("[server] 放行流量出站代理: %s://%s", forwardProxyURL.Scheme, forwardProxyURL.Host)
+	}
 
 	// 加载自定义 CA
 	if err := loadCA(p, "certs/ca.crt", "certs/ca.key"); err != nil {
@@ -114,7 +123,7 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) *Server {
 	srv.setupInterceptor()
 	srv.setupCaptureResponse()
 
-	return srv
+	return srv, nil
 }
 
 // Start 启动两个服务：

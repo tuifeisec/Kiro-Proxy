@@ -16,6 +16,8 @@ type ProxyConfig struct {
 	LogFile    string `yaml:"log_file"`
 	LogDetail  string `yaml:"log_detail"`   // summary | full
 	LogMaxBody int    `yaml:"log_max_body"` // summary 模式下 detail 最大字节数
+	// ForwardProxyURL 仅用于经过 MITM 放行的认证、遥测等请求。
+	ForwardProxyURL string `yaml:"forward_proxy_url"`
 }
 
 func LoadConfig(path string) (*Config, error) {
