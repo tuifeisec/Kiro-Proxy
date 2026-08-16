@@ -283,23 +283,40 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 	}
 	if route.Group == nil {
 		model := route.Model
-		imageCount, imageBytes := 0, 0
+		imageState := conversationImageState{}
 		if pre != nil {
-			imageCount, imageBytes = conversationImageStats(pre.Conv)
+			imageState = analyzeConversationImages(pre.Conv)
 		}
-		hasImage := imageCount > 0
 		imageCapability, capabilitySource := f.imageCaps.effective(model, time.Now())
+		candidateView := candidateConversationForModel(pre, imageState, imageCapability)
+		hasImage := candidateView.imageCount > 0
 		if hasImage && imageCapability == modelImageUnsupported {
 			logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过不支持图片的模型: model=%s", statsModelID(model)), LogMeta{
 				Model: statsModelID(model),
 				Metadata: map[string]interface{}{
-					"has_image":         true,
-					"image_count":       imageCount,
-					"image_bytes":       imageBytes,
-					"capability_source": capabilitySource,
+					"has_image":                       true,
+					"image_count":                     candidateView.imageCount,
+					"image_bytes":                     candidateView.imageBytes,
+					"current_image_count":             imageState.currentCount,
+					"pending_history_image_count":     imageState.pendingHistoryCount,
+					"projectable_history_image_count": imageState.projectableHistoryCount,
+					"history_view":                    candidateView.historyView,
+					"capability_source":               capabilitySource,
 				},
 			})
 			return nil, fmt.Errorf("模型 %s 不支持图片输入", statsModelID(model))
+		}
+		if candidateView.projectedImageCount > 0 {
+			logger.InfoWithMeta("dispatcher", fmt.Sprintf("文本模型使用历史图片投影视图: model=%s", statsModelID(model)), LogMeta{
+				Model: statsModelID(model),
+				Metadata: map[string]interface{}{
+					"history_view":                    candidateView.historyView,
+					"projected_image_count":           candidateView.projectedImageCount,
+					"projected_image_bytes":           candidateView.projectedImageBytes,
+					"conversation_image_count":        imageState.totalCount(),
+					"projectable_history_image_count": imageState.projectableHistoryCount,
+				},
+			})
 		}
 		lease, acquired := f.load.acquire(model.ID, route.CandidateLimits[model.ID])
 		if !acquired {
@@ -310,7 +327,7 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 		resp, _, err := requestWithProtocolFallback(req.Context(), singleModelFirstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
 			var forwardErr error
 			var attemptResp *http.Response
-			attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, singleModelFirstByteTimeout)
+			attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, candidateView.pre, model, logger, singleModelFirstByteTimeout)
 			return attemptResp, forwardErr
 		}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
 			if !isSSEResponse(attemptResp) {
@@ -344,13 +361,15 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 
 func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
 	now := time.Now()
-	imageCount, imageBytes := 0, 0
+	imageState := conversationImageState{}
 	conversationID := ""
 	if pre != nil && pre.Conv != nil {
 		conversationID = pre.Conv.ConversationID
-		imageCount, imageBytes = conversationImageStats(pre.Conv)
+		imageState = analyzeConversationImages(pre.Conv)
 	}
-	hasImage := imageCount > 0
+	imageCount := imageState.totalCount()
+	imageBytes := imageState.totalBytes()
+	requiresVision := imageState.requiresVision()
 	affinityModelID := f.affinity.get(route.Group.ID, conversationID, now)
 	scopes := dispatchAvoidanceScopes(route.Group.ID, conversationID, requestClientIP(req))
 
@@ -407,23 +426,27 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 		stageCandidates = f.latency.order(stageCandidates, now)
 		stageCandidates = f.upstream.order(stageCandidates, now)
 		var skippedImageCandidates []skippedImageCandidate
-		stageCandidates, skippedImageCandidates = imageCompatibleCandidates(stageCandidates, hasImage, f.imageCaps, now)
+		if requiresVision {
+			stageCandidates, skippedImageCandidates = imageCompatibleCandidates(stageCandidates, true, f.imageCaps, now)
+		}
 
 		for _, skipped := range skippedImageCandidates {
 			logger.InfoWithMeta("dispatcher", fmt.Sprintf("跳过不支持图片的候选: stage=%d group=%s model=%s", stageIndex, stage.GroupName, statsModelID(skipped.model)), LogMeta{
 				Model: statsModelID(skipped.model),
 				Metadata: map[string]interface{}{
-					"stage":             stageIndex,
-					"stage_group":       stage.GroupName,
-					"has_image":         true,
-					"image_count":       imageCount,
-					"image_bytes":       imageBytes,
-					"capability_source": skipped.source,
+					"stage":                       stageIndex,
+					"stage_group":                 stage.GroupName,
+					"has_image":                   true,
+					"image_count":                 imageCount,
+					"image_bytes":                 imageBytes,
+					"current_image_count":         imageState.currentCount,
+					"pending_history_image_count": imageState.pendingHistoryCount,
+					"capability_source":           skipped.source,
 				},
 			})
 		}
 
-		if hasImage && len(stageCandidates) == 0 {
+		if requiresVision && len(stageCandidates) == 0 {
 			logger.Warn("dispatcher", fmt.Sprintf("阶段 %d (%s) 没有支持图片的可用候选，进入下一阶段", stageIndex, stage.GroupName))
 			continue
 		}
@@ -506,17 +529,27 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				pre.usage.setFailoverCount(attempted - 1)
 				pre.usage.setDispatchReason(dispatchSelectionReason(route, model, affinityModelID, capacityWaited, f.latency.isDegraded(affinityModelID, time.Now())))
 			}
-			_, capabilitySource := f.imageCaps.effective(model, time.Now())
+			imageCapability, capabilitySource := f.imageCaps.effective(model, time.Now())
+			candidateView := candidateConversationForModel(pre, imageState, imageCapability)
+			providerHasImage := candidateView.imageCount > 0
 			logger.InfoWithMeta("dispatcher", fmt.Sprintf("尝试分组候选: stage=%d group=%s candidate=%d model=%s", stageIndex, stage.GroupName, candidateIndex, statsModelID(model)), LogMeta{
 				Model: statsModelID(model),
 				Metadata: map[string]interface{}{
-					"stage":             stageIndex,
-					"stage_group":       stage.GroupName,
-					"candidate":         candidateIndex,
-					"has_image":         hasImage,
-					"image_count":       imageCount,
-					"image_bytes":       imageBytes,
-					"capability_source": capabilitySource,
+					"stage":                           stageIndex,
+					"stage_group":                     stage.GroupName,
+					"candidate":                       candidateIndex,
+					"has_image":                       providerHasImage,
+					"image_count":                     candidateView.imageCount,
+					"image_bytes":                     candidateView.imageBytes,
+					"conversation_image_count":        imageCount,
+					"conversation_image_bytes":        imageBytes,
+					"current_image_count":             imageState.currentCount,
+					"pending_history_image_count":     imageState.pendingHistoryCount,
+					"projectable_history_image_count": imageState.projectableHistoryCount,
+					"history_view":                    candidateView.historyView,
+					"projected_image_count":           candidateView.projectedImageCount,
+					"projected_image_bytes":           candidateView.projectedImageBytes,
+					"capability_source":               capabilitySource,
 				},
 			})
 
@@ -535,12 +568,12 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				deadline,
 				time.Now(),
 				f.latency.isDegraded(model.ID, time.Now()),
-				hasImage,
+				providerHasImage,
 				len(stageCandidates),
 			)
 			resp, firstByteDuration, err := requestWithProtocolFallback(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
 				var forwardErr error
-				attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, pre, model, logger, 0)
+				attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, candidateView.pre, model, logger, 0)
 				return attemptResp, forwardErr
 			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
 				if !isSSEResponse(attemptResp) {
@@ -601,7 +634,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			capabilityMismatch := false
 			if resp.StatusCode == http.StatusBadRequest {
 				bodyDetail = preserveResponseBody(resp)
-				capabilityMismatch = hasImage && isModelCapabilityMismatch(resp.StatusCode, bodyDetail)
+				capabilityMismatch = providerHasImage && isModelCapabilityMismatch(resp.StatusCode, bodyDetail)
 			}
 			if shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch {
 				if bodyDetail == "" {
@@ -661,7 +694,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			}
 			if resp.StatusCode < http.StatusBadRequest {
 				if pre == nil || pre.Protocol != "kiro" {
-					if hasImage {
+					if providerHasImage {
 						f.imageCaps.observe(model, modelImageSupported, time.Now())
 					}
 					f.upstream.recordSuccess(model, time.Now())
@@ -697,7 +730,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				failureClass := modelFailureTransport
 				switch outcome {
 				case converter.StreamOutcomeCompleted:
-					if hasImage {
+					if providerHasImage {
 						f.imageCaps.observe(model, modelImageSupported, now)
 					}
 					f.upstream.recordSuccess(model, now)

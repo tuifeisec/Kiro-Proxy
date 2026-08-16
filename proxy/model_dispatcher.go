@@ -17,15 +17,16 @@ import (
 )
 
 const (
-	modelFailureThreshold  = 3
-	modelOpenDuration      = 60 * time.Second
-	modelAffinityTTL       = 2 * time.Hour
-	modelAffinityMaxItems  = 4096
-	modelAffinityPruneTime = 5 * time.Minute
-	modelAvoidanceTTL      = 2 * time.Minute
-	modelAvoidanceFailures = 2
-	imageCapabilityTTL     = 6 * time.Hour
-	singleImageTimeout     = 45 * time.Second
+	modelFailureThreshold         = 3
+	modelOpenDuration             = 60 * time.Second
+	modelAffinityTTL              = 2 * time.Hour
+	modelAffinityMaxItems         = 4096
+	modelAffinityPruneTime        = 5 * time.Minute
+	modelAvoidanceTTL             = 2 * time.Minute
+	modelAvoidanceFailures        = 2
+	imageCapabilityTTL            = 6 * time.Hour
+	singleImageTimeout            = 45 * time.Second
+	historicalImageOmissionMarker = "[Historical image omitted for this text-only model. Prior conversation text is preserved.]"
 )
 
 var errFirstByteTimeout = errors.New("upstream first byte timeout")
@@ -148,23 +149,139 @@ func imageCompatibleCandidates(candidates []*store.Model, hasImage bool, capabil
 	return append(compatible, degraded...), skipped
 }
 
-func conversationImageStats(conv *converter.ParsedConversation) (int, int) {
+type conversationImageState struct {
+	currentCount              int
+	currentBytes              int
+	pendingHistoryCount       int
+	pendingHistoryBytes       int
+	projectableHistoryCount   int
+	projectableHistoryBytes   int
+	projectableHistoryEntries []bool
+}
+
+func (s conversationImageState) totalCount() int {
+	return s.currentCount + s.pendingHistoryCount + s.projectableHistoryCount
+}
+
+func (s conversationImageState) totalBytes() int {
+	return s.currentBytes + s.pendingHistoryBytes + s.projectableHistoryBytes
+}
+
+func (s conversationImageState) requiresVision() bool {
+	return s.currentCount > 0 || s.pendingHistoryCount > 0
+}
+
+func analyzeConversationImages(conv *converter.ParsedConversation) conversationImageState {
 	if conv == nil {
-		return 0, 0
+		return conversationImageState{}
 	}
-	count := 0
-	bytes := 0
-	visit := func(images []converter.KiroImage) {
-		for _, image := range images {
-			count++
-			bytes += decodedBase64Length(image.Source.Bytes)
+
+	state := conversationImageState{
+		projectableHistoryEntries: make([]bool, len(conv.History)),
+	}
+	state.currentCount, state.currentBytes = imageStats(conv.CurrentImages)
+
+	pendingEntries := make([]int, 0)
+	markPendingProjectable := func() {
+		for _, pendingIndex := range pendingEntries {
+			state.projectableHistoryEntries[pendingIndex] = true
+		}
+		pendingEntries = pendingEntries[:0]
+	}
+
+	// 新用户轮次会取代此前未完成的图片轮；终态助手文本会完成当前图片轮。
+	for index, entry := range conv.History {
+		isNewUserTurn := !entry.IsSystem &&
+			(len(entry.Images) > 0 || strings.TrimSpace(entry.UserContent) != "")
+		if isNewUserTurn {
+			markPendingProjectable()
+		}
+		if len(entry.Images) > 0 {
+			pendingEntries = append(pendingEntries, index)
+		}
+		if entry.HasAssistant && strings.TrimSpace(entry.AssistantContent) != "" && len(entry.ToolUses) == 0 {
+			markPendingProjectable()
 		}
 	}
-	visit(conv.CurrentImages)
-	for _, entry := range conv.History {
-		visit(entry.Images)
+	if len(conv.CurrentImages) > 0 || strings.TrimSpace(conv.CurrentContent) != "" {
+		markPendingProjectable()
+	}
+
+	for index, entry := range conv.History {
+		count, bytes := imageStats(entry.Images)
+		if state.projectableHistoryEntries[index] {
+			state.projectableHistoryCount += count
+			state.projectableHistoryBytes += bytes
+			continue
+		}
+		state.pendingHistoryCount += count
+		state.pendingHistoryBytes += bytes
+	}
+	return state
+}
+
+func imageStats(images []converter.KiroImage) (int, int) {
+	count := 0
+	bytes := 0
+	for _, image := range images {
+		count++
+		bytes += decodedBase64Length(image.Source.Bytes)
 	}
 	return count, bytes
+}
+
+type candidateConversationView struct {
+	pre                 *Preflight
+	historyView         string
+	imageCount          int
+	imageBytes          int
+	projectedImageCount int
+	projectedImageBytes int
+}
+
+func candidateConversationForModel(pre *Preflight, state conversationImageState, capability modelImageCapabilityState) candidateConversationView {
+	view := candidateConversationView{
+		pre:         pre,
+		historyView: "full",
+		imageCount:  state.totalCount(),
+		imageBytes:  state.totalBytes(),
+	}
+	if pre == nil || pre.Conv == nil || state.requiresVision() || state.projectableHistoryCount == 0 {
+		return view
+	}
+	if capability != modelImageUnsupported {
+		return view
+	}
+
+	projectedConversation := *pre.Conv
+	projectedConversation.History = append([]converter.ParsedHistoryEntry(nil), pre.Conv.History...)
+	for index, projectable := range state.projectableHistoryEntries {
+		if !projectable || len(projectedConversation.History[index].Images) == 0 {
+			continue
+		}
+		entry := &projectedConversation.History[index]
+		entry.Images = nil
+		if strings.TrimSpace(entry.UserContent) == "" {
+			entry.UserContent = historicalImageOmissionMarker
+		} else {
+			entry.UserContent += "\n\n" + historicalImageOmissionMarker
+		}
+	}
+
+	projectedPreflight := *pre
+	projectedPreflight.Conv = &projectedConversation
+	view.pre = &projectedPreflight
+	view.historyView = "text_projection"
+	view.projectedImageCount = state.projectableHistoryCount
+	view.projectedImageBytes = state.projectableHistoryBytes
+	view.imageCount -= view.projectedImageCount
+	view.imageBytes -= view.projectedImageBytes
+	return view
+}
+
+func conversationImageStats(conv *converter.ParsedConversation) (int, int) {
+	state := analyzeConversationImages(conv)
+	return state.totalCount(), state.totalBytes()
 }
 
 func decodedBase64Length(value string) int {

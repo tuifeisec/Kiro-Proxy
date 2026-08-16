@@ -300,6 +300,236 @@ func TestConversationImageStatsIncludesHistory(t *testing.T) {
 	}
 }
 
+func TestConversationImageStateTracksProjectableAndPendingHistory(t *testing.T) {
+	conv := &converter.ParsedConversation{
+		History: []converter.ParsedHistoryEntry{
+			{Images: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "YQ=="}}}},
+			{HasAssistant: true, ToolUses: []converter.ParsedToolUse{{ToolUseID: "call-1", Name: "read_file"}}},
+			{ToolResults: []converter.ParsedToolResult{{ToolUseID: "call-1", Content: "result"}}},
+			{HasAssistant: true, AssistantContent: "first image handled"},
+			{Images: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "YmM="}}}},
+			{HasAssistant: true, ToolUses: []converter.ParsedToolUse{{ToolUseID: "call-2", Name: "inspect"}}},
+		},
+	}
+
+	state := analyzeConversationImages(conv)
+	if state.projectableHistoryCount != 1 || state.projectableHistoryBytes != 1 {
+		t.Fatalf("projectable history = (%d, %d), want (1, 1)", state.projectableHistoryCount, state.projectableHistoryBytes)
+	}
+	if state.pendingHistoryCount != 1 || state.pendingHistoryBytes != 2 {
+		t.Fatalf("pending history = (%d, %d), want (1, 2)", state.pendingHistoryCount, state.pendingHistoryBytes)
+	}
+	if !state.requiresVision() {
+		t.Fatal("unfinished image tool chain must still require vision")
+	}
+}
+
+func TestConversationImageStateProjectsSupersededImages(t *testing.T) {
+	tests := map[string]*converter.ParsedConversation{
+		"later history turn": {
+			History: []converter.ParsedHistoryEntry{
+				{Images: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "YQ=="}}}},
+				{UserContent: "unrelated text question"},
+				{HasAssistant: true, AssistantContent: "unrelated text answer"},
+			},
+		},
+		"mixed history turn": {
+			History: []converter.ParsedHistoryEntry{
+				{Images: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "YQ=="}}}},
+				{
+					UserContent: "new question with a tool result",
+					ToolResults: []converter.ParsedToolResult{{ToolUseID: "call-1", Content: "result"}},
+				},
+			},
+		},
+		"current user turn": {
+			History: []converter.ParsedHistoryEntry{
+				{Images: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "YQ=="}}}},
+			},
+			CurrentContent:     "unrelated current question",
+			CurrentToolResults: []converter.ParsedToolResult{{ToolUseID: "call-2", Content: "result"}},
+		},
+	}
+
+	for name, conv := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := analyzeConversationImages(conv)
+			if state.projectableHistoryCount != 1 || state.pendingHistoryCount != 0 {
+				t.Fatalf("superseded image state = %+v, want one projectable historical image", state)
+			}
+			if state.requiresVision() {
+				t.Fatal("a superseded image must not create a permanent vision requirement")
+			}
+		})
+	}
+}
+
+func TestCandidateConversationForTextModelProjectsResolvedHistoryWithoutMutation(t *testing.T) {
+	const imageBytes = "aGlzdG9yeS1pbWFnZQ=="
+	conv := &converter.ParsedConversation{
+		ConversationID: "projection-conversation",
+		History: []converter.ParsedHistoryEntry{
+			{Images: []converter.KiroImage{{Format: "png", Source: converter.KiroImageSource{Bytes: imageBytes}}}},
+			{HasAssistant: true, AssistantContent: "the image contains settings"},
+		},
+		CurrentContent: "continue with text",
+	}
+	pre := &Preflight{Protocol: "kiro", Conv: conv}
+
+	state := analyzeConversationImages(conv)
+	view := candidateConversationForModel(pre, state, modelImageUnsupported)
+	if view.historyView != "text_projection" || view.projectedImageCount != 1 || view.imageCount != 0 {
+		t.Fatalf("projection view = %+v", view)
+	}
+	if view.pre == pre || view.pre.Conv == conv {
+		t.Fatal("text projection must use candidate-specific copies")
+	}
+	if len(view.pre.Conv.History[0].Images) != 0 {
+		t.Fatal("projected history still contains the image")
+	}
+	if view.pre.Conv.History[0].UserContent != historicalImageOmissionMarker {
+		t.Fatalf("image-only history marker = %q", view.pre.Conv.History[0].UserContent)
+	}
+	if len(conv.History[0].Images) != 1 || conv.History[0].UserContent != "" {
+		t.Fatal("candidate projection mutated the original conversation")
+	}
+
+	fullView := candidateConversationForModel(pre, state, modelImageSupported)
+	if fullView.pre != pre || fullView.historyView != "full" || fullView.imageCount != 1 {
+		t.Fatalf("vision model did not retain the full history: %+v", fullView)
+	}
+}
+
+func TestPendingHistoryImageIsNotProjectedForTextModel(t *testing.T) {
+	conv := &converter.ParsedConversation{
+		History: []converter.ParsedHistoryEntry{
+			{Images: []converter.KiroImage{{Format: "png", Source: converter.KiroImageSource{Bytes: "YQ=="}}}},
+			{HasAssistant: true, ToolUses: []converter.ParsedToolUse{{ToolUseID: "call-1", Name: "inspect"}}},
+		},
+		CurrentToolResults: []converter.ParsedToolResult{{ToolUseID: "call-1", Content: "result"}},
+	}
+	pre := &Preflight{Protocol: "kiro", Conv: conv}
+
+	state := analyzeConversationImages(conv)
+	view := candidateConversationForModel(pre, state, modelImageUnsupported)
+	if !state.requiresVision() || view.pre != pre || view.historyView != "full" || view.imageCount != 1 {
+		t.Fatalf("pending image was incorrectly projected: state=%+v view=%+v", state, view)
+	}
+}
+
+func TestObservedUnsupportedAutoModelUsesTextProjection(t *testing.T) {
+	conv := &converter.ParsedConversation{
+		History: []converter.ParsedHistoryEntry{
+			{Images: []converter.KiroImage{{Format: "png", Source: converter.KiroImageSource{Bytes: "YQ=="}}}},
+			{HasAssistant: true, AssistantContent: "image answer"},
+		},
+		CurrentContent: "continue with text",
+	}
+	pre := &Preflight{Protocol: "kiro", Conv: conv}
+	model := &store.Model{ID: "auto-text-model", ImageInputMode: store.ImageInputAuto}
+	capabilities := newModelImageCapabilityStore()
+	now := time.Now()
+	capabilities.observe(model, modelImageUnsupported, now)
+	capability, source := capabilities.effective(model, now)
+
+	view := candidateConversationForModel(pre, analyzeConversationImages(conv), capability)
+	if source != "observed" || view.historyView != "text_projection" || view.imageCount != 0 {
+		t.Fatalf("observed unsupported auto view = %+v source=%s", view, source)
+	}
+}
+
+func TestTextProjectionFeedsAllKiroConvertersWithoutImages(t *testing.T) {
+	const imageBytes = "aGlzdG9yeS1pbWFnZQ=="
+	conv := &converter.ParsedConversation{
+		ConversationID: "all-providers",
+		SystemText:     "You are a test assistant.",
+		History: []converter.ParsedHistoryEntry{
+			{UserContent: "inspect this", Images: []converter.KiroImage{{Format: "jpeg", Source: converter.KiroImageSource{Bytes: imageBytes}}}},
+			{HasAssistant: true, AssistantContent: "the image shows a form"},
+		},
+		CurrentContent: "what should I enter?",
+	}
+	pre := &Preflight{Protocol: "kiro", Conv: conv}
+	state := analyzeConversationImages(conv)
+	models := []store.Model{
+		{ID: "chat", ModelID: "chat-model", Provider: "openai", BaseURL: "https://example.test", Endpoint: "/chat/completions", ImageInputMode: store.ImageInputUnsupported},
+		{ID: "responses", ModelID: "responses-model", Provider: "openai", BaseURL: "https://example.test", Endpoint: "/responses", ImageInputMode: store.ImageInputUnsupported},
+		{ID: "anthropic", ModelID: "anthropic-model", Provider: "anthropic", BaseURL: "https://example.test", Endpoint: "/v1/messages", ImageInputMode: store.ImageInputUnsupported},
+		{ID: "gemini", ModelID: "gemini-model", Provider: "gemini", BaseURL: "https://example.test", Endpoint: "/v1beta/models/{model}:streamGenerateContent", ImageInputMode: store.ImageInputUnsupported},
+	}
+
+	for index := range models {
+		model := &models[index]
+		t.Run(model.ID, func(t *testing.T) {
+			view := candidateConversationForModel(pre, state, modelImageUnsupported)
+			body, _, err := convertRequest(view.pre, model)
+			if err != nil {
+				t.Fatalf("convert projected request: %v", err)
+			}
+			if bytes.Contains(body, []byte(imageBytes)) {
+				t.Fatal("text-only provider request still contains historical image bytes")
+			}
+			if !bytes.Contains(body, []byte(historicalImageOmissionMarker)) {
+				t.Fatalf("provider request lost the deterministic image marker: %s", body)
+			}
+		})
+	}
+}
+
+func TestResponsesContinuationRemainsAppendOnlyWithTextProjection(t *testing.T) {
+	const imageBytes = "aGlzdG9yeS1pbWFnZQ=="
+	model := &store.Model{
+		ID: "responses-text", ModelID: "responses-model", Provider: "openai",
+		BaseURL: "https://example.test", Endpoint: "/responses", ImageInputMode: store.ImageInputUnsupported,
+	}
+	firstConversation := &converter.ParsedConversation{
+		ConversationID: "projection-continuation",
+		History: []converter.ParsedHistoryEntry{
+			{Images: []converter.KiroImage{{Format: "png", Source: converter.KiroImageSource{Bytes: imageBytes}}}},
+			{HasAssistant: true, AssistantContent: "image answer"},
+		},
+		CurrentContent: "first follow-up",
+	}
+	firstPre := &Preflight{Protocol: "kiro", Conv: firstConversation}
+	firstView := candidateConversationForModel(firstPre, analyzeConversationImages(firstConversation), modelImageUnsupported)
+	firstBody, _, err := convertRequest(firstView.pre, model)
+	if err != nil {
+		t.Fatalf("convert first request: %v", err)
+	}
+	firstResult, err := converter.ApplyResponsesContinuation(firstBody, nil)
+	if err != nil {
+		t.Fatalf("capture first continuation state: %v", err)
+	}
+
+	secondConversation := &converter.ParsedConversation{
+		ConversationID: "projection-continuation",
+		History: []converter.ParsedHistoryEntry{
+			{Images: []converter.KiroImage{{Format: "png", Source: converter.KiroImageSource{Bytes: imageBytes}}}},
+			{HasAssistant: true, AssistantContent: "image answer"},
+			{UserContent: "first follow-up"},
+			{HasAssistant: true, AssistantContent: "first follow-up answer"},
+		},
+		CurrentContent: "second follow-up",
+	}
+	secondPre := &Preflight{Protocol: "kiro", Conv: secondConversation}
+	secondView := candidateConversationForModel(secondPre, analyzeConversationImages(secondConversation), modelImageUnsupported)
+	secondBody, _, err := convertRequest(secondView.pre, model)
+	if err != nil {
+		t.Fatalf("convert second request: %v", err)
+	}
+	secondResult, err := converter.ApplyResponsesContinuation(secondBody, &converter.ResponsesContinuationState{
+		ResponseID: "resp_previous",
+		InputJSON:  firstResult.FullInputJSON,
+		ItemCount:  firstResult.InputItemCount,
+	})
+	if err != nil {
+		t.Fatalf("apply projected continuation: %v", err)
+	}
+	if !secondResult.UsedContinuation {
+		t.Fatal("stable text projection should preserve the Responses append-only prefix")
+	}
+}
+
 func TestImageAwareFirstByteTimeoutUsesSingleCandidateBudget(t *testing.T) {
 	now := time.Now()
 	deadline := now.Add(2 * time.Minute)
