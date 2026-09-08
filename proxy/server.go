@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io/fs"
 	"kiro-proxy/api"
+	"kiro-proxy/buildinfo"
+	"kiro-proxy/codex"
 	"kiro-proxy/license"
 	"kiro-proxy/router"
 	"kiro-proxy/rules"
@@ -77,8 +79,9 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) (*Server, error)
 	}
 
 	r := router.New(db)
-	fwd := NewForwarder(stats, db)
-	apiSrv := api.New(db, r, stats)
+	credentials := codex.NewCredentialManager(db)
+	fwd := NewForwarder(stats, db, credentials)
+	apiSrv := api.New(db, r, stats, credentials)
 	apiSrv.SetModelHealthProvider(fwd)
 
 	p := goproxy.NewProxyHttpServer()
@@ -136,7 +139,8 @@ func (s *Server) Start() error {
 		return nil
 	}
 
-	log.Printf("[server] BUILD VERSION: 2026-05-30-v10-clean")
+	build := buildinfo.Current()
+	log.Printf("[server] BUILD revision=%s time=%s go=%s os=%s arch=%s", build.Revision, build.Time, build.GoVersion, build.OS, build.Arch)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", s.handleLocalOpenAIChat)
@@ -303,6 +307,7 @@ func (s *Server) Close() {
 		s.serverMu.Unlock()
 		s.hub.Close()
 		shutdownHTTPServers(uiServer, mitmServer)
+		s.forwarder.CloseIdleConnections()
 
 		s.stats.Close()
 		s.logger.Close()

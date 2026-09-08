@@ -99,7 +99,9 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	hasImage := requestMeta.ImageCount > 0
 	usageRecord := newRequestUsageRecorder(s.db, start, route.Model, r.URL.Path, string(api))
 	usageRecord.setRoute(route)
-	conversationID := localCompatConversationID(r, body, api)
+	// 上游会话只使用客户端提供的真实身份；内部缓存亲和键可能跨对话共享。
+	sessionID := localCompatSessionID(r, body)
+	conversationID := localCompatAffinityID(sessionID, body, api)
 	affinityModelID := ""
 	var scopes []string
 	if route.Group != nil {
@@ -233,20 +235,20 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			)
 			var firstByteDuration time.Duration
 			resp, firstByteDuration, err = requestWithProtocolFallback(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
-				return s.forwarder.doRequest(attemptCtx, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, "local-compat", usageRecord)
+				return s.forwarder.doRequest(attemptCtx, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, sessionID, usageRecord)
 			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
 				if !clientWantsStream || !isSSEResponse(attemptResp) {
 					return waitForUpstreamFirstByte(attemptResp, remaining)
 				}
 				return probeSSEPrecommit(attemptCtx, attemptResp, candidate.Provider, candidatePrepared.upstreamURL, remaining, 0)
 			})
-			if err == nil && firstByteDuration > 0 {
+			if err == nil && firstByteDuration > 0 && resp != nil && (resp.StatusCode >= http.StatusBadRequest || !isSSEResponse(resp)) {
 				s.forwarder.latency.record(candidate.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
 			} else if errors.Is(err, errFirstByteTimeout) {
 				s.forwarder.latency.record(candidate.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
 			}
 		} else {
-			resp, err = s.forwarder.sendWithRetryBudget(r.Context(), candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, s.logger, "local-compat", usageRecord, singleModelFirstByteTimeout)
+			resp, err = s.forwarder.sendWithRetryBudget(r.Context(), candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, s.logger, sessionID, usageRecord, singleModelFirstByteTimeout)
 		}
 		if err != nil {
 			lease.release()
@@ -367,7 +369,11 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 	fallbackState := prepared.fallbackState
 	aggregateCodex := prepared.aggregateCodex
 	defer resp.Body.Close()
-	usageRecord.wrapResponse(resp)
+	latencyThreshold := time.Duration(0)
+	if candidateGroup := routeGroupForCandidate(route, m); candidateGroup != nil {
+		latencyThreshold = time.Duration(candidateGroup.FirstByteTimeoutMS) * time.Millisecond
+	}
+	usageRecord.wrapResponseForModel(resp, m, prepared.upstreamURL, s.forwarder.contentLatencyHook(usageRecord, m, latencyThreshold))
 
 	var usage localCompatUsage
 	var writeErr error
@@ -493,19 +499,38 @@ func (s *Server) orderedLocalCompatCandidates(route *router.Route, affinityModel
 	return candidates
 }
 
-func localCompatConversationID(r *http.Request, body []byte, api localCompatAPI) string {
+// localCompatSessionID 不从提示词或 prompt_cache_key 推测对话身份。
+// 客户端未提供会话 ID 时留空，不能用全局常量或每次随机值冒充稳定会话。
+func localCompatSessionID(r *http.Request, body []byte) string {
 	if r != nil {
-		for _, header := range []string{"X-Conversation-ID", "X-Session-ID"} {
+		for _, header := range []string{"X-Opencode-Session", "X-Conversation-ID", "X-Session-ID", "session_id", "conversation_id", "session-id"} {
 			if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
 				return value
 			}
 		}
 	}
+	var payload struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		return strings.TrimSpace(payload.ConversationID)
+	}
+	return ""
+}
+
+func localCompatConversationID(r *http.Request, body []byte, api localCompatAPI) string {
+	return localCompatAffinityID(localCompatSessionID(r, body), body, api)
+}
+
+func localCompatAffinityID(sessionID string, body []byte, api localCompatAPI) string {
+	if sessionID != "" {
+		return sessionID
+	}
 	var payload map[string]json.RawMessage
 	if json.Unmarshal(body, &payload) != nil {
 		return ""
 	}
-	for _, field := range []string{"prompt_cache_key", "conversation_id"} {
+	for _, field := range []string{"prompt_cache_key"} {
 		var value string
 		if json.Unmarshal(payload[field], &value) == nil && strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
@@ -819,7 +844,7 @@ func copyLocalCompatHeaders(dst, src http.Header) {
 func writeLocalCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-api-key, anthropic-version, anthropic-beta")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-api-key, anthropic-version, anthropic-beta, x-opencode-session, x-conversation-id, x-session-id, session_id, conversation_id, session-id")
 }
 
 func writeLocalCompatError(w http.ResponseWriter, status int, msg string) {

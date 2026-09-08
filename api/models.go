@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	json "github.com/goccy/go-json"
 	"kiro-proxy/codex"
 	"kiro-proxy/store"
@@ -39,6 +41,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
+		m.Provider = strings.ToLower(strings.TrimSpace(m.Provider))
 		if m.Provider == "" {
 			m.Provider = "openai"
 		}
@@ -59,8 +62,18 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 			defer cancel()
-			if err := refreshAndFetchCodexUsage(ctx, &m); err != nil {
-				writeError(w, http.StatusBadRequest, "Codex 账号预检测失败: "+err.Error())
+			// 创建入口允许客户端提供稳定 ID，但该 ID 尚不存在于 DB；预检测
+			// 必须明确走 ephemeral/import 路径，不能被 manager 的 NoRows 冲突拦截。
+			requestedID := m.ID
+			m.ID = ""
+			precheckErr := s.refreshAndFetchCodexUsage(ctx, &m, false)
+			m.ID = requestedID
+			if precheckErr != nil {
+				status := http.StatusBadRequest
+				if errors.Is(precheckErr, store.ErrCodexCredentialConflict) {
+					status = http.StatusConflict
+				}
+				writeError(w, status, "Codex 账号预检测失败: "+precheckErr.Error())
 				return
 			}
 		} else if m.ModelID == "" || m.BaseURL == "" || m.APIKey == "" || m.Endpoint == "" {
@@ -118,6 +131,7 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.ID = id
+		m.Provider = strings.ToLower(strings.TrimSpace(m.Provider))
 		imageInputMode, err := store.NormalizeImageInputMode(m.ImageInputMode)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -131,14 +145,43 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		existing, _ := s.db.GetModel(id)
+		existing, existingErr := s.db.GetModel(id)
+		if existingErr != nil || existing == nil {
+			writeError(w, http.StatusNotFound, "model not found")
+			return
+		}
+		// DB 旧值按运行时的精确语义识别；非规范旧 Provider 需要显式提供凭据后修正。
+		providerChanged := existing.Provider != m.Provider
+		apiKeyMasked := isMasked(m.APIKey)
+		refreshTokenMasked := isMasked(m.RefreshToken)
+		if providerChanged {
+			if m.Provider == "codex" {
+				if strings.TrimSpace(m.RefreshToken) == "" || refreshTokenMasked {
+					writeError(w, http.StatusBadRequest, "切换到 Codex 必须提供新的 refresh_token 或完整 auth JSON")
+					return
+				}
+			} else if strings.TrimSpace(m.APIKey) == "" || apiKeyMasked {
+				writeError(w, http.StatusBadRequest, "切换 provider 必须提供新的 api_key")
+				return
+			}
+		}
 		// 如果敏感凭据是脱敏值，保留原来的
-		if isMasked(m.APIKey) && existing != nil {
+		if !providerChanged && apiKeyMasked && existing != nil {
 			m.APIKey = existing.APIKey
 		}
-		if isMasked(m.RefreshToken) && existing != nil {
+		if !providerChanged && refreshTokenMasked && existing != nil {
 			m.RefreshToken = existing.RefreshToken
 		}
+		if providerChanged && m.Provider != "codex" {
+			// provider 切换不能携带旧 Codex 的身份和用量字段。
+			m.RefreshToken = ""
+			m.CodexEmail = ""
+			m.CodexPlanType = ""
+			m.CodexAccountID = ""
+			m.AccessTokenExpiresAt = 0
+			m.CodexUsageJSON = ""
+		}
+		manualCodexCredential := existing != nil && codexCredentialChanged(existing, &m)
 		if m.Provider == "codex" {
 			codex.NormalizeModel(&m)
 			if strings.TrimSpace(m.Name) == "" {
@@ -150,8 +193,12 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 			defer cancel()
-			if err := refreshAndFetchCodexUsage(ctx, &m); err != nil {
-				writeError(w, http.StatusBadRequest, "Codex 账号预检测失败: "+err.Error())
+			if err := s.refreshAndFetchCodexUsage(ctx, &m, manualCodexCredential, existing); err != nil {
+				status := http.StatusBadRequest
+				if errors.Is(err, store.ErrCodexCredentialConflict) {
+					status = http.StatusConflict
+				}
+				writeError(w, status, "Codex 账号预检测失败: "+err.Error())
 				return
 			}
 		}
@@ -159,8 +206,14 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		if err := s.db.UpdateModel(&m); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		var updateErr error
+		if existing != nil && m.Provider == "codex" && !manualCodexCredential {
+			updateErr = s.db.UpdateModelPreserveCodexCredential(&m)
+		} else {
+			updateErr = s.db.UpdateModel(&m)
+		}
+		if updateErr != nil {
+			writeError(w, http.StatusInternalServerError, updateErr.Error())
 			return
 		}
 		s.router.Reload()
@@ -344,54 +397,161 @@ func (s *Server) handleRefreshCodexModel(w http.ResponseWriter, r *http.Request)
 	log.Printf("[codex] refresh start: model_id=%s name=%s upstream_model=%s", m.ID, m.Name, m.ModelID)
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	if err := refreshAndFetchCodexUsage(ctx, m); err != nil {
+	refreshed, err := s.credentials.ForceRefresh(ctx, *m)
+	if err != nil {
 		log.Printf("[codex] refresh failed: model_id=%s error=%v", m.ID, err)
 		writeError(w, http.StatusBadRequest, "刷新 Codex 信息失败: "+err.Error())
 		return
 	}
-	logCodexModelInfo(m)
-	if err := s.db.UpdateCodexTokenAndUsage(m); err != nil {
-		log.Printf("[codex] refresh save failed: model_id=%s error=%v", m.ID, err)
-		writeError(w, http.StatusInternalServerError, "保存 Codex 信息失败: "+err.Error())
-		return
+	expected := refreshed
+	if usage, usageErr := codex.FetchUsage(ctx, &refreshed); usageErr == nil && usage != nil && len(usage.Raw) > 0 {
+		refreshed.CodexUsageJSON = string(usage.Raw)
+		if err := s.db.UpdateCodexUsage(&expected, &refreshed); err != nil {
+			log.Printf("[codex] usage save failed: model_id=%s error=%v", refreshed.ID, err)
+			status := http.StatusInternalServerError
+			if errors.Is(err, store.ErrCodexCredentialConflict) {
+				status = http.StatusConflict
+			}
+			writeError(w, status, "保存 Codex 用量失败: "+err.Error())
+			return
+		}
+	} else if usageErr != nil {
+		log.Printf("[codex] fetch usage failed, continue without usage: %v", usageErr)
 	}
+	logCodexModelInfo(&refreshed)
+	// ForceRefresh 已通过 CAS 持久化 token 字段。用量返回给调用方并单独
+	// 写入，避免并发刷新时把旧 token 一起写回。
 	s.router.Reload()
-	m.APIKey = maskKey(m.APIKey)
-	m.RefreshToken = maskKey(m.RefreshToken)
-	writeOK(w, m)
+	refreshed.APIKey = maskKey(refreshed.APIKey)
+	refreshed.RefreshToken = maskKey(refreshed.RefreshToken)
+	writeOK(w, refreshed)
 }
 
-func refreshAndFetchCodexUsage(ctx context.Context, m *store.Model) error {
-	if err := codex.ImportAuthPayload(m); err != nil {
-		return err
+func (s *Server) refreshAndFetchCodexUsage(ctx context.Context, m *store.Model, manual bool, existing ...*store.Model) error {
+	if m == nil {
+		return fmt.Errorf("model is required")
 	}
-	if strings.TrimSpace(m.APIKey) == "" {
-		if err := codex.RefreshModel(ctx, m); err != nil {
+	// 普通 PUT 的输入只代表待保存配置；凭据预检测必须读取 DB 中的
+	// existing 快照，避免 incoming 配置携带旧 token 覆盖自动轮换结果。
+	var source *store.Model
+	if !manual && len(existing) > 0 && existing[0] != nil {
+		source = existing[0]
+	}
+	var refreshed store.Model
+	var err error
+	if manual {
+		// 手动提供的凭据属于明确导入。本次操作清除 DB identity，避免 Ensure
+		// 用旧 router 快照替换手动凭据。refresh token 变化时也清除输入中
+		// 可能由脱敏凭据继承的 access/profile/usage，避免拼出混合账号。
+		input := *m
+		input.ID = ""
+		var existingModel *store.Model
+		if len(existing) > 0 {
+			existingModel = existing[0]
+		}
+		parsed := store.Model{Provider: "codex", RefreshToken: input.RefreshToken}
+		if err := codex.ImportAuthPayload(&parsed); err != nil {
 			return err
 		}
+		var previous store.Model
+		if existingModel != nil {
+			previous = *existingModel
+			if err := codex.ImportAuthPayload(&previous); err != nil {
+				return err
+			}
+		}
+		sameRefresh := existingModel != nil && previous.Provider == "codex" && strings.TrimSpace(parsed.RefreshToken) == strings.TrimSpace(previous.RefreshToken)
+		if sameRefresh && ((parsed.APIKey != "" && parsed.APIKey != previous.APIKey) || strings.TrimSpace(input.APIKey) != strings.TrimSpace(existingModel.APIKey)) {
+			return fmt.Errorf("手动 Codex 凭据不完整：请提供新的 refresh_token 或完整 auth JSON")
+		}
+		if sameRefresh {
+			// 仅包装不同仍属于已知同代；保留其身份，使手动与自动刷新共用 flight。
+			// 同时保留 DB ID，ownership 内才能重读迟到请求的最新代次。
+			input = previous
+			source = existingModel
+		} else {
+			input.APIKey = ""
+			input.AccessTokenExpiresAt = 0
+			input.CodexAccountID = ""
+			input.CodexEmail = ""
+			input.CodexPlanType = ""
+			input.CodexUsageJSON = ""
+		}
+		refreshed, err = s.credentials.ForceRefresh(ctx, input)
+		refreshed.ID = m.ID
+	} else if source != nil {
+		refreshed, err = s.credentials.Ensure(ctx, *source)
+	} else {
+		refreshed, err = s.credentials.Ensure(ctx, *m)
 	}
-	profile := codex.DecodeTokenProfile(m.APIKey)
-	if m.CodexEmail == "" {
-		m.CodexEmail = profile.Email
+	if err != nil {
+		return err
 	}
-	if m.CodexPlanType == "" {
-		m.CodexPlanType = profile.PlanType
-	}
-	if m.CodexAccountID == "" {
-		m.CodexAccountID = profile.AccountID
-	}
-	if m.AccessTokenExpiresAt == 0 {
-		m.AccessTokenExpiresAt = profile.ExpiresAt
-	}
-	usage, err := codex.FetchUsage(ctx, m)
+	expected := refreshed
+	usage, err := codex.FetchUsage(ctx, &refreshed)
 	if err != nil {
 		log.Printf("[codex] fetch usage failed, continue without usage: %v", err)
+		if source != nil {
+			copyCodexCredentialsAndUsage(m, &refreshed)
+		} else {
+			*m = refreshed
+		}
 		return nil
 	}
 	if len(usage.Raw) > 0 {
-		m.CodexUsageJSON = string(usage.Raw)
+		refreshed.CodexUsageJSON = string(usage.Raw)
+		if source != nil {
+			if err := s.db.UpdateCodexUsage(&expected, &refreshed); err != nil {
+				return err
+			}
+		}
 	}
+	if source != nil {
+		copyCodexCredentialsAndUsage(m, &refreshed)
+		return nil
+	}
+	*m = refreshed
 	return nil
+}
+
+func copyCodexCredentialsAndUsage(dst, src *store.Model) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.APIKey = src.APIKey
+	dst.RefreshToken = src.RefreshToken
+	dst.CodexEmail = src.CodexEmail
+	dst.CodexPlanType = src.CodexPlanType
+	dst.CodexAccountID = src.CodexAccountID
+	dst.AccessTokenExpiresAt = src.AccessTokenExpiresAt
+	dst.CodexUsageJSON = src.CodexUsageJSON
+}
+
+// 为兼容共享 manager 引入前的包内调用方保留；生产 handler 使用上面注入的
+// server manager。
+func refreshAndFetchCodexUsage(ctx context.Context, m *store.Model) error {
+	manager := codex.NewCredentialManager(nil)
+	refreshed, err := manager.Ensure(ctx, *m)
+	if err != nil {
+		return err
+	}
+	usage, err := codex.FetchUsage(ctx, &refreshed)
+	if err != nil {
+		return nil
+	}
+	if usage != nil && len(usage.Raw) > 0 {
+		refreshed.CodexUsageJSON = string(usage.Raw)
+	}
+	*m = refreshed
+	return nil
+}
+
+func codexCredentialChanged(existing, incoming *store.Model) bool {
+	if existing == nil || incoming == nil {
+		return false
+	}
+	return existing.APIKey != incoming.APIKey || existing.RefreshToken != incoming.RefreshToken ||
+		existing.Provider != incoming.Provider || existing.CodexAccountID != incoming.CodexAccountID
 }
 
 func logCodexModelInfo(m *store.Model) {

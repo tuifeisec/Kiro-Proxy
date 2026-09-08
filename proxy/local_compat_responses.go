@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	stdjson "encoding/json"
 	"fmt"
 	"io"
 	"kiro-proxy/store"
@@ -99,18 +100,25 @@ func ensureResponsesPromptCacheKey(body []byte, model string) ([]byte, string, e
 	// Only stable request parts participate in the generated namespace. The
 	// current user input must stay outside this key so later turns can reuse
 	// the same cached prefix.
-	var stable bytes.Buffer
-	stable.WriteString(strings.ToLower(strings.TrimSpace(model)))
+	stable := map[string]interface{}{"model": strings.ToLower(strings.TrimSpace(model))}
 	for _, name := range []string{"instructions", "tools", "prompt_cache_options"} {
 		if raw := root[name]; len(raw) > 0 {
-			stable.Write(raw)
+			// UseNumber 保留大整数与小数的原始精度；对象排序不改变数组顺序。
+			decoder := stdjson.NewDecoder(bytes.NewReader(raw))
+			decoder.UseNumber()
+			var value interface{}
+			if err := decoder.Decode(&value); err != nil {
+				return nil, "", fmt.Errorf("invalid Responses %s: %w", name, err)
+			}
+			stable[name] = value
 		}
 	}
-	if stable.Len() == 0 {
-		stable.WriteString("kiro-local")
+	canonical, err := stdjson.Marshal(stable)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode Responses cache namespace: %w", err)
 	}
-	sum := sha256.Sum256(stable.Bytes())
-	key := "kiro-local-" + hex.EncodeToString(sum[:16])
+	sum := sha256.Sum256(canonical)
+	key := "kiro-local-v2-" + hex.EncodeToString(sum[:16])
 	encoded, err := json.Marshal(key)
 	if err != nil {
 		return nil, "", err

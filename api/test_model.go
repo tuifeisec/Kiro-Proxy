@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
 	"io"
 	"kiro-proxy/codex"
 	"kiro-proxy/store"
@@ -48,12 +49,31 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := runModelTest(m, req.Model)
+	result := runModelTestWithManager(r.Context(), m, req.Model, s.credentials)
 	writeOK(w, result)
 }
 
 // runModelTest 向指定模型配置发送测试请求
 func runModelTest(m *store.Model, model string) testResult {
+	return runModelTestWithManager(context.Background(), m, model, nil)
+}
+
+func runModelTestWithManager(ctx context.Context, input *store.Model, model string, manager *codex.CredentialManager) testResult {
+	if input == nil {
+		return testResult{Error: "model is required"}
+	}
+	copy := *input
+	m := &copy
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if manager != nil && m.Provider == "codex" {
+		ensured, err := manager.Ensure(ctx, *m)
+		if err != nil {
+			return testResult{Error: err.Error()}
+		}
+		*m = ensured
+	}
 	baseURL := strings.TrimRight(m.BaseURL, "/")
 	if model == "" {
 		model = m.ModelID
@@ -80,8 +100,10 @@ func runModelTest(m *store.Model, model string) testResult {
 			"messages":   []map[string]string{{"role": "user", "content": "Hi"}},
 		})
 	case m.Provider == "codex":
-		if err := codex.EnsureAccessToken(context.Background(), m); err != nil {
-			return testResult{Error: err.Error()}
+		if manager == nil {
+			if err := codex.EnsureAccessToken(ctx, m); err != nil {
+				return testResult{Error: err.Error()}
+			}
 		}
 		reqBody, _ = json.Marshal(map[string]interface{}{
 			"model":        model,
@@ -112,7 +134,7 @@ func runModelTest(m *store.Model, model string) testResult {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept-Encoding", "identity")
-	httpReq.Header.Set("User-Agent", ua.CodexUserAgent())
+	httpReq.Header.Set("User-Agent", ua.ProviderUserAgent(m.Provider))
 	switch m.Provider {
 	case "anthropic":
 		httpReq.Header.Set("x-api-key", m.APIKey)
@@ -122,8 +144,7 @@ func runModelTest(m *store.Model, model string) testResult {
 		httpReq.Header.Set("Accept", "text/event-stream")
 		httpReq.Header.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
 		httpReq.Header.Set("x-openai-internal-codex-residency", "us")
-		httpReq.Header.Set("x-client-request-id", "kiro-proxy-test")
-		httpReq.Header.Set("x-codex-installation-id", "kiro-proxy")
+		httpReq.Header.Set("x-client-request-id", uuid.NewString())
 	default:
 		httpReq.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}

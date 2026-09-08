@@ -14,8 +14,10 @@ import (
 )
 
 type DB struct {
-	conn                   *sql.DB
-	requestUsageCleanupDay atomic.Int64
+	conn                      *sql.DB
+	requestUsageCleanupDay    atomic.Int64
+	responsesSessionCleanupAt atomic.Int64
+	responsesGeneration       atomic.Int64
 }
 
 func Open(path string) (*DB, error) {
@@ -28,6 +30,7 @@ func Open(path string) (*DB, error) {
 	conn.SetMaxIdleConns(1)
 
 	db := &DB{conn: conn}
+	db.responsesGeneration.Store(time.Now().UnixNano())
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("数据库迁移失败: %w", err)
@@ -52,6 +55,7 @@ func (db *DB) migrate() error {
 		name  string
 		def   string
 	}{
+		{"responses_sessions", "generation", "INTEGER NOT NULL DEFAULT 0"},
 		{"models", "rate_multiplier", "REAL NOT NULL DEFAULT 1.0"},
 		{"models", "input_price", "REAL NOT NULL DEFAULT 5.0"},
 		{"models", "output_price", "REAL NOT NULL DEFAULT 30.0"},
@@ -59,6 +63,7 @@ func (db *DB) migrate() error {
 		{"models", "cache_output_price", "REAL NOT NULL DEFAULT 30.0"},
 		{"models", "proxy_url", "TEXT NOT NULL DEFAULT ''"},
 		{"models", "enable_continuation", "INTEGER NOT NULL DEFAULT 0"},
+		{"models", "enable_opencode_session", "INTEGER NOT NULL DEFAULT 0"},
 		{"models", "disable_auto_suffix", "INTEGER NOT NULL DEFAULT 0"},
 		{"models", "refresh_token", "TEXT NOT NULL DEFAULT ''"},
 		{"models", "codex_email", "TEXT NOT NULL DEFAULT ''"},
@@ -75,6 +80,16 @@ func (db *DB) migrate() error {
 		{"request_usage", "cache_read_cost", "REAL NOT NULL DEFAULT 0"},
 		{"request_usage", "cache_write_cost", "REAL NOT NULL DEFAULT 0"},
 		{"request_usage", "conversion_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "first_event_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "first_content_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "first_content_type", "TEXT NOT NULL DEFAULT ''"},
+		{"request_usage", "max_content_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "content_measured", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "content_measurement_complete", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "audit_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "session_read_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "wire_attempt_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "transport_fallback_count", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "auth_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "dns_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "connect_ms", "INTEGER NOT NULL DEFAULT 0"},
@@ -165,6 +180,7 @@ CREATE TABLE IF NOT EXISTS models (
     cache_input_price REAL NOT NULL DEFAULT 0.5,
     cache_output_price REAL NOT NULL DEFAULT 30.0,
     enable_continuation INTEGER NOT NULL DEFAULT 0,
+    enable_opencode_session INTEGER NOT NULL DEFAULT 0,
     codex_email     TEXT NOT NULL DEFAULT '',
     codex_plan_type TEXT NOT NULL DEFAULT '',
     codex_account_id TEXT NOT NULL DEFAULT '',
@@ -278,6 +294,8 @@ CREATE TABLE IF NOT EXISTS responses_sessions (
     item_count      INTEGER NOT NULL DEFAULT 0,
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_responses_sessions_updated_at ON responses_sessions(updated_at);
 
 CREATE TABLE IF NOT EXISTS reasoning_traces (
     state_key    TEXT NOT NULL,

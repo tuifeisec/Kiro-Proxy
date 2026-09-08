@@ -387,14 +387,26 @@ func (r *Router) routeForGroupLocked(group *store.ModelGroup, requestedName stri
 	if len(candidates) == 0 {
 		return nil
 	}
+	clonedCandidates := make([]*store.Model, len(candidates))
+	for i, candidate := range candidates {
+		clonedCandidates[i] = cloneModel(candidate)
+	}
+	clonedStages := make([]RouteStage, len(stages))
+	for i, stage := range stages {
+		clonedStages[i] = stage
+		clonedStages[i].Candidates = make([]*store.Model, len(stage.Candidates))
+		for j, candidate := range stage.Candidates {
+			clonedStages[i].Candidates[j] = cloneModel(candidate)
+		}
+	}
 	return &Route{
-		Model:           candidates[0],
-		Candidates:      candidates,
+		Model:           clonedCandidates[0],
+		Candidates:      clonedCandidates,
 		CandidateLimits: limits,
 		CandidateGroups: candidateGroups,
 		Group:           group,
 		RequestedName:   requestedName,
-		Stages:          stages,
+		Stages:          clonedStages,
 	}
 }
 
@@ -495,11 +507,20 @@ func singleModelRoute(model *store.Model, requestedName string, maxConcurrency i
 	if model == nil {
 		return nil
 	}
+	clone := cloneModel(model)
 	return &Route{
-		Model: model, Candidates: []*store.Model{model},
-		CandidateLimits: map[string]int{model.ID: maxConcurrency}, CandidateGroups: map[string]*store.ModelGroup{},
+		Model: clone, Candidates: []*store.Model{clone},
+		CandidateLimits: map[string]int{clone.ID: maxConcurrency}, CandidateGroups: map[string]*store.ModelGroup{},
 		RequestedName: requestedName,
 	}
+}
+
+func cloneModel(model *store.Model) *store.Model {
+	if model == nil {
+		return nil
+	}
+	clone := *model
+	return &clone
 }
 
 // ResolveClassifier 返回 classifier 专用模型配置

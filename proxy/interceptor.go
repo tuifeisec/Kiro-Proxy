@@ -365,20 +365,37 @@ func (s *Server) setupCaptureResponse() {
 			return resp
 		}
 
-		// 读取响应 body 后恢复，确保详细日志能展示返回数据且不影响客户端读取。
-		var body []byte
-		if resp.Body != nil {
-			var err error
-			body, err = io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil {
-				resp.Body = io.NopCloser(bytes.NewReader(nil))
-				s.logger.Warn("capture", fmt.Sprintf("[响应] 读取失败 status=%d %s%s", resp.StatusCode, host, ctx.Req.URL.Path), err.Error())
-				return resp
-			}
-			resp.Body = io.NopCloser(bytes.NewReader(body))
+		// 在下游实际读取时旁路采集，禁止提前消费上游流。
+		detail := captureResponseMetadata(ctx.Req, resp, protocol)
+		contentType := resp.Header.Get("Content-Type")
+		message := fmt.Sprintf("[响应] status=%d %s%s", resp.StatusCode, host, ctx.Req.URL.Path)
+		limit := s.logger.DetailLimit()
+		if limit <= 0 || limit > maxFullLogDetailBytes {
+			limit = maxFullLogDetailBytes
 		}
-		s.logger.Debug("capture", fmt.Sprintf("[响应] status=%d %s%s", resp.StatusCode, host, ctx.Req.URL.Path), formatCaptureResponseDetail(ctx.Req, resp, protocol, body))
+		complete := func(result capturedResponse) {
+			detail["body"] = captureBody(result.Body, contentType)
+			detail["observed_bytes"] = result.Total
+			detail["captured_bytes"] = len(result.Body)
+			detail["truncated"] = result.Total > int64(len(result.Body))
+			detail["completion"] = result.Completion
+			if result.Err != nil {
+				detail["read_error"] = result.Err.Error()
+			}
+			level := "debug"
+			if result.Err != nil {
+				level = "warn"
+			}
+			s.logger.LogWithMeta(level, "capture", message, LogMeta{Metadata: map[string]interface{}{
+				"observed_bytes": result.Total, "captured_bytes": len(result.Body),
+				"truncated": result.Total > int64(len(result.Body)), "completion": result.Completion,
+			}}, marshalCaptureDetail(detail))
+		}
+		if resp.Body != nil {
+			resp.Body = newCaptureObserver(resp.Body, limit, complete)
+		} else {
+			complete(capturedResponse{Completion: "eof"})
+		}
 		return resp
 	})
 }

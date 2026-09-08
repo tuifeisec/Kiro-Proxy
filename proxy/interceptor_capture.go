@@ -27,7 +27,14 @@ func formatCaptureRequestDetail(req *http.Request, protocol string, body []byte)
 }
 
 func formatCaptureResponseDetail(req *http.Request, resp *http.Response, protocol string, body []byte) string {
-	return marshalCaptureDetail(map[string]interface{}{
+	detail := captureResponseMetadata(req, resp, protocol)
+	detail["body"] = captureBody(body, resp.Header.Get("Content-Type"))
+	return marshalCaptureDetail(detail)
+}
+
+// 只保留独立的标量和 header 副本，流结束时不再读取可变请求对象。
+func captureResponseMetadata(req *http.Request, resp *http.Response, protocol string) map[string]interface{} {
+	return map[string]interface{}{
 		"type":         "response",
 		"protocol":     protocol,
 		"method":       req.Method,
@@ -38,8 +45,7 @@ func formatCaptureResponseDetail(req *http.Request, resp *http.Response, protoco
 		"status_text":  resp.Status,
 		"headers":      captureHeaders(resp.Header),
 		"content_type": resp.Header.Get("Content-Type"),
-		"body":         captureBody(body, resp.Header.Get("Content-Type")),
-	})
+	}
 }
 
 func captureHeaders(headers http.Header) map[string][]string {

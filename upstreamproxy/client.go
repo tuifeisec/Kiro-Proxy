@@ -94,9 +94,11 @@ type protocolFallbackTransport struct {
 
 func (t *protocolFallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.preferHTTP1(req, time.Now()) {
+		observeAttempt(req.Context(), false)
 		return t.fallback.RoundTrip(req)
 	}
 
+	observeAttempt(req.Context(), false)
 	resp, err := t.primary.RoundTrip(req)
 	if err == nil {
 		return t.observeHTTP2Response(req, resp), nil
@@ -112,6 +114,7 @@ func (t *protocolFallbackTransport) RoundTrip(req *http.Request) (*http.Response
 	}
 	fallbackReq := req.Clone(req.Context())
 	fallbackReq.Body = body
+	observeAttempt(fallbackReq.Context(), true)
 	return t.fallback.RoundTrip(fallbackReq)
 }
 

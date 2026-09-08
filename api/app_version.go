@@ -1,6 +1,7 @@
 package api
 
 import (
+	"kiro-proxy/buildinfo"
 	"kiro-proxy/license"
 	"net/http"
 )
@@ -10,5 +11,5 @@ func (s *Server) handleAppVersion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeOK(w, map[string]string{"version": license.AppVersion})
+	writeOK(w, map[string]interface{}{"version": license.AppVersion, "build": buildinfo.Current()})
 }

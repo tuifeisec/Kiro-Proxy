@@ -76,12 +76,23 @@ type ReqTool struct {
 // KiroToResponses 将解析好的会话转换为 OpenAI Responses API 请求体
 //
 // 缓存优化策略（针对 OpenAI Prompt Caching）：
-//   - 不使用 instructions 字段（社区反馈 instructions 会破坏前缀缓存）
+//   - 普通路径保留 developer input 布局；显式续接路径使用每轮 instructions
 //   - 将 system prompt 作为 input 数组的第一条 developer 消息
 //   - 分离 system prompt 中的动态尾部（"Here is the last user message"），移到末尾
 //   - 保持前缀稳定：[developer(静态system)] + [历史对话] + [动态内容(末尾)]
 //   - 工具定义放在 tools 字段（OpenAI 自动缓存 tools schema）
 func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+	return kiroToResponses(conv, targetModel, reasoningEffort, false)
+}
+
+// KiroToResponsesForContinuation 使用每轮替换的 instructions，避免代理拆出的
+// 动态 developer 尾部滞留在 previous_response_id 的历史输入中。
+// 仅用于明确启用续接的 Kiro 单一 SystemText；普通缓存路径保持原有布局。
+func KiroToResponsesForContinuation(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+	return kiroToResponses(conv, targetModel, reasoningEffort, true)
+}
+
+func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string, continuation bool) ([]byte, error) {
 	model := targetModel
 	if model == "" {
 		model = conv.ModelID
@@ -99,11 +110,18 @@ func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 	// 相同模型、静态 system 和 tools 复用同一个 key，提高跨会话的缓存路由命中率。
 	// 构建 input 数组（带缓存优化）
 	input := buildResponsesInputCacheOptimized(conv)
+	if continuation {
+		withoutSystem := *conv
+		withoutSystem.SystemText = ""
+		input = buildResponsesInputCacheOptimized(&withoutSystem)
+		req.Instructions = conv.SystemText
+	}
 	req.Input = input
 	// 工具定义
 	var openaiTools []OpenAITool
+	providerToolsHash := conv.ToolsHash
 	if len(conv.RawTools) > 0 {
-		openaiTools, _ = globalToolCache.GetOrConvert(conv.ToolsHash, conv.RawTools)
+		openaiTools, providerToolsHash = globalToolCache.GetOpenAIWithHash(conv.ToolsHash, conv.RawTools)
 		tools := make([]ReqTool, 0, len(openaiTools))
 		for _, t := range openaiTools {
 			tools = append(tools, ReqTool{
@@ -117,7 +135,7 @@ func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 	}
 
 	if !conv.IsClassifier {
-		if cacheKey := promptCacheKeyWithProviderTools(conv, model, "responses", openaiTools); cacheKey != "" {
+		if cacheKey := promptCacheKeyWithToolsHash(conv, model, "responses", providerToolsHash); cacheKey != "" {
 			req.PromptCacheKey = cacheKey
 		}
 	}
@@ -209,10 +227,8 @@ func buildResponsesUserMsg(content string, images []KiroImage) ReqInput {
 // buildResponsesInputCacheOptimized 构建带缓存优化的 input 数组
 //
 // OpenAI Prompt Caching 核心规则：
-//  1. 自动匹配请求的最长前缀（从第一个 token 开始）
-//  2. 前缀必须 >= 1024 tokens 才能触发缓存
-//  3. 以 128 token 为增量递增缓存范围
-//  4. 前缀中任何一个 byte 变了，后面的全部无法命中缓存
+//  按上游模型支持的缓存规则复用稳定前缀；本地 JSON 结构一致是诊断信号，
+//  不能据此承诺实际命中率、计费 token 数或首内容延迟。
 //
 // 优化策略：
 //   - system prompt 中的静态部分作为 developer 消息放在最前面（稳定前缀）

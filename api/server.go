@@ -4,6 +4,7 @@
 package api
 
 import (
+	"kiro-proxy/codex"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"net/http"
@@ -13,6 +14,7 @@ type Server struct {
 	db             *store.DB
 	router         *router.Router
 	stats          *store.Stats
+	credentials    *codex.CredentialManager
 	mux            *http.ServeMux
 	healthProvider ModelHealthProvider
 }
@@ -21,12 +23,20 @@ type ModelHealthProvider interface {
 	ModelHealthStatuses() []store.ModelHealthStatus
 }
 
-func New(db *store.DB, r *router.Router, stats *store.Stats) *Server {
+func New(db *store.DB, r *router.Router, stats *store.Stats, managers ...*codex.CredentialManager) *Server {
+	var credentials *codex.CredentialManager
+	if len(managers) > 0 {
+		credentials = managers[0]
+	}
+	if credentials == nil {
+		credentials = codex.NewCredentialManager(db)
+	}
 	s := &Server{
-		db:     db,
-		router: r,
-		stats:  stats,
-		mux:    http.NewServeMux(),
+		db:          db,
+		router:      r,
+		stats:       stats,
+		credentials: credentials,
+		mux:         http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s

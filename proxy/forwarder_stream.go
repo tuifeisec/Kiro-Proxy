@@ -69,15 +69,21 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 			responseID := sc.ResponseID()
 			stateKey := responsesContinuationStateKeyFor(pre, m, resolveReasoningEffort(pre, m))
 			if responseID != "" && contResult != nil && stateKey != "" {
-				if err := f.db.UpsertResponsesSession(&store.ResponsesSession{
+				persistenceStarted := time.Now()
+				committed, err := f.db.CommitResponsesSession(&store.ResponsesSession{
 					StateKey:   stateKey,
 					InputHash:  converter.HashInput(contResult.FullInputJSON),
 					ResponseID: responseID,
 					InputJSON:  contResult.FullInputJSON,
 					ItemCount:  contResult.InputItemCount,
 					UpdatedAt:  time.Now(),
-				}); err != nil {
+				}, contResult.StateGeneration)
+				if err != nil {
 					logger.Error("forwarder", fmt.Sprintf("保存 Responses 续传状态失败: %v", err))
+					return
+				}
+				if !committed {
+					logger.Info("forwarder", "续传状态未保存：请求代次已被替代或快照超过预算")
 					return
 				}
 				ridShort := responseID
@@ -88,7 +94,7 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 				if stateKey != pre.Conv.ConversationID {
 					stateScope = "branch"
 				}
-				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, stateScope=%s, responseId=%s", pre.Conv.ConversationID, stateScope, ridShort))
+				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, stateScope=%s, responseId=%s, session_write_ms=%d", pre.Conv.ConversationID, stateScope, ridShort, time.Since(persistenceStarted).Milliseconds()))
 			}
 		}
 	default: // /v1/chat/completions（含 classifier）

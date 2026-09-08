@@ -24,6 +24,7 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"github.com/google/uuid"
 )
 
 const (
@@ -50,30 +51,36 @@ var (
 
 // Forwarder 负责转发请求到上游
 type Forwarder struct {
-	stats       *store.Stats
-	db          *store.DB
-	clientMu    sync.RWMutex
-	clients     map[string]*http.Client
-	health      *modelHealthTracker
-	affinity    *modelAffinityStore
-	load        *modelLoadTracker
-	latency     *modelLatencyTracker
-	upstream    *upstreamBucketHealth
-	avoidance   *modelAvoidanceStore
-	imageCaps   *modelImageCapabilityStore
-	prefixAudit *prefixAuditTracker
+	stats         *store.Stats
+	db            *store.DB
+	credentials   *codex.CredentialManager
+	clientMu      sync.RWMutex
+	clients       map[string]*http.Client
+	clientEntries map[string]*pooledTransport
+	health        *modelHealthTracker
+	affinity      *modelAffinityStore
+	load          *modelLoadTracker
+	latency       *modelLatencyTracker
+	upstream      *upstreamBucketHealth
+	avoidance     *modelAvoidanceStore
+	imageCaps     *modelImageCapabilityStore
+	prefixAudit   *prefixAuditTracker
 }
 
 // NewForwarder 创建转发器
-func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
-	client, _ := upstreamproxy.NewClient("", 0)
+func NewForwarder(stats *store.Stats, db *store.DB, managers ...*codex.CredentialManager) *Forwarder {
 	clients := make(map[string]*http.Client)
-	if client != nil {
-		clients[""] = client
+	var credentials *codex.CredentialManager
+	if len(managers) > 0 {
+		credentials = managers[0]
 	}
-	return &Forwarder{
+	if credentials == nil {
+		credentials = codex.NewCredentialManager(db)
+	}
+	f := &Forwarder{
 		stats:       stats,
 		db:          db,
+		credentials: credentials,
 		clients:     clients,
 		health:      newModelHealthTracker(),
 		affinity:    newModelAffinityStore(),
@@ -84,6 +91,8 @@ func NewForwarder(stats *store.Stats, db *store.DB) *Forwarder {
 		imageCaps:   newModelImageCapabilityStore(),
 		prefixAudit: newPrefixAuditTracker(),
 	}
+	_, _ = f.clientForProxy("")
+	return f
 }
 
 func requestWithProtocolFallback(
@@ -156,30 +165,6 @@ func modelGroupRetryBudget(route *router.Route) time.Duration {
 		return minimumRetryBudget
 	}
 	return budget
-}
-
-func (f *Forwarder) clientForProxy(proxyAddr string) (*http.Client, error) {
-	proxyAddr = strings.TrimSpace(proxyAddr)
-
-	f.clientMu.RLock()
-	if client := f.clients[proxyAddr]; client != nil {
-		f.clientMu.RUnlock()
-		return client, nil
-	}
-	f.clientMu.RUnlock()
-
-	f.clientMu.Lock()
-	defer f.clientMu.Unlock()
-	if client := f.clients[proxyAddr]; client != nil {
-		return client, nil
-	}
-
-	client, err := upstreamproxy.NewClient(proxyAddr, 0)
-	if err != nil {
-		return nil, err
-	}
-	f.clients[proxyAddr] = client
-	return client, nil
 }
 
 func (f *Forwarder) ModelHealthStatuses() []store.ModelHealthStatus {
@@ -627,7 +612,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				continue
 			}
 			resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
-			if firstByteDuration > 0 {
+			if firstByteDuration > 0 && resp != nil && (resp.StatusCode >= http.StatusBadRequest || !isSSEResponse(resp)) {
 				f.latency.record(model.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
 			}
 			bodyDetail := ""
@@ -759,7 +744,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 						"stream_outcome": string(outcome),
 					},
 				})
-			})
+			}, f.contentLatencyHook(pre.usage, model, configuredFirstByteTimeout))
 		}
 
 		// 如果阶段内成功，直接返回，不继续后续阶段
@@ -867,8 +852,10 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		continuationStateKey = responsesContinuationStateKeyFor(pre, model, resolveReasoningEffort(pre, model))
 	}
 	if pre != nil && pre.Conv != nil && !forceReasoningChat && model.EnableContinuation && useResponsesAPI(pre, model) && !pre.Conv.IsClassifier && continuationStateKey != "" {
-		prevSession, sessionErr := f.db.GetResponsesSession(continuationStateKey)
+		sessionStarted := time.Now()
+		prevSession, generation, sessionErr := f.db.BeginResponsesSession(continuationStateKey)
 		if sessionErr != nil {
+			pre.usage.setSessionReadDuration(sessionStarted)
 			return nil, nil, fmt.Errorf("读取 Responses 续传状态失败: %w", sessionErr)
 		}
 		var prevState *converter.ResponsesContinuationState
@@ -877,6 +864,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		}
 		contResult, err = converter.ApplyResponsesContinuation(upstreamBody, prevState)
 		if err == nil && contResult != nil {
+			contResult.StateGeneration = generation
 			if contResult.UsedContinuation {
 				prevID := prevState.ResponseID
 				if len(prevID) > 12 {
@@ -886,17 +874,16 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 			}
 			upstreamBody = contResult.Body
 		}
+		pre.usage.setSessionReadDuration(sessionStarted)
 	}
 
+	auditStarted := time.Now()
 	f.logPrefixDrift(logger, pre, model, upstreamBody, contResult)
+	pre.usage.setAuditDuration(auditStarted)
 	logger.InfoBytes("forwarder", fmt.Sprintf("转发: %s → %s (body=%d bytes)", model.ModelID, upstreamURL, len(upstreamBody)), upstreamBody)
 	sessionID := ""
 	if pre != nil && pre.Conv != nil {
-		if pre.Conv.IsClassifier {
-			sessionID = "kiro-classifier"
-		} else {
-			sessionID = pre.Conv.ConversationID
-		}
+		sessionID = pre.Conv.ConversationID
 	}
 	resp, err := f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retryBudget)
 	if err != nil {
@@ -911,7 +898,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		bodyStr := string(body)
 		if shouldRetryWithoutContinuation(bodyStr) {
 			logger.Warn("forwarder", fmt.Sprintf("续传请求被上游拒绝，清理状态并回退全量: %s", truncate(bodyStr, 200)))
-			if deleteErr := f.db.DeleteResponsesSession(continuationStateKey); deleteErr != nil {
+			if deleteErr := f.db.InvalidateResponsesSession(continuationStateKey, contResult.StateGeneration); deleteErr != nil {
 				logger.Error("forwarder", fmt.Sprintf("清理 Responses 续传状态失败: %v", deleteErr))
 			}
 			fallbackBudget, budgetAvailable := remainingProtocolRetryBudget(retryBudget, conversionStarted)
@@ -1024,14 +1011,38 @@ func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body [
 	return f.doRequest(ctx, url, body, model, sessionID, usage)
 }
 
-func (f *Forwarder) finalizeForwardResponse(ctx context.Context, resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult, onStreamOutcome func(converter.StreamOutcome)) (*http.Response, error) {
+func (f *Forwarder) finalizeForwardResponse(ctx context.Context, resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult, onStreamOutcome func(converter.StreamOutcome), onFirstContent ...func(time.Time, string)) (*http.Response, error) {
 	if pre != nil && pre.usage != nil {
-		pre.usage.wrapResponse(resp)
+		var contentHook func(time.Time, string)
+		if len(onFirstContent) > 0 {
+			contentHook = onFirstContent[0]
+		}
+		endpoint := ""
+		if model != nil {
+			endpoint = model.Endpoint
+		}
+		pre.usage.wrapResponseForModel(resp, model, endpoint, contentHook)
 	}
 	if pre == nil || pre.Protocol != "kiro" {
 		return resp, nil
 	}
 	return f.wrapKiroStream(ctx, resp, pre, model, logger, contResult, onStreamOutcome)
+}
+
+func (f *Forwarder) contentLatencyHook(usage *requestUsageRecorder, model *store.Model, threshold time.Duration) func(time.Time, string) {
+	if f == nil || usage == nil || model == nil || f.latency == nil {
+		return nil
+	}
+	return func(at time.Time, _ string) {
+		started := usage.attemptStart()
+		if started.IsZero() {
+			started = usage.start
+		}
+		if started.IsZero() || at.IsZero() || at.Before(started) {
+			return
+		}
+		f.latency.record(model.ID, at.Sub(started), threshold, time.Now())
+	}
 }
 
 func bindUsageModel(pre *Preflight, model *store.Model) {
@@ -1258,7 +1269,7 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("User-Agent", ua.CodexUserAgent())
+	req.Header.Set("User-Agent", ua.ProviderUserAgent(m.Provider))
 
 	switch m.Provider {
 	case "anthropic":
@@ -1275,25 +1286,19 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 			}
 		}
 	case "codex":
-		beforeToken := m.APIKey
-		beforeRefresh := m.RefreshToken
 		authStarted := time.Now()
-		err := codex.EnsureAccessToken(ctx, m)
+		ensured, err := f.credentials.Ensure(ctx, *m)
 		if usage != nil {
 			usage.addAuthDuration(time.Since(authStarted))
 		}
 		if err != nil {
 			return nil, err
 		}
-		if (m.APIKey != beforeToken || m.RefreshToken != beforeRefresh) && f.db != nil {
-			_ = f.db.UpdateCodexTokenAndUsage(m)
-		}
-		codex.ApplyHeaders(req, m.APIKey, m.CodexAccountID, true)
+		codex.ApplyHeaders(req, ensured.APIKey, ensured.CodexAccountID, true)
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
 		req.Header.Set("x-openai-internal-codex-residency", "us")
 		req.Header.Set("x-client-request-id", sessionIDOrRandom(sessionID))
-		req.Header.Set("x-codex-installation-id", "kiro-proxy")
 	default:
 		req.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}
@@ -1301,6 +1306,9 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 	// 中转站缓存关联（多种 header 兼容）。sub2api 明确读取 session_id，
 	// Nginx 反代需开启 underscores_in_headers；同时保留短横线写法兼容其他中转。
 	if sessionID != "" {
+		if m.EnableOpenCodeSession {
+			req.Header.Set("x-opencode-session", sessionID)
+		}
 		req.Header.Set("session_id", sessionID)
 		req.Header.Set("conversation_id", sessionID)
 		req.Header.Set("x-session-id", sessionID)
@@ -1348,14 +1356,7 @@ func responsesContinuationStateKeyFor(pre *Preflight, model *store.Model, reason
 		return ""
 	}
 
-	modelKey := ""
-	if model != nil {
-		modelKey = strings.TrimSpace(model.ID)
-		if modelKey == "" {
-			modelKey = strings.TrimSpace(model.ModelID)
-		}
-	}
-	return strings.Join([]string{base, modelKey, strings.TrimSpace(reasoningEffort)}, "|")
+	return responsesSessionScope(base, pre.Conv, model, reasoningEffort)
 }
 
 func isPreviousResponseRejected(body string) bool {
@@ -1428,8 +1429,7 @@ func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *sto
 	toolReport := converter.ToolConversionReport{}
 	toolResultReport := converter.ToolResultConversionReportForAudit(pre.Conv)
 	if openAICache {
-		providerToolsHash = converter.ProviderToolsHashForAudit(pre.Conv.RawTools)
-		toolReport = converter.ToolConversionReportForAudit(pre.Conv.RawTools, true)
+		providerToolsHash, toolReport = converter.CachedOpenAIToolAudit(pre.Conv.ToolsHash, pre.Conv.RawTools)
 	}
 	actualCacheKey := ""
 	expectedCacheKey := ""
@@ -1653,7 +1653,7 @@ func sessionIDOrRandom(sessionID string) string {
 	if strings.TrimSpace(sessionID) != "" {
 		return sessionID
 	}
-	return fmt.Sprintf("kiro-proxy-%d", time.Now().UnixNano())
+	return uuid.NewString()
 }
 
 func streamLogMeta(pre *Preflight, m *store.Model, resp *http.Response, in, out, cacheRead, cacheWrite int, credits float64) LogMeta {

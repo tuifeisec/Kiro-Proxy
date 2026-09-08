@@ -7,6 +7,7 @@ import (
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
+	"kiro-proxy/upstreamproxy"
 	"log"
 	"net/http"
 	"net/http/httptrace"
@@ -23,10 +24,13 @@ type requestUsageRecorder struct {
 	model     *store.Model
 	start     time.Time
 	firstByte atomic.Int64
+	itemMu    sync.Mutex
 	traceMu   sync.Mutex
 	trace     requestTraceMetrics
 	errorMu   sync.Mutex
 	readError string
+	contentMu sync.Mutex
+	content   *contentMetrics
 	once      sync.Once
 }
 
@@ -49,6 +53,8 @@ func (r *requestUsageRecorder) setModel(model *store.Model) {
 	if r == nil || model == nil {
 		return
 	}
+	r.itemMu.Lock()
+	defer r.itemMu.Unlock()
 	r.model = model
 	r.item.ModelID = statsModelID(model)
 	r.item.Provider = model.Provider
@@ -62,6 +68,8 @@ func (r *requestUsageRecorder) setRoute(route *router.Route) {
 	if r == nil || route == nil {
 		return
 	}
+	r.itemMu.Lock()
+	defer r.itemMu.Unlock()
 	r.item.RequestedModel = route.RequestedName
 	if route.Group != nil {
 		r.item.RouteGroupID = route.Group.ID
@@ -75,28 +83,36 @@ func (r *requestUsageRecorder) setFailoverCount(count int) {
 	if count < 0 {
 		count = 0
 	}
+	r.itemMu.Lock()
 	r.item.FailoverCount = count
+	r.itemMu.Unlock()
 }
 
 func (r *requestUsageRecorder) setDispatchReason(reason string) {
 	if r == nil {
 		return
 	}
+	r.itemMu.Lock()
 	r.item.DispatchReason = strings.TrimSpace(reason)
+	r.itemMu.Unlock()
 }
 
 func (r *requestUsageRecorder) setFailoverReason(reason string) {
 	if r == nil {
 		return
 	}
+	r.itemMu.Lock()
 	r.item.FailoverReason = strings.TrimSpace(reason)
+	r.itemMu.Unlock()
 }
 
 func (r *requestUsageRecorder) addCapacityWait(duration time.Duration) {
 	if r == nil || duration <= 0 {
 		return
 	}
+	r.itemMu.Lock()
 	r.item.CapacityWaitMS += duration.Milliseconds()
+	r.itemMu.Unlock()
 }
 
 func (r *requestUsageRecorder) markFirstByte(at time.Time) {
@@ -110,26 +126,45 @@ func (r *requestUsageRecorder) setReasoningEffort(value string) {
 	if r == nil {
 		return
 	}
+	r.itemMu.Lock()
 	r.item.ReasoningEffort = value
+	r.itemMu.Unlock()
+}
+
+func (r *requestUsageRecorder) attemptStart() time.Time {
+	if r == nil {
+		return time.Time{}
+	}
+	r.traceMu.Lock()
+	defer r.traceMu.Unlock()
+	return r.trace.attemptStarted
+}
+
+func (r *requestUsageRecorder) contentOptions(protocol contentMetricProtocol, onFirstContent func(time.Time, string)) contentMetricOptions {
+	return contentMetricOptions{protocol: protocol, start: r.start, onFirstContent: onFirstContent}
 }
 
 type requestTraceMetrics struct {
-	attemptStarted   time.Time
-	dnsStarted       time.Time
-	connectStarted   time.Time
-	tlsStarted       time.Time
-	gotConnection    time.Time
-	requestWritten   time.Time
-	conversionMS     int64
-	authMS           int64
-	dnsMS            int64
-	connectMS        int64
-	tlsMS            int64
-	requestSendMS    int64
-	upstreamWaitMS   int64
-	responseHeaderMS int64
-	retries          int
-	reusedConnection bool
+	attemptStarted         time.Time
+	dnsStarted             time.Time
+	connectStarted         time.Time
+	tlsStarted             time.Time
+	gotConnection          time.Time
+	requestWritten         time.Time
+	conversionMS           int64
+	auditMS                int64
+	sessionReadMS          int64
+	authMS                 int64
+	dnsMS                  int64
+	connectMS              int64
+	tlsMS                  int64
+	requestSendMS          int64
+	upstreamWaitMS         int64
+	responseHeaderMS       int64
+	retries                int
+	reusedConnection       bool
+	wireAttemptCount       int
+	transportFallbackCount int
 }
 
 func (r *requestUsageRecorder) beginAttempt() {
@@ -155,6 +190,36 @@ func (r *requestUsageRecorder) setConversionDuration(started time.Time) {
 	}
 	r.traceMu.Lock()
 	r.trace.conversionMS += time.Since(started).Milliseconds()
+	r.traceMu.Unlock()
+}
+
+func (r *requestUsageRecorder) setAuditDuration(started time.Time) {
+	if r == nil || started.IsZero() {
+		return
+	}
+	r.traceMu.Lock()
+	r.trace.auditMS += time.Since(started).Milliseconds()
+	r.traceMu.Unlock()
+}
+
+func (r *requestUsageRecorder) setSessionReadDuration(started time.Time) {
+	if r == nil || started.IsZero() {
+		return
+	}
+	r.traceMu.Lock()
+	r.trace.sessionReadMS += time.Since(started).Milliseconds()
+	r.traceMu.Unlock()
+}
+
+func (r *requestUsageRecorder) recordWireAttempt(fallback bool) {
+	if r == nil {
+		return
+	}
+	r.traceMu.Lock()
+	r.trace.wireAttemptCount++
+	if fallback {
+		r.trace.transportFallbackCount++
+	}
 	r.traceMu.Unlock()
 }
 
@@ -235,14 +300,41 @@ func (r *requestUsageRecorder) traceContext(ctx context.Context) context.Context
 			r.traceMu.Unlock()
 		},
 	}
-	return httptrace.WithClientTrace(ctx, trace)
+	ctx = httptrace.WithClientTrace(ctx, trace)
+	return upstreamproxy.WithAttemptObserver(ctx, r.recordWireAttempt)
 }
 
-func (r *requestUsageRecorder) wrapResponse(resp *http.Response) {
+func (r *requestUsageRecorder) wrapResponse(resp *http.Response, options ...contentMetricOptions) {
 	if r == nil || resp == nil || resp.Body == nil {
 		return
 	}
+	if len(options) > 0 {
+		metrics := newContentMetrics(options[0])
+		r.contentMu.Lock()
+		r.content = metrics
+		r.contentMu.Unlock()
+		resp.Body = metrics.wrap(resp.Body)
+	}
 	resp.Body = &usageObservedBody{ReadCloser: resp.Body, recorder: r}
+}
+
+func (r *requestUsageRecorder) wrapResponseForModel(resp *http.Response, model *store.Model, endpoint string, onFirstContent func(time.Time, string)) {
+	if r == nil || resp == nil {
+		return
+	}
+	provider := ""
+	if model != nil {
+		provider = model.Provider
+		if endpoint == "" {
+			endpoint = model.Endpoint
+		}
+	}
+	protocol := contentMetricProtocolForResponse(resp, provider, endpoint)
+	if protocol == "" {
+		r.wrapResponse(resp)
+		return
+	}
+	r.wrapResponse(resp, r.contentOptions(protocol, onFirstContent))
 }
 
 func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorMessage string) {
@@ -255,6 +347,8 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 			errorMessage = r.readError
 			r.errorMu.Unlock()
 		}
+		r.itemMu.Lock()
+		defer r.itemMu.Unlock()
 		r.item.StatusCode = status
 		r.item.Success = status >= 200 && status < 400 && errorMessage == ""
 		r.item.InputTokens = usage.InputTokens
@@ -273,6 +367,8 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 		}
 		r.traceMu.Lock()
 		r.item.ConversionMS = r.trace.conversionMS
+		r.item.AuditMS = r.trace.auditMS
+		r.item.SessionReadMS = r.trace.sessionReadMS
 		r.item.AuthMS = r.trace.authMS
 		r.item.DNSMS = r.trace.dnsMS
 		r.item.ConnectMS = r.trace.connectMS
@@ -282,6 +378,8 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 		r.item.ResponseHeaderMS = r.trace.responseHeaderMS
 		r.item.RetryCount = r.trace.retries
 		r.item.ReusedConnection = r.trace.reusedConnection
+		r.item.WireAttemptCount = r.trace.wireAttemptCount
+		r.item.TransportFallbackCount = r.trace.transportFallbackCount
 		r.traceMu.Unlock()
 		if r.item.FirstByteMS > r.item.ResponseHeaderMS {
 			r.item.StreamWaitMS = r.item.FirstByteMS - r.item.ResponseHeaderMS
@@ -289,10 +387,40 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 			r.item.StreamWaitMS = r.item.DurationMS - r.item.ResponseHeaderMS
 		}
 		r.item.ErrorMessage = sanitizeUsageError(errorMessage)
+		r.contentMu.Lock()
+		content := r.content
+		r.contentMu.Unlock()
+		if content != nil {
+			snapshot := content.snapshot()
+			r.item.ContentMeasurementComplete = snapshot.measurementComplete
+			r.item.ContentMeasured = snapshot.contentMeasured
+			r.item.FirstEventMS = elapsedMetricMS(r.start, snapshot.firstEventAt)
+			r.item.FirstContentMS = elapsedMetricMS(r.start, snapshot.firstContentAt)
+			r.item.FirstContentType = snapshot.firstContentType
+			r.item.MaxContentGapMS = durationMetricMS(snapshot.maxContentGap)
+		}
 		if err := r.db.InsertRequestUsage(&r.item); err != nil {
 			log.Printf("[request-usage] 写入失败: %v", err)
 		}
 	})
+}
+
+func elapsedMetricMS(start, at time.Time) int64 {
+	if start.IsZero() || at.IsZero() || at.Before(start) {
+		return 0
+	}
+	return durationMetricMS(at.Sub(start))
+}
+
+func durationMetricMS(duration time.Duration) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	value := duration.Milliseconds()
+	if value < 1 {
+		return 1
+	}
+	return value
 }
 
 type usageObservedBody struct {

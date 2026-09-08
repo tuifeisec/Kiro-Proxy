@@ -39,12 +39,13 @@ func KiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort 
 	// 相同模型、静态 system 和 tools 复用同一个 key，提高跨会话的缓存路由命中率。
 	// 工具定义（走缓存）
 	var openaiTools []OpenAITool
+	providerToolsHash := conv.ToolsHash
 	if len(conv.RawTools) > 0 {
-		openaiTools, _ = globalToolCache.GetOrConvert(conv.ToolsHash, conv.RawTools)
+		openaiTools, providerToolsHash = globalToolCache.GetOpenAIWithHash(conv.ToolsHash, conv.RawTools)
 		req.Tools = openaiTools
 	}
 	if !conv.IsClassifier {
-		if cacheKey := promptCacheKeyWithProviderTools(conv, model, "chat", openaiTools); cacheKey != "" {
+		if cacheKey := promptCacheKeyWithToolsHash(conv, model, "chat", providerToolsHash); cacheKey != "" {
 			req.PromptCacheKey = cacheKey
 		}
 	}

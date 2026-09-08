@@ -100,7 +100,11 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 			body = codex.NewRequestBodyFromResponses(body, m.ServiceTier)
 		}
 	case useResponsesAPI(pre, m):
-		body, err = converter.KiroToResponses(conv, m.ModelID, reasoningEffort)
+		if m.EnableContinuation {
+			body, err = converter.KiroToResponsesForContinuation(conv, m.ModelID, reasoningEffort)
+		} else {
+			body, err = converter.KiroToResponses(conv, m.ModelID, reasoningEffort)
+		}
 		if err == nil {
 			body = setResponsesStore(body, m.EnableContinuation)
 		}

@@ -39,6 +39,7 @@ const defaultForm = () => ({
   cache_input_price: 0.5,
   cache_output_price: 30,
   enable_continuation: false,
+  enable_opencode_session: false,
   note: ''
 })
 
@@ -710,23 +711,36 @@ async function handleExchangeOAuth() {
                 </div>
               </div>
 
-              <div class="flex min-h-[44px] items-center justify-between gap-3 sm:border-l sm:border-[#eef2f7] sm:pl-3.5">
-                <div class="min-w-0">
-                  <div class="flex items-center gap-1 text-xs font-medium text-[#111827]">
-                    响应续接
-                    <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
-                      i
-                      <span class="pointer-events-none absolute bottom-5 right-0 z-20 hidden w-56 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
-                        启用 continuation / previous_response_id，仅适用于直连 OpenAI 官方 API
+              <div class="space-y-2.5 sm:border-l sm:border-[#eef2f7] sm:pl-3.5">
+                <div class="flex min-h-[44px] items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-1 text-xs font-medium text-[#111827]">
+                      响应续接
+                      <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-[#d1d5db] text-[9px] font-normal leading-none text-[#9ca3af]">
+                        i
+                        <span class="pointer-events-none absolute bottom-5 right-0 z-20 hidden w-56 rounded-md border border-[#e5e7eb] bg-[#111827] px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover:block">
+                          启用 continuation / previous_response_id，仅适用于直连 OpenAI 官方 API
+                        </span>
                       </span>
-                    </span>
+                    </div>
+                    <p class="mt-1 text-[11px] leading-4 text-[#9ca3af]">直连 OpenAI 官方 API 时启用，中转服务保持关闭</p>
                   </div>
-                  <p class="mt-1 text-[11px] leading-4 text-[#9ca3af]">直连 OpenAI 官方 API 时启用，中转服务保持关闭</p>
+                  <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                    <input type="checkbox" v-model="form.enable_continuation" class="peer sr-only" />
+                    <div class="h-5 w-9 rounded-full bg-[#e5e7eb] after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#2563eb] peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
+                  </label>
                 </div>
-                <label class="relative inline-flex shrink-0 cursor-pointer items-center">
-                  <input type="checkbox" v-model="form.enable_continuation" class="peer sr-only" />
-                  <div class="h-5 w-9 rounded-full bg-[#e5e7eb] after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#2563eb] peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
-                </label>
+
+                <div class="flex min-h-[52px] items-center justify-between gap-3 border-t border-[#eef2f7] pt-2.5">
+                  <div class="min-w-0">
+                    <div class="text-xs font-medium text-[#111827]">OpenCode 会话兼容</div>
+                    <p class="mt-1 text-[11px] leading-4 text-[#9ca3af]">仅在上游需要时开启，发送 x-opencode-session；客户端标识由 Provider 决定。</p>
+                  </div>
+                  <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                    <input type="checkbox" v-model="form.enable_opencode_session" aria-label="OpenCode 会话兼容" class="peer sr-only" />
+                    <div class="h-5 w-9 rounded-full bg-[#e5e7eb] after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#2563eb] peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
+                  </label>
+                </div>
               </div>
             </div>
           </section>

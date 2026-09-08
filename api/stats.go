@@ -5,6 +5,7 @@
 package api
 
 import (
+	"kiro-proxy/converter"
 	"net/http"
 	"time"
 )
@@ -25,6 +26,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	// 检查是否查询日统计
 	query := r.URL.Query()
+	if query.Get("type") == "cache" {
+		writeOK(w, map[string]interface{}{"tools": converter.GlobalToolCacheStats()})
+		return
+	}
 	if query.Get("type") == "daily" {
 		startDate := query.Get("start")
 		endDate := query.Get("end")

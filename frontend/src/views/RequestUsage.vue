@@ -90,6 +90,13 @@ function formatDuration(value) {
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`
 }
 
+function formatMeasuredDuration(value, measured) {
+  if (!measured) return '未测量'
+  const ms = Number(value)
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`
+}
+
 function streamingDuration(item) {
   return Math.max(0, Number(item.duration_ms || 0) - Number(item.first_byte_ms || 0))
 }
@@ -220,8 +227,14 @@ const cards = computed(() => [
   { label: '请求数', value: formatNum(summary.value.requests), sub: `异常 ${formatNum(summary.value.errors)}`, tone: 'blue' },
   { label: '输入 Token', value: formatNum(summaryInputTokens.value), sub: `不含缓存 · 缓存读取 ${formatNum(summary.value.cache_read_tokens)}`, tone: 'cyan' },
   { label: '输出 Token', value: formatNum(summary.value.output_tokens), sub: `缓存写入 ${formatNum(summary.value.cache_write_tokens)}`, tone: 'violet' },
-  { label: '成本', value: formatCredits(summary.value.credits), sub: `首字 ${formatDuration(summary.value.average_first_byte_ms)} · 耗时 ${formatDuration(summary.value.average_duration_ms)}`, tone: 'amber' },
+  { label: '成本', value: formatCredits(summary.value.credits), sub: `首字 ${formatDuration(summary.value.average_first_byte_ms)} · 首内容 ${formatMeasuredDuration(summary.value.average_first_content_ms, Number(summary.value.content_samples || 0) > 0)} · 耗时 ${formatDuration(summary.value.average_duration_ms)}`, tone: 'amber' },
 ])
+
+function contentMeasurementStatus(item) {
+  if (!item?.content_measurement_complete) return '未知或未完整'
+  if (!item.content_measured) return '未识别内容'
+  return item.first_content_type || '已识别'
+}
 
 onMounted(() => {
   load()
@@ -475,12 +488,20 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
             <section class="border-b border-[#edf0f5] px-4 py-4">
               <h3 class="mb-3 text-[13px] font-semibold text-[#0f172a]">耗时分解</h3>
               <dl class="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-[12px]">
+                <dt class="text-[#64748b]">请求转换</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.conversion_ms) }}</dd>
+                <dt class="text-[#64748b]">前缀审计</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.audit_ms) }}</dd>
+                <dt class="text-[#64748b]">会话状态</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.session_read_ms) }}</dd>
                 <dt class="text-[#64748b]">DNS</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.dns_ms) }}</dd>
                 <dt class="text-[#64748b]">连接上游</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.connect_ms) }}</dd>
                 <dt class="text-[#64748b]">TLS 握手</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.tls_ms) }}</dd>
                 <dt class="text-[#64748b]">上游等待响应</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.upstream_wait_ms) }}</dd>
                 <dt class="text-[#64748b]">亲和容量等待</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.capacity_wait_ms) }}</dd>
                 <dt class="text-[#64748b]">首字耗时</dt><dd class="font-medium tabular-nums text-[#2563eb]">{{ formatDuration(selectedItem.first_byte_ms) }}</dd>
+                <dt class="text-[#64748b]">首事件耗时</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.first_event_ms) }}</dd>
+                <dt class="text-[#64748b]">首内容耗时</dt><dd class="tabular-nums text-[#334155]">{{ formatMeasuredDuration(selectedItem.first_content_ms, selectedItem.content_measured) }}</dd>
+                <dt class="text-[#64748b]">内容类型</dt><dd class="text-[#334155]">{{ contentMeasurementStatus(selectedItem) }}</dd>
+                <dt class="text-[#64748b]">最大内容间隔</dt><dd class="tabular-nums text-[#334155]">{{ formatMeasuredDuration(selectedItem.max_content_gap_ms, selectedItem.content_measured) }}</dd>
+                <dt class="text-[#64748b]">底层尝试</dt><dd class="tabular-nums text-[#334155]">{{ selectedItem.wire_attempt_count ? selectedItem.wire_attempt_count : '—' }}<span v-if="selectedItem.transport_fallback_count" class="text-[#d97706]"> · 回退 {{ selectedItem.transport_fallback_count }}</span></dd>
                 <dt class="text-[#64748b]">总耗时</dt><dd class="font-medium tabular-nums text-[#0f172a]">{{ formatDuration(selectedItem.duration_ms) }}</dd>
               </dl>
             </section>

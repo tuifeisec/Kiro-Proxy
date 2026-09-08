@@ -37,6 +37,7 @@ type ResponsesContinuationState struct {
 
 // ResponsesContinuationResult 续传处理结果
 type ResponsesContinuationResult struct {
+	StateGeneration  int64  // 调用方的会话写入代次，旧请求不得覆盖新代次
 	Body             []byte // 最终请求体（可能带 previous_response_id + delta input）
 	UsedContinuation bool   // 是否使用了续传
 	FullInputJSON    string // 完整 input JSON（用于后续存储）
@@ -122,7 +123,15 @@ func ApplyResponsesContinuation(body []byte, prevState *ResponsesContinuationSta
 	req.PreviousResponseID = prevState.ResponseID
 	req.Input = delta
 
-	continuationBody, err := json.Marshal(req)
+	// 只替换续接需要的字段，保留供应商扩展字段和原始 JSON 值。
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		result.Body = body
+		return result, nil
+	}
+	fields["previous_response_id"], _ = json.Marshal(req.PreviousResponseID)
+	fields["input"], _ = json.Marshal(req.Input)
+	continuationBody, err := json.Marshal(fields)
 	if err != nil {
 		result.Body = body
 		return result, nil
@@ -162,7 +171,7 @@ func HashInput(inputJSON string) string {
 
 // RebuildResponsesWithoutContinuation 当续传被上游拒绝时，用完整 input 重建请求
 func RebuildResponsesWithoutContinuation(continuationBody []byte, fullInputJSON string) ([]byte, error) {
-	var req responsesRequestForContinuation
+	var req map[string]json.RawMessage
 	if err := json.Unmarshal(continuationBody, &req); err != nil {
 		return nil, err
 	}
@@ -173,7 +182,7 @@ func RebuildResponsesWithoutContinuation(continuationBody []byte, fullInputJSON 
 		return nil, err
 	}
 
-	req.PreviousResponseID = ""
-	req.Input = fullInput
+	delete(req, "previous_response_id")
+	req["input"], _ = json.Marshal(fullInput)
 	return json.Marshal(req)
 }

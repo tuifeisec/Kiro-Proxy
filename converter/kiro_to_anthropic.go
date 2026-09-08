@@ -48,7 +48,7 @@ func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffo
 	// 工具定义（走本地转换缓存）+ 最后一个工具添加 cache_control。
 	// breakpoint 在最后一个工具上，可缓存稳定的 system + tools 前缀。
 	if len(conv.RawTools) > 0 {
-		_, anthropicTools := globalToolCache.GetOrConvert(conv.ToolsHash, conv.RawTools)
+		anthropicTools := globalToolCache.GetAnthropic(conv.ToolsHash, conv.RawTools)
 		if len(anthropicTools) > 0 {
 			tools := make([]AnthropicTool, len(anthropicTools))
 			copy(tools, anthropicTools)

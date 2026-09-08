@@ -373,7 +373,7 @@ function memberName(member) {
             <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[#64748b] lg:justify-end">
               <span>模型并发 <strong class="font-semibold tabular-nums text-[#111827]">{{ groupConcurrencyText(group) }}</strong></span>
               <span>会话 <strong class="font-semibold tabular-nums text-[#2563eb]">{{ groupSummary(group).sessions }}</strong></span>
-              <span>首字慢阈值 <strong class="font-semibold tabular-nums text-[#111827]">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</strong></span>
+              <span title="流式响应按首内容、非流式响应按首字节评估">首响应慢阈值 <strong class="font-semibold tabular-nums text-[#111827]">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</strong></span>
               <span>最多尝试 <strong class="font-semibold tabular-nums text-[#111827]">{{ group.max_attempts ?? 4 }}</strong> 次</span>
             </div>
           </button>
@@ -391,7 +391,7 @@ function memberName(member) {
         <div v-if="isExpanded(group.id)" class="border-t border-[#edf0f5]">
           <div class="grid grid-cols-1 divide-y divide-[#edf0f5] border-b border-[#edf0f5] bg-[#fbfcfe] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
             <div class="px-3 py-2">
-              <div class="text-[10px] font-medium uppercase text-[#94a3b8]">首字慢阈值</div>
+              <div class="text-[10px] font-medium uppercase text-[#94a3b8]" title="流式响应按首内容、非流式响应按首字节评估">首响应慢阈值</div>
               <div class="mt-0.5 text-[12px] font-semibold tabular-nums text-[#111827]">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</div>
             </div>
             <div class="px-3 py-2">
@@ -410,7 +410,7 @@ function memberName(member) {
                 <span>顺位</span>
                 <span>模型身份</span>
                 <span>Provider / 路由</span>
-                <span>首字 EWMA / P95</span>
+                <span>首响应 EWMA / P95</span>
                 <span>健康状态</span>
                 <span>模型全局并发 / 上限</span>
                 <span>会话 / 回避</span>

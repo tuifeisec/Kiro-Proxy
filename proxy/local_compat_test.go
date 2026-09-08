@@ -81,8 +81,8 @@ func TestLocalCompatConversationIDPrefersExplicitIdentifiers(t *testing.T) {
 	}
 
 	request.Header.Del("X-Session-ID")
-	if got := localCompatConversationID(request, body, localCompatResponses); got != "cache-key" {
-		t.Fatalf("expected prompt cache key, got %q", got)
+	if got := localCompatConversationID(request, body, localCompatResponses); got != "body-session" {
+		t.Fatalf("expected conversation ID before shared prompt cache key, got %q", got)
 	}
 }
 

@@ -139,6 +139,9 @@ func ImportAuthPayload(m *store.Model) error {
 }
 
 func applyTokenResponse(m *store.Model, tokens *TokenResponse) {
+	if m == nil || tokens == nil {
+		return
+	}
 	m.APIKey = tokens.AccessToken
 	if strings.TrimSpace(tokens.RefreshToken) != "" {
 		m.RefreshToken = tokens.RefreshToken
@@ -149,9 +152,15 @@ func applyTokenResponse(m *store.Model, tokens *TokenResponse) {
 	} else if profile.ExpiresAt > 0 {
 		m.AccessTokenExpiresAt = profile.ExpiresAt
 	}
-	m.CodexEmail = profile.Email
-	m.CodexPlanType = profile.PlanType
-	m.CodexAccountID = profile.AccountID
+	if profile.Email != "" {
+		m.CodexEmail = profile.Email
+	}
+	if profile.PlanType != "" {
+		m.CodexPlanType = profile.PlanType
+	}
+	if profile.AccountID != "" {
+		m.CodexAccountID = profile.AccountID
+	}
 }
 func ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyAddr string) (*TokenResponse, error) {
 	code = strings.TrimSpace(code)
@@ -284,8 +293,8 @@ func ApplyTokenResponse(m *store.Model, tokens *TokenResponse) {
 
 func FetchUsage(ctx context.Context, m *store.Model) (*UsageResponse, error) {
 	NormalizeModel(m)
-	if err := EnsureAccessToken(ctx, m); err != nil {
-		return nil, err
+	if m == nil || m.Provider != "codex" {
+		return nil, fmt.Errorf("codex model is required")
 	}
 	client, err := upstreamproxy.NewClient(m.ProxyURL, 30*time.Second)
 	if err != nil {
