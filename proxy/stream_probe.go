@@ -338,3 +338,12 @@ func sseProtocol(provider, endpoint string) sseProbeProtocol {
 		return sseProbeChat
 	}
 }
+
+func sseProbeEndpointForResponse(resp *http.Response, fallback string) string {
+	if resp != nil && resp.Request != nil && resp.Request.URL != nil {
+		if path := resp.Request.URL.EscapedPath(); path != "" {
+			return path
+		}
+	}
+	return fallback
+}

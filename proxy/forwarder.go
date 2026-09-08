@@ -333,7 +333,7 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 			if !isSSEResponse(attemptResp) {
 				return waitForUpstreamFirstByte(attemptResp, remaining)
 			}
-			return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, model.Endpoint, remaining, 0)
+			return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, sseProbeEndpointForResponse(attemptResp, model.Endpoint), remaining, 0)
 		})
 		if err != nil {
 			lease.release()
@@ -579,7 +579,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				if !isSSEResponse(attemptResp) {
 					return waitForUpstreamFirstByte(attemptResp, remaining)
 				}
-				return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, model.Endpoint, remaining, 0)
+				return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, sseProbeEndpointForResponse(attemptResp, model.Endpoint), remaining, 0)
 			})
 			if err != nil {
 				lease.release()
@@ -838,7 +838,22 @@ func clearAvoidanceScopes(store *modelAvoidanceStore, scopes []string, modelID s
 func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model *store.Model, logger *TrafficLogger, retryBudget time.Duration) (*http.Response, *converter.ResponsesContinuationResult, error) {
 	logger.Info("converter", fmt.Sprintf("开始转换: provider=%s, model_id=%s", model.Provider, model.ModelID))
 	conversionStarted := time.Now()
-	upstreamBody, upstreamURL, err := convertRequest(pre, model)
+	hasToolTurns := pre != nil && hasAssistantToolTurns(pre.Conv)
+	var reasoningHistory map[string]converter.ReasoningTrace
+	if hasToolTurns {
+		var err error
+		reasoningHistory, err = f.loadReasoningHistory(pre, model)
+		if err != nil {
+			return nil, nil, fmt.Errorf("读取推理回放状态失败: %w", err)
+		}
+	}
+	responsesRequest := useResponsesAPI(pre, model)
+	chatReasoningHistory := model.Provider == "openai" && reasoningHistoryPrefersChat(reasoningHistory)
+	forceReasoningChat := responsesRequest && chatReasoningHistory
+	if chatReasoningHistory {
+		reasoningHistory = reasoningHistoryFillMissing(pre.Conv, reasoningHistory, reasoningChatWireField(reasoningHistory))
+	}
+	upstreamBody, upstreamURL, err := convertRequestWithProtocol(pre, model, reasoningHistory, forceReasoningChat)
 	if pre != nil && pre.usage != nil {
 		pre.usage.setConversionDuration(conversionStarted)
 	}
@@ -851,7 +866,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 	if pre != nil {
 		continuationStateKey = responsesContinuationStateKeyFor(pre, model, resolveReasoningEffort(pre, model))
 	}
-	if pre != nil && pre.Conv != nil && model.EnableContinuation && useResponsesAPI(pre, model) && !pre.Conv.IsClassifier && continuationStateKey != "" {
+	if pre != nil && pre.Conv != nil && !forceReasoningChat && model.EnableContinuation && useResponsesAPI(pre, model) && !pre.Conv.IsClassifier && continuationStateKey != "" {
 		prevSession, sessionErr := f.db.GetResponsesSession(continuationStateKey)
 		if sessionErr != nil {
 			return nil, nil, fmt.Errorf("读取 Responses 续传状态失败: %w", sessionErr)
@@ -899,17 +914,107 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 			if deleteErr := f.db.DeleteResponsesSession(continuationStateKey); deleteErr != nil {
 				logger.Error("forwarder", fmt.Sprintf("清理 Responses 续传状态失败: %v", deleteErr))
 			}
+			fallbackBudget, budgetAvailable := remainingProtocolRetryBudget(retryBudget, conversionStarted)
+			if !budgetAvailable {
+				resp.Body = io.NopCloser(bytes.NewReader(body))
+				resp.ContentLength = int64(len(body))
+				return resp, contResult, nil
+			}
 			upstreamBody = contResult.FallbackBody
 			contResult.UsedContinuation = false
-			resp, err = f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, retryBudget)
+			resp, err = f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, fallbackBudget)
 			if err != nil {
 				return nil, contResult, err
 			}
 		} else {
 			resp.Body = io.NopCloser(bytes.NewReader(body))
+			resp.ContentLength = int64(len(body))
+		}
+	}
+	if forceReasoningChat && resp != nil {
+		markUpstreamResponse(resp, "chat", nil)
+	}
+	if !forceReasoningChat && model.Provider == "openai" && resp.StatusCode == http.StatusBadRequest && (hasToolTurns || responsesRequest) {
+		activeResponses := responsesRequest
+		reasoningRetried := false
+		developerRoleRetried := false
+		const maxCompatibilityRetries = 2
+
+		for compatibilityRetries := 0; compatibilityRetries < maxCompatibilityRetries && resp.StatusCode == http.StatusBadRequest; compatibilityRetries++ {
+			body, readErr := readUpstreamErrorBody(resp.Body)
+			if readErr != nil {
+				logger.Warn("forwarder", fmt.Sprintf("读取协议兼容错误响应受限: %v", readErr))
+			}
+			bodyText := string(body)
+			switch {
+			case hasToolTurns && !reasoningRetried && isMissingReasoningReplayError(resp.StatusCode, bodyText):
+				wireField := reasoningWireFieldForError(resp.Header, bodyText)
+				chatHistory := reasoningCompatibilityHistory(pre.Conv, reasoningHistory, wireField)
+				chatBody, chatURL, convertErr := convertRequestWithProtocol(pre, model, chatHistory, responsesRequest)
+				if convertErr != nil {
+					return nil, contResult, fmt.Errorf("构建推理协议兼容请求失败: %w", convertErr)
+				}
+				if activeResponses {
+					logger.Warn("forwarder", "Responses 推理历史被上游拒绝，使用 Chat 协议重放一次")
+				} else {
+					logger.Warn("forwarder", "Chat 推理历史被上游拒绝，补齐 reasoning 字段后重放一次")
+				}
+				fallbackBudget, budgetAvailable := remainingProtocolRetryBudget(retryBudget, conversionStarted)
+				if !budgetAvailable {
+					resp.Body = io.NopCloser(bytes.NewReader(body))
+					resp.ContentLength = int64(len(body))
+					return resp, contResult, nil
+				}
+				resp, err = f.sendCandidateRequest(ctx, chatURL, chatBody, model, logger, sessionID, pre.usage, fallbackBudget)
+				if err != nil {
+					return nil, contResult, err
+				}
+				reasoningRetried = true
+				activeResponses = false
+				if resp.StatusCode < 400 {
+					markUpstreamResponse(resp, "chat", chatHistory)
+				} else {
+					markUpstreamResponse(resp, "chat", nil)
+				}
+			case activeResponses && !developerRoleRetried && isResponsesDeveloperRoleRejected(resp.StatusCode, bodyText):
+				compatibilityBody, changed, convertErr := responsesWithSystemRole(upstreamBody)
+				if convertErr != nil {
+					return nil, contResult, fmt.Errorf("构建 Responses system role 兼容请求失败: %w", convertErr)
+				}
+				if !changed {
+					resp.Body = io.NopCloser(bytes.NewReader(body))
+					resp.ContentLength = int64(len(body))
+					return resp, contResult, nil
+				}
+				fallbackBudget, budgetAvailable := remainingProtocolRetryBudget(retryBudget, conversionStarted)
+				if !budgetAvailable {
+					resp.Body = io.NopCloser(bytes.NewReader(body))
+					resp.ContentLength = int64(len(body))
+					return resp, contResult, nil
+				}
+				logger.Warn("forwarder", "Responses 上游拒绝 developer role，使用 system role 重放一次")
+				resp, err = f.sendCandidateRequest(ctx, upstreamURL, compatibilityBody, model, logger, sessionID, pre.usage, fallbackBudget)
+				if err != nil {
+					return nil, contResult, err
+				}
+				upstreamBody = compatibilityBody
+				developerRoleRetried = true
+			default:
+				resp.Body = io.NopCloser(bytes.NewReader(body))
+				resp.ContentLength = int64(len(body))
+				return resp, contResult, nil
+			}
 		}
 	}
 	return resp, contResult, nil
+}
+
+func remainingProtocolRetryBudget(total time.Duration, started time.Time) (time.Duration, bool) {
+	if total <= 0 {
+		return 0, true
+	}
+	remaining := total - time.Since(started)
+	return remaining, remaining > 0
 }
 
 func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body []byte, model *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration) (*http.Response, error) {
@@ -1348,6 +1453,8 @@ func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *sto
 		previousResponseID = auditBody.PreviousResponseID
 		if len(auditBody.Input) > 0 {
 			api = "responses"
+		} else if len(auditBody.Messages) > 0 {
+			api = "chat"
 		}
 		if providerInputJSON == "" {
 			prefix := auditBody.Input

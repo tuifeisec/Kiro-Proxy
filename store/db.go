@@ -108,6 +108,7 @@ func (db *DB) migrate() error {
 
 	// 启动时清理过期数据。
 	db.CleanExpiredResponsesSessions()
+	db.CleanExpiredReasoningTraces()
 	if err := db.cleanupExpiredRequestUsage(time.Now()); err != nil {
 		log.Printf("[store] 清理过期请求统计失败: %v", err)
 	}
@@ -277,6 +278,20 @@ CREATE TABLE IF NOT EXISTS responses_sessions (
     item_count      INTEGER NOT NULL DEFAULT 0,
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS reasoning_traces (
+    state_key    TEXT NOT NULL,
+    turn_key     TEXT NOT NULL,
+    protocol     TEXT NOT NULL DEFAULT '',
+    text         TEXT NOT NULL DEFAULT '',
+    signature    TEXT NOT NULL DEFAULT '',
+    item_id      TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT '',
+    wire_field   TEXT NOT NULL DEFAULT '',
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (state_key, turn_key)
+);
+CREATE INDEX IF NOT EXISTS idx_reasoning_traces_updated_at ON reasoning_traces(updated_at);
 
 INSERT OR IGNORE INTO settings (key, value) VALUES
     ('proxy_port',          '18081'),

@@ -46,6 +46,9 @@ type OpenAIStreamConverter struct {
 	// 工具调用状态跟踪
 	// key = tool_calls[].index，value = {id, name}
 	activeTools map[int]*toolCallState
+	reasoning   strings.Builder
+	wireField   string
+	toolCallIDs []string
 
 	// 配置
 	modelID          string // 原始 Kiro modelId，写入 assistantResponseEvent
@@ -58,8 +61,9 @@ type OpenAIStreamConverter struct {
 }
 
 type toolCallState struct {
-	id   string
-	name string
+	id      string
+	name    string
+	started bool
 }
 
 // NewOpenAIStreamConverter 创建转换器并在后台启动转换 goroutine
@@ -136,6 +140,24 @@ func (c *OpenAIStreamConverter) CacheTokens() (cacheRead, cacheWrite int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cacheRead, c.cacheWrite
+}
+
+// ReasoningTrace returns the completed provider-issued reasoning for a
+// tool-call turn. Plain text turns intentionally do not produce a sidecar.
+func (c *OpenAIStreamConverter) ReasoningTrace() ReasoningTrace {
+	<-c.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.outcome != StreamOutcomeCompleted || c.reasoning.Len() == 0 || len(c.toolCallIDs) == 0 {
+		return ReasoningTrace{}
+	}
+	return ReasoningTrace{
+		Present:     true,
+		Text:        c.reasoning.String(),
+		WireField:   c.wireField,
+		Protocol:    "chat",
+		ToolCallIDs: append([]string(nil), c.toolCallIDs...),
+	}
 }
 
 // process 在独立 goroutine 中运行，读取 SSE 并写入 pipe
@@ -322,6 +344,15 @@ func (c *OpenAIStreamConverter) handleLine(line string) {
 		c.write(AssistantResponseFrame(delta.Content, c.modelID))
 	}
 
+	if text, field := delta.reasoningDelta(); text != "" {
+		c.mu.Lock()
+		c.reasoning.WriteString(text)
+		if c.wireField == "" {
+			c.wireField = field
+		}
+		c.mu.Unlock()
+	}
+
 	// 工具调用增量
 	if len(delta.ToolCalls) > 0 {
 		c.handleToolCalls(delta.ToolCalls)
@@ -336,25 +367,36 @@ func (c *OpenAIStreamConverter) handleLine(line string) {
 func (c *OpenAIStreamConverter) handleToolCalls(tcs []openAIToolCallDelta) {
 	for _, tc := range tcs {
 		idx := tc.Index
-
-		// 首次出现该 index：记录 id/name，发送开始帧
-		if tc.ID != "" || tc.Function.Name != "" {
+		state := c.activeTools[idx]
+		if state == nil {
+			state = &toolCallState{}
+			c.activeTools[idx] = state
+		}
+		if tc.ID != "" {
+			state.id = tc.ID
+			c.mu.Lock()
+			c.toolUsed = true
+			c.toolCallIDs = appendUniqueToolCallID(c.toolCallIDs, tc.ID)
+			c.mu.Unlock()
+		}
+		if tc.Function.Name != "" {
+			state.name = tc.Function.Name
 			c.mu.Lock()
 			c.toolUsed = true
 			c.mu.Unlock()
-			state := &toolCallState{id: tc.ID, name: tc.Function.Name}
-			c.activeTools[idx] = state
-			c.write(ToolUseStartFrame(tc.ID, tc.Function.Name))
+		}
+		if !state.started && state.id != "" && state.name != "" {
+			state.started = true
+			c.write(ToolUseStartFrame(state.id, state.name))
 		}
 
 		// arguments 增量
 		if tc.Function.Arguments != "" {
-			state := c.activeTools[idx]
-			id, name := "", ""
-			if state != nil {
-				id, name = state.id, state.name
+			if !state.started {
+				state.started = true
+				c.write(ToolUseStartFrame(state.id, state.name))
 			}
-			c.write(ToolUseInputFrame(id, name, tc.Function.Arguments))
+			c.write(ToolUseInputFrame(state.id, state.name, tc.Function.Arguments))
 		}
 	}
 }
@@ -365,6 +407,9 @@ func (c *OpenAIStreamConverter) writeToolStopFrames() {
 		return
 	}
 	for _, state := range c.activeTools {
+		if !state.started {
+			c.write(ToolUseStartFrame(state.id, state.name))
+		}
 		c.write(ToolUseStopFrame(state.id, state.name))
 	}
 	c.activeTools = make(map[int]*toolCallState)
@@ -405,8 +450,24 @@ type openAIChoice struct {
 }
 
 type openAIDelta struct {
-	Content   string                `json:"content"`
-	ToolCalls []openAIToolCallDelta `json:"tool_calls"`
+	Content          string                `json:"content"`
+	ReasoningContent string                `json:"reasoning_content"`
+	ReasoningText    string                `json:"reasoning_text"`
+	Reasoning        string                `json:"reasoning"`
+	ToolCalls        []openAIToolCallDelta `json:"tool_calls"`
+}
+
+func (d openAIDelta) reasoningDelta() (string, string) {
+	if d.ReasoningContent != "" {
+		return d.ReasoningContent, "reasoning_content"
+	}
+	if d.ReasoningText != "" {
+		return d.ReasoningText, "reasoning_text"
+	}
+	if d.Reasoning != "" {
+		return d.Reasoning, "reasoning"
+	}
+	return "", ""
 }
 
 type openAIToolCallDelta struct {

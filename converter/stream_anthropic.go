@@ -37,7 +37,10 @@ type AnthropicStreamConverter struct {
 	done         chan struct{}
 
 	// 工具调用状态：key = content block index
-	toolBlocks map[int]*anthropicToolBlock
+	toolBlocks  map[int]*anthropicToolBlock
+	thinking    strings.Builder
+	signature   strings.Builder
+	toolCallIDs []string
 
 	modelID                                                    string
 	maxTokens                                                  int
@@ -121,6 +124,20 @@ func (c *AnthropicStreamConverter) CacheTokens() (cacheRead, cacheWrite int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cacheRead, c.cacheWrite
+}
+
+func (c *AnthropicStreamConverter) ReasoningTrace() ReasoningTrace {
+	<-c.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.outcome != StreamOutcomeCompleted || c.thinking.Len() == 0 || c.signature.Len() == 0 || len(c.toolCallIDs) == 0 {
+		return ReasoningTrace{}
+	}
+	return ReasoningTrace{
+		Present: true,
+		Text:    c.thinking.String(), Signature: c.signature.String(),
+		Protocol: "anthropic", ToolCallIDs: append([]string(nil), c.toolCallIDs...),
+	}
 }
 
 func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
@@ -302,6 +319,7 @@ func (c *AnthropicStreamConverter) handleContentBlockStart(event map[string]json
 	if block.Type == "tool_use" {
 		c.mu.Lock()
 		c.toolUsed = true
+		c.toolCallIDs = appendUniqueToolCallID(c.toolCallIDs, block.ID)
 		c.mu.Unlock()
 		c.toolBlocks[idx] = &anthropicToolBlock{id: block.ID, name: block.Name}
 		c.write(ToolUseStartFrame(block.ID, block.Name))
@@ -315,6 +333,8 @@ func (c *AnthropicStreamConverter) handleContentBlockDelta(event map[string]json
 		Type        string `json:"type"`
 		Text        string `json:"text"`
 		PartialJSON string `json:"partial_json"`
+		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
 	}
 	if deltaRaw, ok := event["delta"]; ok {
 		json.Unmarshal(deltaRaw, &delta)
@@ -337,7 +357,18 @@ func (c *AnthropicStreamConverter) handleContentBlockDelta(event map[string]json
 			}
 			c.write(ToolUseInputFrame(id, name, delta.PartialJSON))
 		}
-		// thinking_delta / signature_delta 忽略
+	case "thinking_delta":
+		if delta.Thinking != "" {
+			c.mu.Lock()
+			c.thinking.WriteString(delta.Thinking)
+			c.mu.Unlock()
+		}
+	case "signature_delta":
+		if delta.Signature != "" {
+			c.mu.Lock()
+			c.signature.WriteString(delta.Signature)
+			c.mu.Unlock()
+		}
 	}
 }
 

@@ -142,7 +142,7 @@ func trimPreviousResponseOutputs(delta []json.RawMessage) []json.RawMessage {
 		if json.Unmarshal(delta[0], &item) != nil {
 			break
 		}
-		if item.Type == "function_call" || (item.Type == "message" && item.Role == "assistant") {
+		if item.Type == "reasoning" || item.Type == "function_call" || (item.Type == "message" && item.Role == "assistant") {
 			delta = delta[1:]
 			continue
 		}

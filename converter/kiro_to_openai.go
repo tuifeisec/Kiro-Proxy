@@ -83,7 +83,7 @@ func buildOpenAIMessages(conv *ParsedConversation) []OpenAIMessage {
 
 		// 助手消息
 		if entry.HasAssistant {
-			if m := buildOpenAIAssistantMsg(entry.AssistantContent, entry.ToolUses); m != nil {
+			if m := buildOpenAIAssistantMsg(entry.AssistantContent, entry.ToolUses, entry.Reasoning); m != nil {
 				msgs = append(msgs, *m)
 			}
 		}
@@ -126,7 +126,7 @@ func buildOpenAIUserMsg(content string, images []KiroImage) OpenAIMessage {
 	return OpenAIMessage{Role: "user", Content: parts}
 }
 
-func buildOpenAIAssistantMsg(content string, toolUses []ParsedToolUse) *OpenAIMessage {
+func buildOpenAIAssistantMsg(content string, toolUses []ParsedToolUse, reasoning *ReasoningTrace) *OpenAIMessage {
 	msg := &OpenAIMessage{Role: "assistant"}
 	if content != "" {
 		msg.Content = content
@@ -144,6 +144,17 @@ func buildOpenAIAssistantMsg(content string, toolUses []ParsedToolUse) *OpenAIMe
 			})
 		}
 		msg.ToolCalls = tcs
+	}
+	if reasoning != nil && (reasoning.Present || strings.TrimSpace(reasoning.Text) != "") && len(msg.ToolCalls) > 0 {
+		text := reasoning.Text
+		switch reasoning.WireField {
+		case "reasoning_text":
+			msg.ReasoningText = &text
+		case "reasoning":
+			msg.Reasoning = &text
+		default:
+			msg.ReasoningContent = &text
+		}
 	}
 	if msg.Content == nil && len(msg.ToolCalls) == 0 {
 		return nil

@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -46,9 +47,16 @@ type ResponsesStreamConverter struct {
 	done         chan struct{}
 
 	// 活跃工具调用：按 item_id 与 call_id 双索引，保证不同上游事件都能回填
-	toolsByItem map[string]*respToolState
-	toolsByCall map[string]*respToolState
-	toolOrder   []*respToolState
+	toolsByItem            map[string]*respToolState
+	toolsByCall            map[string]*respToolState
+	toolOrder              []*respToolState
+	toolCallIDs            []string
+	reasoningText          strings.Builder
+	reasoningSummary       strings.Builder
+	reasoningTextDeltas    map[string]bool
+	reasoningSummaryDeltas map[string]bool
+	reasoningID            string
+	reasoningStatus        string
 
 	modelID                                                    string
 	maxTokens                                                  int
@@ -65,20 +73,22 @@ type respToolState struct {
 func NewResponsesStreamConverter(source io.ReadCloser, modelID string, maxTokens int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) *ResponsesStreamConverter {
 	pr, pw := io.Pipe()
 	c := &ResponsesStreamConverter{
-		pr:               pr,
-		pw:               pw,
-		source:           source,
-		outcome:          StreamOutcomePending,
-		done:             make(chan struct{}),
-		toolsByItem:      make(map[string]*respToolState, 4),
-		toolsByCall:      make(map[string]*respToolState, 4),
-		modelID:          modelID,
-		maxTokens:        maxTokens,
-		inputPrice:       inputPrice,
-		outputPrice:      outputPrice,
-		cacheInputPrice:  cacheInputPrice,
-		cacheOutputPrice: cacheOutputPrice,
-		rateMultiplier:   normalizeRateMultiplier(rateMultiplier),
+		pr:                     pr,
+		pw:                     pw,
+		source:                 source,
+		outcome:                StreamOutcomePending,
+		done:                   make(chan struct{}),
+		toolsByItem:            make(map[string]*respToolState, 4),
+		toolsByCall:            make(map[string]*respToolState, 4),
+		reasoningTextDeltas:    make(map[string]bool),
+		reasoningSummaryDeltas: make(map[string]bool),
+		modelID:                modelID,
+		maxTokens:              maxTokens,
+		inputPrice:             inputPrice,
+		outputPrice:            outputPrice,
+		cacheInputPrice:        cacheInputPrice,
+		cacheOutputPrice:       cacheOutputPrice,
+		rateMultiplier:         normalizeRateMultiplier(rateMultiplier),
 	}
 	go c.process(source)
 	return c
@@ -127,6 +137,30 @@ func (c *ResponsesStreamConverter) ResponseID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.responseID
+}
+
+func (c *ResponsesStreamConverter) ReasoningTrace() ReasoningTrace {
+	<-c.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.outcome != StreamOutcomeCompleted || len(c.toolCallIDs) == 0 {
+		return ReasoningTrace{}
+	}
+	text := c.reasoningText.String()
+	wireField := "reasoning_text"
+	if text == "" {
+		text = c.reasoningSummary.String()
+		wireField = "reasoning_summary_text"
+	}
+	if strings.TrimSpace(text) == "" {
+		return ReasoningTrace{}
+	}
+	return ReasoningTrace{
+		Present: true,
+		Text:    text, ItemID: c.reasoningID, Status: c.reasoningStatus,
+		WireField: wireField, Protocol: "responses",
+		ToolCallIDs: append([]string(nil), c.toolCallIDs...),
+	}
 }
 
 // Succeeded 表示 Responses 流明确完成且未收到错误/失败事件。
@@ -252,6 +286,46 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		}
 	}
 	switch eventType {
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		var ev struct {
+			Delta        string `json:"delta"`
+			ItemID       string `json:"item_id"`
+			ContentIndex int    `json:"content_index"`
+			SummaryIndex int    `json:"summary_index"`
+		}
+		if json.Unmarshal([]byte(data), &ev) != nil || ev.Delta == "" {
+			return
+		}
+		c.mu.Lock()
+		if eventType == "response.reasoning_text.delta" {
+			c.reasoningTextDeltas[ev.ItemID+":"+strconv.Itoa(ev.ContentIndex)] = true
+			c.reasoningText.WriteString(ev.Delta)
+		} else {
+			c.reasoningSummaryDeltas[ev.ItemID+":"+strconv.Itoa(ev.SummaryIndex)] = true
+			c.reasoningSummary.WriteString(ev.Delta)
+		}
+		c.mu.Unlock()
+
+	case "response.reasoning_text.done", "response.reasoning_summary_text.done":
+		var ev struct {
+			Text         string `json:"text"`
+			ItemID       string `json:"item_id"`
+			ContentIndex int    `json:"content_index"`
+			SummaryIndex int    `json:"summary_index"`
+		}
+		if json.Unmarshal([]byte(data), &ev) != nil || ev.Text == "" {
+			return
+		}
+		c.mu.Lock()
+		if eventType == "response.reasoning_text.done" {
+			if !c.reasoningTextDeltas[ev.ItemID+":"+strconv.Itoa(ev.ContentIndex)] {
+				c.reasoningText.WriteString(ev.Text)
+			}
+		} else if !c.reasoningSummaryDeltas[ev.ItemID+":"+strconv.Itoa(ev.SummaryIndex)] {
+			c.reasoningSummary.WriteString(ev.Text)
+		}
+		c.mu.Unlock()
+
 	case "response.output_text.delta":
 		var ev struct {
 			Delta string `json:"delta"`
@@ -268,12 +342,27 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			Item struct {
 				ID        string `json:"id"`
 				Type      string `json:"type"`
+				Status    string `json:"status"`
 				CallID    string `json:"call_id"`
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 			} `json:"item"`
 		}
-		if json.Unmarshal([]byte(data), &ev) != nil || ev.Item.Type != "function_call" {
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			return
+		}
+		if ev.Item.Type == "reasoning" {
+			c.mu.Lock()
+			if ev.Item.ID != "" {
+				c.reasoningID = ev.Item.ID
+			}
+			if ev.Item.Status != "" {
+				c.reasoningStatus = ev.Item.Status
+			}
+			c.mu.Unlock()
+			return
+		}
+		if ev.Item.Type != "function_call" {
 			return
 		}
 		st := &respToolState{callID: ev.Item.CallID, name: ev.Item.Name}
@@ -285,6 +374,7 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		}
 		c.mu.Lock()
 		c.toolUsed = true
+		c.toolCallIDs = appendUniqueToolCallID(c.toolCallIDs, ev.Item.CallID)
 		c.mu.Unlock()
 		c.toolOrder = append(c.toolOrder, st)
 		c.write(ToolUseStartFrame(ev.Item.CallID, ev.Item.Name))
@@ -319,9 +409,46 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 				CallID    string `json:"call_id"`
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
+				Status    string `json:"status"`
+				Content   []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+				Summary []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"summary"`
 			} `json:"item"`
 		}
-		if json.Unmarshal([]byte(data), &ev) != nil || ev.Item.Type != "function_call" {
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			return
+		}
+		if ev.Item.Type == "reasoning" {
+			c.mu.Lock()
+			if ev.Item.ID != "" {
+				c.reasoningID = ev.Item.ID
+			}
+			if ev.Item.Status != "" {
+				c.reasoningStatus = ev.Item.Status
+			}
+			if c.reasoningText.Len() == 0 {
+				for _, part := range ev.Item.Content {
+					if part.Text != "" {
+						c.reasoningText.WriteString(part.Text)
+					}
+				}
+			}
+			if c.reasoningSummary.Len() == 0 {
+				for _, part := range ev.Item.Summary {
+					if part.Text != "" {
+						c.reasoningSummary.WriteString(part.Text)
+					}
+				}
+			}
+			c.mu.Unlock()
+			return
+		}
+		if ev.Item.Type != "function_call" {
 			return
 		}
 		st := c.findTool(ev.Item.ID, ev.Item.CallID)
@@ -335,6 +462,9 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 				callID = st.callID
 			}
 		}
+		c.mu.Lock()
+		c.toolCallIDs = appendUniqueToolCallID(c.toolCallIDs, callID)
+		c.mu.Unlock()
 		// 若全程没有 arguments 增量，但 done 带了完整 arguments，则补一帧 input
 		if (st == nil || !st.gotArgs) && ev.Item.Arguments != "" {
 			c.write(ToolUseInputFrame(callID, name, ev.Item.Arguments))

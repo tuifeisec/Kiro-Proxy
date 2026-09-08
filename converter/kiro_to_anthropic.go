@@ -84,7 +84,7 @@ func buildAnthropicMessagesCacheOptimized(conv *ParsedConversation, dynamicSyste
 
 		// 助手消息
 		if entry.HasAssistant {
-			if m := buildAnthropicAssistantMsg(entry.AssistantContent, entry.ToolUses); m != nil {
+			if m := buildAnthropicAssistantMsg(entry.AssistantContent, entry.ToolUses, entry.Reasoning); m != nil {
 				msgs = append(msgs, *m)
 			}
 		}
@@ -210,7 +210,7 @@ func buildAnthropicCurrentMsgOptimized(conv *ParsedConversation, dynamicSystemTa
 	)
 }
 
-func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse) *AnthropicMessage {
+func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse, reasoning *ReasoningTrace) *AnthropicMessage {
 	if len(toolUses) == 0 {
 		if content == "" {
 			return &AnthropicMessage{Role: "assistant", Content: " "}
@@ -218,7 +218,14 @@ func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse) *Anthr
 		return &AnthropicMessage{Role: "assistant", Content: content}
 	}
 
-	blocks := make([]AnthropicBlock, 0, len(toolUses)+1)
+	blocks := make([]AnthropicBlock, 0, len(toolUses)+2)
+	if reasoning != nil && reasoning.Text != "" && reasoning.Signature != "" {
+		blocks = append(blocks, AnthropicBlock{
+			Type:      "thinking",
+			Thinking:  reasoning.Text,
+			Signature: reasoning.Signature,
+		})
+	}
 	if content != "" {
 		blocks = append(blocks, AnthropicBlock{Type: "text", Text: content})
 	}

@@ -9,6 +9,7 @@ import (
 	"kiro-proxy/store"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -43,6 +44,8 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 	}
 
 	logger.Info("converter", fmt.Sprintf("开始流式转换: provider=%s endpoint=%s → Kiro Event Stream", m.Provider, m.Endpoint))
+	responseMetadata := upstreamMetadataFromResponse(resp)
+	upstreamProtocol := responseMetadata.Protocol
 
 	capture := newStreamCapture(logger.DetailLimit())
 	wrappedBody := capture.wrap(resp.Body)
@@ -56,7 +59,7 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 	case m.Provider == "gemini":
 		streamLabel = "gemini"
 		streamBody = converter.NewGeminiStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
-	case useResponsesAPI(pre, m) || m.Provider == "codex":
+	case upstreamProtocol != "chat" && (useResponsesAPI(pre, m) || m.Provider == "codex"):
 		// responses SSE → Kiro Event Stream（一段式直转）
 		sc := converter.NewResponsesStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 		streamBody = sc
@@ -91,6 +94,36 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 	default: // /v1/chat/completions（含 classifier）
 		streamBody = converter.NewOpenAIStreamConverter(wrappedBody, modelID, cw, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice, m.RateMultiplier)
 	}
+	if len(responseMetadata.CompatibilityHistory) > 0 {
+		previousCompleted := onCompleted
+		onCompleted = func() {
+			if previousCompleted != nil {
+				previousCompleted()
+			}
+			if err := f.persistReasoningCompatibilityHistory(pre, m, responseMetadata.CompatibilityHistory); err != nil {
+				logger.Error("forwarder", fmt.Sprintf("保存推理协议兼容状态失败: %v", err))
+			}
+		}
+	}
+	if source, ok := streamBody.(interface {
+		ReasoningTrace() converter.ReasoningTrace
+	}); ok {
+		previousCompleted := onCompleted
+		onCompleted = func() {
+			if previousCompleted != nil {
+				previousCompleted()
+			}
+			trace := source.ReasoningTrace()
+			if strings.TrimSpace(trace.Text) == "" || len(trace.ToolCallIDs) == 0 {
+				return
+			}
+			if err := f.saveReasoningTrace(pre, m, trace); err != nil {
+				logger.Error("forwarder", fmt.Sprintf("保存推理回放状态失败: %v", err))
+				return
+			}
+			logger.Info("forwarder", fmt.Sprintf("推理回放状态已保存: protocol=%s tool_calls=%d", trace.Protocol, len(trace.ToolCallIDs)))
+		}
+	}
 	observationDone := make(chan struct{})
 	go func() {
 		defer close(observationDone)
@@ -106,7 +139,7 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 		}()
 	}
 
-	resp.Body = streamBody
+	resp.Body = &completionObservedReadCloser{ReadCloser: streamBody, observed: observationDone}
 	resp.ContentLength = -1
 	resp.Header.Set("Content-Type", "application/vnd.amazon.eventstream")
 	resp.Header.Set("Transfer-Encoding", "chunked")
@@ -115,6 +148,19 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 	resp.Header.Set("Cache-Control", "no-cache")
 
 	return resp, nil
+}
+
+type completionObservedReadCloser struct {
+	io.ReadCloser
+	observed <-chan struct{}
+}
+
+func (r *completionObservedReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if err == io.EOF && r.observed != nil {
+		<-r.observed
+	}
+	return n, err
 }
 
 type kiroStreamConverter interface {

@@ -153,6 +153,20 @@ type ParsedHistoryEntry struct {
 	HasAssistant     bool
 	AssistantContent string
 	ToolUses         []ParsedToolUse
+	Reasoning        *ReasoningTrace
+}
+
+// ReasoningTrace preserves provider-issued thinking metadata outside Kiro's
+// visible assistant content so tool-call turns can be replayed losslessly.
+type ReasoningTrace struct {
+	Present     bool
+	Text        string
+	Signature   string
+	ItemID      string
+	Status      string
+	WireField   string
+	Protocol    string
+	ToolCallIDs []string
 }
 
 type ParsedToolResult struct {
@@ -211,11 +225,14 @@ type PromptCacheBreakpoint struct {
 }
 
 type OpenAIMessage struct {
-	Role       string           `json:"role"`
-	Content    interface{}      `json:"content"` // string 或 []OpenAIContentPart
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	Name       string           `json:"name,omitempty"`
+	Role             string           `json:"role"`
+	Content          interface{}      `json:"content"` // string 或 []OpenAIContentPart
+	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	Name             string           `json:"name,omitempty"`
+	ReasoningContent *string          `json:"reasoning_content,omitempty"`
+	ReasoningText    *string          `json:"reasoning_text,omitempty"`
+	Reasoning        *string          `json:"reasoning,omitempty"`
 }
 
 type OpenAIContentPart struct {
@@ -272,6 +289,8 @@ type AnthropicMessage struct {
 type AnthropicBlock struct {
 	Type         string                `json:"type"`
 	Text         string                `json:"text,omitempty"`
+	Thinking     string                `json:"thinking,omitempty"`
+	Signature    string                `json:"signature,omitempty"`
 	ID           string                `json:"id,omitempty"`
 	Name         string                `json:"name,omitempty"`
 	Input        interface{}           `json:"input,omitempty"`

@@ -36,6 +36,26 @@ type ReqInput struct {
 	Name      string      `json:"name,omitempty"`      // function_call 用
 	Arguments string      `json:"arguments,omitempty"` // function_call 用
 	Output    *string     `json:"output,omitempty"`    // function_call_output 用；空字符串也必须显式发送
+	ID        string      `json:"id,omitempty"`        // reasoning item
+	Status    string      `json:"status,omitempty"`    // reasoning item
+	Summary   interface{} `json:"summary,omitempty"`   // reasoning summary
+}
+
+func buildResponsesReasoning(trace *ReasoningTrace) *ReqInput {
+	if trace == nil || strings.TrimSpace(trace.Text) == "" {
+		return nil
+	}
+	item := &ReqInput{
+		Type:   "reasoning",
+		ID:     trace.ItemID,
+		Status: trace.Status,
+	}
+	if trace.WireField == "reasoning_summary_text" {
+		item.Summary = []map[string]string{{"type": "summary_text", "text": trace.Text}}
+	} else {
+		item.Content = []map[string]string{{"type": "reasoning_text", "text": trace.Text}}
+	}
+	return item
 }
 
 func buildResponsesToolOutput(callID, output string) ReqInput {
@@ -132,6 +152,9 @@ func buildResponsesInput(conv *ParsedConversation) []ReqInput {
 		}
 
 		if entry.HasAssistant {
+			if reasoning := buildResponsesReasoning(entry.Reasoning); reasoning != nil && len(entry.ToolUses) > 0 {
+				input = append(input, *reasoning)
+			}
 			if entry.AssistantContent != "" {
 				input = append(input, ReqInput{
 					Type:    "message",
@@ -235,6 +258,9 @@ func buildResponsesInputCacheOptimized(conv *ParsedConversation) []ReqInput {
 
 		// 助手消息
 		if entry.HasAssistant {
+			if reasoning := buildResponsesReasoning(entry.Reasoning); reasoning != nil && len(entry.ToolUses) > 0 {
+				input = append(input, *reasoning)
+			}
 			if entry.AssistantContent != "" {
 				input = append(input, ReqInput{
 					Type:    "message",
