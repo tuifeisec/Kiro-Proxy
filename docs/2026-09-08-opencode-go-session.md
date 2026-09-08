@@ -20,6 +20,7 @@
 - 同步发送原有 `session_id`、`conversation_id`、`x-session-id`、`session-id` 兼容头，支持 Codex 等客户端的原生 `session_id` 输入。
 - 浏览器跨域预检允许这些会话头。
 - 请求内容继续由真实编程客户端提供；不改写用户意图、不添加伪造的编程任务。模型连通性测试仍只是连通性探测，不能证明真实 Agent 流量被上游接受。
+- 开启兼容后，每次模型连通性测试分配独立 UUID 并作为 `x-opencode-session` 发送；它是一段独立的单轮探测，不与其他测试或 Kiro 对话共用会话 ID。关闭兼容时不发送此头。
 
 ## Provider 对应标识
 
@@ -70,3 +71,33 @@ SDK 标识调整后的检查：`go test ./ua ./api ./proxy`、`go test -race ./u
 SDK 标识及空会话 UUID 修复经过新的独立只读终验，通过，无阻塞项。
 
 本次没有真实调用 OpenCode、部署或重启现有程序。代码需要构建并运行新版本后，界面开关及数据库迁移才可用；实际缓存命中率、首内容延迟的变化仍需真实编程会话验证。
+
+## 2026-09-08 实际对话 MissingSessionID 排查
+
+用户反馈实际对话返回 `Error from provider (Console Go): Request is missing x-opencode-session`。只读核对发现：运行中的程序为提交 `d92867e` 的干净构建；失败模型的 `enable_opencode_session` 已在请求前开启；Kiro 解析日志中有非空真实会话 ID；失败请求由该模型转发到中转站的 `/v1/responses`，上游返回 HTTP 400，未发生传输回退或模型切换。用户确认中转站使用 new-api。
+
+现有日志没有记录实际发送的会话请求头，所以这些事实还不能单独证明中转站在哪一步丢失了该头。源码核对未发现模型路由副本、工具结果回传、请求重试会删除它。
+
+新增 `TestKiroSessionReachesHTTPUpstreamThroughRouter`，使用原始 Kiro JSON 工具结果回传请求，经过临时数据库、路由重载、单模型及模型组、完整 `Forward` 和本地 HTTP 服务接收端，验证开关 `false → true → false`、同会话复用、新会话隔离及 OpenAI SDK User-Agent。测试通过，说明这条本地链路能够把正确会话头发到第一跳。
+
+新增集成测试与既有会话、重试及本地兼容测试一并执行 `go test -race ./proxy -run 'Test(KiroSessionReachesHTTPUpstreamThroughRouter|KiroClassifierAndRetryKeepRealSession|OpenCodeSessionIsExplicitPerModel|LocalCompatForwardsDistinctStableSessions)$' -count=1`，通过。本轮未修改生产数据库、运行程序或中转站配置，也未发送真实上游对话；实际链路仍需核查 new-api 渠道的请求头透传并用真实对话验收。
+
+### 直连模型的测试按钮修复
+
+随后用户新增 `https://opencode.ai/zen/go/v1` 直连模型并报告相同错误，最终确认此次来自模型配置的“测试”按钮。该模型已开启兼容，但 `api/test_model.go` 独立构造探测请求，原先没有设置 `x-opencode-session`。这与此前的 new-api 实际对话是两个不同入口，不能用其中一次的结果替代另一次验收。
+
+修复使开启兼容的独立测试生成并发送一个 UUID，关闭时仍不发送；Provider SDK User-Agent 保持既定规则。测试服务模拟缺头即返回 HTTP 400 `MissingSessionID`，覆盖 Chat Completions 和 Responses 两个端点、开关切换、错误原文保留、独立测试 ID 不重复及各 Provider 标识。相关 API 和代理会话测试共同运行 `go test -race` 通过。真实 OpenCode 直连尚未重新测试，需要构建并运行包含本次修改的程序。
+
+### new-api 渠道动态透传配置
+
+对于经过 new-api 的模型，在实际连接 Console Go 的渠道“自定义请求头”配置中合并以下条目，保留其他已有配置：
+
+```json
+{
+  "x-opencode-session": "{client_header:x-opencode-session}"
+}
+```
+
+该占位符按每次客户端请求复制会话头，不应替换成固定会话 ID，也无需开启所有请求头的通配透传。准确字段为 `x-opencode-session`，末尾有 `n`。直连 OpenCode 不涉及这层配置。
+
+语法依据为 [new-api 的 processHeaderOverride 和 DoApiRequest 实现](https://github.com/QuantumNous/new-api/blob/main/relay/channel/api_request.go)：`{client_header:<name>}` 必须是整个配置值；渠道 API 的 `header_override` 字段为承载该 JSON 的字符串。该实现会跳过 new-api 自身渠道测试中的客户端头占位符，因此应通过实际客户端请求验证透传。本文未修改实际渠道配置，当前安装版本是否支持此语法、上游最终是否收到头，仍需在渠道和真实对话中确认。

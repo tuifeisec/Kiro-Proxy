@@ -135,6 +135,10 @@ func runModelTestWithManager(ctx context.Context, input *store.Model, model stri
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept-Encoding", "identity")
 	httpReq.Header.Set("User-Agent", ua.ProviderUserAgent(m.Provider))
+	// 每次连通性测试是一段独立的单轮会话，不能复用其他测试或真实对话的 ID。
+	if m.EnableOpenCodeSession {
+		httpReq.Header.Set("x-opencode-session", uuid.NewString())
+	}
 	switch m.Provider {
 	case "anthropic":
 		httpReq.Header.Set("x-api-key", m.APIKey)
