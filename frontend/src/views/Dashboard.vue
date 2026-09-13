@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdvertisementList from '../components/common/AdvertisementList.vue'
 import { useStats } from '../composables/useStats.js'
+import { useSmoothNumber } from '../composables/useSmoothNumber.js'
 import StatsCard from '../components/dashboard/StatsCard.vue'
 import ServiceStatus from '../components/dashboard/ServiceStatus.vue'
 import CAStatus from '../components/dashboard/CAStatus.vue'
@@ -124,10 +125,20 @@ const cacheHitRate = computed(() => {
   return (cached / totalIn) * 100
 })
 
+// 核心指标平滑：轮询更新时滚动到新值；snapFirstChange 让冷启动首个真实数据直接落位，不做 0 → 值的首屏滚动。
+function smoothStat(source) {
+  return useSmoothNumber(source, { snapFirstChange: true })
+}
+
+const smoothTotalRequests = smoothStat(() => Number(displayedStats.value.total_requests || 0))
+const smoothTotalTokens = smoothStat(() => Number(displayedStats.value.total_tokens || 0))
+const smoothCacheHitRate = smoothStat(cacheHitRate)
+const smoothCredits = smoothStat(() => Number(displayedStats.value.credits || 0))
+
 const cards = computed(() => [
   {
     label: '总请求数',
-    value: Number(displayedStats.value.total_requests || 0).toLocaleString(),
+    value: Math.round(smoothTotalRequests.value).toLocaleString(),
     sub: `错误 ${displayedStats.value.total_errors || 0} · ${selectedRangeLabel.value}`,
     subTone: displayedStats.value.total_errors ? 'danger' : 'neutral',
     icon: IconLogs,
@@ -135,21 +146,21 @@ const cards = computed(() => [
   },
   {
     label: '总 Token',
-    value: formatTokens(displayedStats.value.total_tokens),
+    value: formatTokens(Math.round(smoothTotalTokens.value)),
     sub: `输入 ${formatTokens(displayedStats.value.input_tokens)} · 输出 ${formatTokens(displayedStats.value.output_tokens)}`,
     icon: IconDashboard,
     tone: 'green',
   },
   {
     label: '缓存命中',
-    value: cacheHitRate.value ? cacheHitRate.value.toFixed(1) + '%' : '—',
+    value: smoothCacheHitRate.value ? smoothCacheHitRate.value.toFixed(1) + '%' : '—',
     sub: `命中 ${formatTokens(displayedStats.value.cache_read_tokens)} · 写入 ${formatTokens(displayedStats.value.cache_write_tokens)}`,
     icon: IconWifi,
     tone: 'purple',
   },
   {
     label: 'Credits',
-    value: formatCredits(displayedStats.value.credits),
+    value: formatCredits(smoothCredits.value),
     sub: '按模型价格累计',
     icon: IconArrowRight,
     tone: 'amber',
@@ -382,15 +393,15 @@ async function confirmClearStats() {
         </aside>
       </section>
     </div>
-  </div>
 
-  <Teleport to="body">
+    <Teleport to="body">
+    <Transition name="motion-fade" appear>
     <div
       v-if="showClearStatsModal"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
       @click.self="closeClearStatsModal"
     >
-      <div class="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5">
+      <div class="motion-pop-panel w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5">
         <div class="flex items-start gap-3 border-b border-[#fee2e2] bg-gradient-to-br from-[#fff7ed] to-white p-4">
           <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fee2e2] text-[#dc2626]">
             <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -431,6 +442,7 @@ async function confirmClearStats() {
         </div>
       </div>
     </div>
+    </Transition>
   </Teleport>
 
   <ConfirmDialog
@@ -444,6 +456,7 @@ async function confirmClearStats() {
     @confirm="confirmProxyAccessToggle"
     @cancel="cancelProxyAccessToggle"
   />
+  </div>
 </template>
 
 <style scoped>

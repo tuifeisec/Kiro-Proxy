@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useDailyStats } from '../composables/useStats.js'
+import { useSmoothNumber } from '../composables/useSmoothNumber.js'
 import { getLogsByDate } from '../api/logs.js'
 import IconUsage from '../components/icons/IconUsage.vue'
 import IconDashboard from '../components/icons/IconDashboard.vue'
@@ -146,11 +147,21 @@ const totalTokens = computed(() => totals.value.input + totals.value.output)
 const cacheHitRate = computed(() => totals.value.input ? (Math.min(totals.value.cacheRead, totals.value.input) / totals.value.input) * 100 : 0)
 const errorRate = computed(() => totals.value.requests ? (totals.value.errors / totals.value.requests) * 100 : 0)
 
+// 核心汇总指标平滑；snapFirstChange 让冷启动首个真实数据直接落位，表格行内明细保持原样不做平滑。
+function smoothStat(source) {
+  return useSmoothNumber(source, { snapFirstChange: true })
+}
+
+const smoothRequests = smoothStat(() => totals.value.requests)
+const smoothTotalTokens = smoothStat(totalTokens)
+const smoothCacheHitRate = smoothStat(cacheHitRate)
+const smoothCredits = smoothStat(() => totals.value.credits)
+
 const summaryCards = computed(() => [
-  { label: '总请求数', value: totals.value.requests.toLocaleString(), sub: `错误 ${totals.value.errors} · 错误率 ${errorRate.value.toFixed(2)}%`, icon: IconUsage, tone: 'blue' },
-  { label: '总 Token', value: formatNum(totalTokens.value), sub: `输入 ${formatNum(totals.value.input)} · 输出 ${formatNum(totals.value.output)}`, icon: IconDashboard, tone: 'green' },
-  { label: '缓存命中', value: cacheHitRate.value ? cacheHitRate.value.toFixed(1) + '%' : '—', sub: `命中 ${formatNum(totals.value.cacheRead)} · 写入 ${formatNum(totals.value.cacheWrite)}`, icon: IconWifi, tone: 'purple' },
-  { label: 'Credits', value: formatCredits(totals.value.credits), sub: '按模型价格累计', icon: IconArrowRight, tone: 'amber' },
+  { label: '总请求数', value: Math.round(smoothRequests.value).toLocaleString(), sub: `错误 ${totals.value.errors} · 错误率 ${errorRate.value.toFixed(2)}%`, icon: IconUsage, tone: 'blue' },
+  { label: '总 Token', value: formatNum(Math.round(smoothTotalTokens.value)), sub: `输入 ${formatNum(totals.value.input)} · 输出 ${formatNum(totals.value.output)}`, icon: IconDashboard, tone: 'green' },
+  { label: '缓存命中', value: smoothCacheHitRate.value ? smoothCacheHitRate.value.toFixed(1) + '%' : '—', sub: `命中 ${formatNum(totals.value.cacheRead)} · 写入 ${formatNum(totals.value.cacheWrite)}`, icon: IconWifi, tone: 'purple' },
+  { label: 'Credits', value: formatCredits(smoothCredits.value), sub: '按模型价格累计', icon: IconArrowRight, tone: 'amber' },
 ])
 
 const toneMap = {

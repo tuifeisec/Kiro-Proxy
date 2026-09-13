@@ -153,7 +153,7 @@ function categoryColor(cat) {
       <div
         v-for="msg in visible"
         :key="msg"
-        class="grid grid-cols-[28px_78px_64px_86px_1fr] items-center gap-2 border-b border-[#f3f4f6] px-3 py-2 cursor-pointer transition-colors hover:bg-[#f8fafc]"
+        class="log-row grid grid-cols-[28px_78px_64px_86px_1fr] items-center gap-2 border-b border-[#f3f4f6] px-3 py-2 cursor-pointer transition-colors hover:bg-[#f8fafc]"
         :class="selected === msg ? 'bg-[#eff6ff] ring-1 ring-inset ring-[#bfdbfe]' : ''"
         @click="emit('select', msg)"
       >
@@ -187,3 +187,13 @@ function categoryColor(cat) {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 长列表优化：视口外行跳过布局与绘制（滚动容器为上方 overflow-y-auto 的 listEl，行是其直接子元素）。
+   41px = badge 内容行高 20px（text-[10px] 不带 line-height，继承 leading-5）
+   + badge py-0.5 4px + 行 py-2 16px + border-b 1px；auto 在行渲染过一次后改用实际尺寸 */
+.log-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 41px;
+}
+</style>

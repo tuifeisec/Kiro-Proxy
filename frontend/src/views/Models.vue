@@ -618,12 +618,13 @@ onBeforeUnmount(stopGroupHealthRefresh)
     />
 
     <Teleport to="body">
+      <Transition name="motion-fade" appear>
       <div
         v-if="showDeleteModal"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
         @click.self="closeDeleteModal"
       >
-        <div class="w-full max-w-[420px] rounded-2xl border border-[#e5e7eb] bg-white p-5 shadow-2xl">
+        <div class="motion-pop-panel w-full max-w-[420px] rounded-2xl border border-[#e5e7eb] bg-white p-5 shadow-2xl">
           <div class="flex items-start gap-3">
             <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#fef2f2] text-[#dc2626]">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -662,6 +663,7 @@ onBeforeUnmount(stopGroupHealthRefresh)
           </div>
         </div>
       </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

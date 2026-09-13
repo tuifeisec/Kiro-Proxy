@@ -11,6 +11,41 @@ const messages = ref([])
 const connected = ref(false)
 const MAX_MESSAGES = 1000
 
+// rAF 合帧：到达的消息先进入普通缓冲，每帧最多 flush 一次到响应式 messages，
+// 避免日志高峰期每条消息各触发一次响应式更新与列表重渲
+let pendingMessages = []
+let flushHandle = 0
+
+function flushMessages() {
+  flushHandle = 0
+  if (!pendingMessages.length) return
+  const batch = pendingMessages
+  pendingMessages = []
+  messages.value.push(...batch)
+  if (messages.value.length > MAX_MESSAGES) {
+    messages.value.splice(0, messages.value.length - MAX_MESSAGES)
+  }
+}
+
+function enqueueMessage(msg) {
+  pendingMessages.push(msg)
+  // 标签页隐藏时 rAF 暂停、消息持续缓冲；与 messages 同策略只保留最新 MAX_MESSAGES 条，防止后台无限增长
+  if (pendingMessages.length > MAX_MESSAGES) {
+    pendingMessages.splice(0, pendingMessages.length - MAX_MESSAGES)
+  }
+  if (!flushHandle) {
+    flushHandle = requestAnimationFrame(flushMessages)
+  }
+}
+
+function cancelPendingFlush() {
+  if (flushHandle) {
+    cancelAnimationFrame(flushHandle)
+    flushHandle = 0
+  }
+  pendingMessages = []
+}
+
 const RECONNECT_BASE_DELAY_MS = 2000
 const RECONNECT_MAX_DELAY_MS = 60000
 
@@ -56,11 +91,7 @@ function connect() {
 
   ws.onmessage = (event) => {
     try {
-      const msg = JSON.parse(event.data)
-      messages.value.push(msg)
-      if (messages.value.length > MAX_MESSAGES) {
-        messages.value.splice(0, messages.value.length - MAX_MESSAGES)
-      }
+      enqueueMessage(JSON.parse(event.data))
     } catch {
       // ignore
     }
@@ -84,6 +115,7 @@ function connect() {
 }
 
 function clearMessages() {
+  cancelPendingFlush()
   messages.value = []
 }
 

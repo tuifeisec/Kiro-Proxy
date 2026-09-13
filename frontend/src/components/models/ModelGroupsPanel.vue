@@ -534,8 +534,9 @@ const memberRowsByGroupID = computed(() => {
     </section>
 
     <Teleport to="body">
+      <Transition name="motion-fade" appear>
       <div v-if="showEditor" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" @click.self="closeEditor">
-        <div class="flex max-h-[90vh] w-full max-w-[900px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white shadow-2xl">
+        <div class="motion-pop-panel flex max-h-[90vh] w-full max-w-[900px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white shadow-2xl">
           <div class="flex items-center justify-between border-b border-[#edf0f5] px-5 py-4">
             <div class="min-w-0">
               <h3 class="text-[16px] font-semibold text-[#111827]">{{ editingID ? '编辑分组' : '新建分组' }}</h3>
@@ -668,6 +669,7 @@ const memberRowsByGroupID = computed(() => {
           </div>
         </div>
       </div>
+      </Transition>
 
     </Teleport>
 

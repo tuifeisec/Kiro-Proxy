@@ -24,6 +24,13 @@
   --ui-warning: #d97706;
   --ui-danger: #dc2626;
 
+  /* 动效令牌：时长三档 + 统一缓动；所有动效只用 transform / opacity（合成器属性，不触发布局重排） */
+  --dur-fast: 120ms;         /* 悬停反馈、淡出退出 */
+  --dur-base: 200ms;         /* 弹层 / 面板进入 */
+  --dur-slow: 300ms;         /* 大型表面（抽屉等）进入；当前弹层统一用 --dur-base */
+  --ease-out-quart: cubic-bezier(0.2, 0, 0, 1); /* 进入：快速起步后减速收敛 */
+  --ease-in-quart: cubic-bezier(0.4, 0, 1, 1);  /* 退出：加速离场，观感更快 */
+
   /* 圆角 */
   --ui-radius-control: 6px;   /* 输入框、按钮 */
   --ui-radius-card: 8px;      /* 普通卡片 */
@@ -49,14 +56,52 @@ body {
   color: var(--ui-text);
   font-size: 13px;
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .titlebar { -webkit-app-region: drag; }
 .titlebar button, .titlebar-controls { -webkit-app-region: no-drag; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--ui-surface-subtle); }
-::-webkit-scrollbar-thumb { background: var(--ui-text-tertiary); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--ui-text-muted); }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--ui-border);
+  border-radius: 3px;
+  transition: background-color var(--dur-fast) ease-out;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--ui-text-tertiary); }
+
+/* ── 交互基线：悬停/状态变色统一 120ms 过渡，消除全应用"啪一下"的生硬感 ──
+   只过渡颜色类属性（绘制层，无布局开销）；组件自带的 Tailwind transition-* 工具类
+   优先级更高，可按需覆盖。 */
+@layer base {
+  button, a, input, select, textarea, label, [role='button'] {
+    transition:
+      background-color var(--dur-fast) var(--ease-out-quart),
+      border-color var(--dur-fast) var(--ease-out-quart),
+      color var(--dur-fast) var(--ease-out-quart),
+      box-shadow var(--dur-fast) var(--ease-out-quart),
+      opacity var(--dur-fast) var(--ease-out-quart);
+  }
+
+  tbody tr {
+    transition: background-color var(--dur-fast) var(--ease-out-quart);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [role='button']:focus-visible {
+    /* 用 outline 画环：不与 utilities 层的 shadow-* 工具类竞争 box-shadow 属性 */
+    outline: 2px solid #93c5fd;
+    outline-offset: 2px;
+  }
+}
+
+/* 主内容滚动容器使用：滚动条出现/消失不再挤压内容宽度 */
+.scroll-stable { scrollbar-gutter: stable; }
 
 /* ── 公共视觉类 ───────────────────────────────────────────── */
 @layer components {
@@ -112,4 +157,105 @@ body {
   .ui-status-success { color: var(--ui-success); background: #ecfdf5; }
   .ui-status-warning { color: var(--ui-warning); background: #fffbeb; }
   .ui-status-danger  { color: var(--ui-danger);  background: #fef2f2; }
+
+  /* ── 弹层动效基类（配合 Vue <Transition>，仅 transition transform / opacity） ── */
+
+  /* 遮罩 / 弹层容器：淡入淡出，用法 <Transition name="motion-fade"> */
+  .motion-fade-enter-active {
+    transition: opacity var(--dur-base) var(--ease-out-quart);
+  }
+  .motion-fade-leave-active {
+    transition: opacity var(--dur-fast) var(--ease-in-quart);
+  }
+  .motion-fade-enter-from,
+  .motion-fade-leave-to {
+    opacity: 0;
+  }
+
+  /* 面板 pop：opacity 0→1 + scale(0.97)→1，退出反向。两种用法：
+     1) 直接包裹面板：<Transition name="motion-pop">
+     2) 面板加 class="motion-pop-panel"，由外层 <Transition name="motion-fade"> 级联驱动（遮罩与面板同动） */
+  .motion-pop-enter-active,
+  .motion-fade-enter-active .motion-pop-panel {
+    transition:
+      opacity var(--dur-base) var(--ease-out-quart),
+      transform var(--dur-base) var(--ease-out-quart);
+  }
+  .motion-pop-leave-active,
+  .motion-fade-leave-active .motion-pop-panel {
+    transition:
+      opacity var(--dur-fast) var(--ease-in-quart),
+      transform var(--dur-fast) var(--ease-in-quart);
+  }
+  .motion-pop-enter-from,
+  .motion-pop-leave-to,
+  .motion-fade-enter-from .motion-pop-panel,
+  .motion-fade-leave-to .motion-pop-panel {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+
+  /* 路由视图切换：轻微上浮淡入 + 快速淡出（配合 <Transition name="motion-view" mode="out-in">） */
+  .motion-view-enter-active {
+    transition:
+      opacity var(--dur-base) var(--ease-out-quart),
+      transform var(--dur-base) var(--ease-out-quart);
+  }
+  .motion-view-leave-active {
+    transition: opacity var(--dur-fast) var(--ease-in-quart);
+  }
+  .motion-view-enter-from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  .motion-view-leave-to {
+    opacity: 0;
+  }
+
+  /* 右侧抽屉（如请求详情）：遮罩淡入淡出 + 面板自右滑入，用法
+     <Transition name="motion-drawer">，抽屉元素加 class="motion-drawer-panel" */
+  .motion-drawer-enter-active {
+    /* transform 项只为让 Vue 的根元素计时覆盖面板的 --dur-slow 滑入（whenTransitionEnds
+       只读根元素 computed style，面板 300ms 的 transitionend 会被忽略），根本身无位移 */
+    transition:
+      opacity var(--dur-base) var(--ease-out-quart),
+      transform var(--dur-slow) var(--ease-out-quart);
+  }
+  .motion-drawer-leave-active {
+    transition: opacity var(--dur-base) var(--ease-out-quart);
+  }
+  .motion-drawer-enter-active .motion-drawer-panel {
+    transition: transform var(--dur-slow) var(--ease-out-quart);
+  }
+  .motion-drawer-leave-active .motion-drawer-panel {
+    transition: transform var(--dur-fast) var(--ease-in-quart);
+  }
+  .motion-drawer-enter-from,
+  .motion-drawer-leave-to {
+    opacity: 0;
+  }
+  .motion-drawer-enter-from .motion-drawer-panel {
+    transform: translateX(100%);
+  }
+  .motion-drawer-leave-to .motion-drawer-panel {
+    transform: translateX(100%);
+  }
+
+  /* 无障碍：偏好减弱动效时直接呈现终态（transition 为 none 时 Vue 立即结束进出场） */
+  @media (prefers-reduced-motion: reduce) {
+    .motion-fade-enter-active,
+    .motion-fade-leave-active,
+    .motion-pop-enter-active,
+    .motion-pop-leave-active,
+    .motion-fade-enter-active .motion-pop-panel,
+    .motion-fade-leave-active .motion-pop-panel,
+    .motion-view-enter-active,
+    .motion-view-leave-active,
+    .motion-drawer-enter-active,
+    .motion-drawer-leave-active,
+    .motion-drawer-enter-active .motion-drawer-panel,
+    .motion-drawer-leave-active .motion-drawer-panel {
+      transition: none;
+    }
+  }
 }

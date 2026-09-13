@@ -82,8 +82,12 @@ onMounted(() => {
     <div v-else-if="isAuthorized" class="flex min-h-0 flex-1 overflow-hidden">
       <Sidebar />
       <main class="flex flex-1 flex-col overflow-hidden">
-        <div class="flex-1 overflow-auto">
-          <router-view />
+        <div class="scroll-stable flex-1 overflow-auto">
+          <router-view v-slot="{ Component }">
+            <Transition name="motion-view" mode="out-in">
+              <component :is="Component" :key="$route.fullPath" />
+            </Transition>
+          </router-view>
         </div>
         <StatusBar />
       </main>

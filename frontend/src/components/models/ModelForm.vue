@@ -428,10 +428,11 @@ async function handleExchangeOAuth() {
 
 <template>
   <Teleport to="body">
+    <Transition name="motion-fade" appear>
     <div v-if="visible" class="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4 py-6">
       <div class="absolute inset-0" @click="requestCancel"></div>
 
-      <div ref="modalRef" role="dialog" aria-modal="true" aria-labelledby="model-form-title" class="relative flex max-h-[86vh] w-full max-w-[900px] flex-col overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-xl">
+      <div ref="modalRef" role="dialog" aria-modal="true" aria-labelledby="model-form-title" class="motion-pop-panel relative flex max-h-[86vh] w-full max-w-[900px] flex-col overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-xl">
         <div class="flex shrink-0 items-center justify-between px-4 py-3">
           <div class="flex items-center gap-3">
             <h2 id="model-form-title" class="text-lg font-semibold text-[#111827]">
@@ -804,6 +805,7 @@ async function handleExchangeOAuth() {
         </div>
       </div>
 
+      <Transition name="motion-fade" appear>
       <div v-if="upstreamModelsDialogVisible" class="fixed inset-0 z-[60] flex items-center justify-center px-4 py-6">
         <div class="absolute inset-0 bg-black/30" @click="closeUpstreamModelsDialog"></div>
         <div
@@ -811,7 +813,7 @@ async function handleExchangeOAuth() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="upstream-models-title"
-          class="relative flex max-h-[72vh] w-full max-w-[560px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white shadow-2xl"
+          class="motion-pop-panel relative flex max-h-[72vh] w-full max-w-[560px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white shadow-2xl"
         >
           <div class="flex shrink-0 items-center justify-between border-b border-[#eef2f7] px-4 py-3">
             <div class="min-w-0">
@@ -900,7 +902,9 @@ async function handleExchangeOAuth() {
           </div>
         </div>
       </div>
+      </Transition>
     </div>
+    </Transition>
   </Teleport>
 
   <ConfirmDialog

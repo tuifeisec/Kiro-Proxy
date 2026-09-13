@@ -66,19 +66,20 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 
 <template>
   <Teleport to="body">
-    <div
-      v-if="visible"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
-      @click.self="cancel"
-    >
+    <Transition name="motion-fade" appear>
       <div
-        ref="dialogRef"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirm-dialog-title"
-        class="w-full max-w-[420px] bg-white p-5"
-        :style="{ borderRadius: 'var(--ui-radius-modal)', boxShadow: 'var(--ui-shadow-popover)', border: '1px solid var(--ui-border)' }"
+        v-if="visible"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
+        @click.self="cancel"
       >
+        <div
+          ref="dialogRef"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-dialog-title"
+          class="motion-pop-panel w-full max-w-[420px] bg-white p-5"
+          :style="{ borderRadius: 'var(--ui-radius-modal)', boxShadow: 'var(--ui-shadow-popover)', border: '1px solid var(--ui-border)' }"
+        >
         <div class="flex items-start gap-3">
           <div
             class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
@@ -117,5 +118,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
         </div>
       </div>
     </div>
+    </Transition>
   </Teleport>
 </template>

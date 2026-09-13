@@ -45,14 +45,27 @@ const dotClasses = {
 </template>
 
 <style scoped>
-.toast-enter-active,
+/* toast 进出场：进入从右侧轻微位移 + 淡入，退出反向；
+   时长/缓动引用 style.css 全局动效令牌。
+   未定义 .toast-move，多条堆叠时只有新条目动，已有条目不参与动画。 */
+.toast-enter-active {
+  transition: opacity var(--dur-base) var(--ease-out-quart), transform var(--dur-base) var(--ease-out-quart);
+}
+
 .toast-leave-active {
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition: opacity var(--dur-fast) var(--ease-in-quart), transform var(--dur-fast) var(--ease-in-quart);
 }
 
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateY(-6px);
+  transform: translateX(16px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter-active,
+  .toast-leave-active {
+    transition: none;
+  }
 }
 </style>

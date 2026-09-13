@@ -75,7 +75,8 @@ const tooltipStyle = computed(() => {
   const left = Math.min(tooltip.value.x + 14, window.innerWidth - width - 12)
   const preferredTop = tooltip.value.y + 14
   const top = preferredTop + height > window.innerHeight ? tooltip.value.y - height - 10 : preferredTop
-  return { left: `${Math.max(12, left)}px`, top: `${Math.max(12, top)}px`, width: `${width}px` }
+  // 定位走合成器友好的 transform（元素本身固定在 left/top 0），边界翻转与钳制逻辑保持不变。
+  return { transform: `translate(${Math.max(12, left)}px, ${Math.max(12, top)}px)`, width: `${width}px` }
 })
 
 function formatTime(value) {
@@ -428,7 +429,9 @@ onBeforeUnmount(() => {
     </div>
 
     <Teleport to="body">
-      <div v-if="tooltip" class="ui-popover pointer-events-none fixed z-[100] border border-[#334155] bg-[#0f172a] p-3 text-left text-[12px] text-white" :style="tooltipStyle">
+      <Transition name="req-tip">
+        <div v-if="tooltip" class="pointer-events-none fixed left-0 top-0 z-[100]" :style="tooltipStyle">
+          <div class="req-tip-body ui-popover border border-[#334155] bg-[#0f172a] p-3 text-left text-[12px] text-white">
         <template v-if="tooltip.type === 'tokens'">
           <div class="mb-2 text-[14px] font-semibold">Token 明细</div>
           <div class="space-y-1.5 text-[#cbd5e1]">
@@ -468,12 +471,15 @@ onBeforeUnmount(() => {
           </div>
           <div class="mt-2 flex justify-between border-t border-[#334155] pt-2"><span>{{ tooltip.type === 'total' ? '总耗时' : '总首字' }}</span><span class="font-semibold text-[#22d3ee]">{{ formatDuration(tooltip.type === 'total' ? tooltip.item.duration_ms : tooltip.item.first_byte_ms) }}</span></div>
         </template>
-      </div>
+          </div>
+        </div>
+      </Transition>
     </Teleport>
 
     <Teleport to="body">
+      <Transition name="motion-drawer" appear>
       <div v-if="selectedItem" class="fixed inset-0 z-[90] bg-black/15" @click.self="closeDetail">
-        <aside ref="detailRef" class="ml-auto flex h-full w-full max-w-[440px] flex-col border-l border-[#e2e8f0] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.12)]" role="dialog" aria-modal="true" aria-labelledby="request-detail-title">
+        <aside ref="detailRef" class="motion-drawer-panel ml-auto flex h-full w-full max-w-[440px] flex-col border-l border-[#e2e8f0] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.12)]" role="dialog" aria-modal="true" aria-labelledby="request-detail-title">
           <header class="flex shrink-0 items-start justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3.5">
             <div class="min-w-0">
               <h2 id="request-detail-title" class="text-[16px] font-semibold text-[#0f172a]">请求详情</h2>
@@ -556,6 +562,40 @@ onBeforeUnmount(() => {
           </div>
         </aside>
       </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+/* tooltip 出入场：根元素淡入淡出（Transition 据此识别时长），内层负责轻微位移；
+   两者属性均不与内联 transform 定位冲突，且不依赖全局样式令牌。 */
+.req-tip-body {
+  transition: transform 120ms ease-out;
+}
+
+.req-tip-enter-active {
+  transition: opacity 120ms ease-out;
+}
+
+.req-tip-leave-active {
+  transition: opacity 100ms ease-in;
+}
+
+.req-tip-enter-from,
+.req-tip-leave-to {
+  opacity: 0;
+}
+
+.req-tip-enter-from .req-tip-body {
+  transform: translateY(4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .req-tip-enter-active,
+  .req-tip-leave-active,
+  .req-tip-body {
+    transition: none;
+  }
+}
+</style>
