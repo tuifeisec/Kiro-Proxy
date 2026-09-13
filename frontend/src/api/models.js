@@ -1,4 +1,4 @@
-import { get, post, put, del, request } from './http.js'
+import { get, post, put, del, request, jsonInit } from './http.js'
 
 const BASE = '/api'
 
