@@ -32,6 +32,8 @@ async function fetchMode() {
     proxyMode.value = data.mode
   } catch (e) {
     settingsError.value = e.message || '读取代理模式失败'
+    // 初始加载时设置面板默认收起，面板内错误不可见，需额外 toast 提示用户。
+    showToast(settingsError.value, { tone: 'error' })
   }
 }
 
@@ -42,6 +44,8 @@ async function fetchLogDetail() {
     logMaxBody.value = data.max_body || 65536
   } catch (e) {
     settingsError.value = e.message || '读取日志模式失败'
+    // 初始加载时设置面板默认收起，面板内错误不可见，需额外 toast 提示用户。
+    showToast(settingsError.value, { tone: 'error' })
   }
 }
 

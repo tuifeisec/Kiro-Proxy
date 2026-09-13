@@ -92,6 +92,11 @@ async function refresh() {
   refreshInFlight = true
   try {
     await load(startDate.value, endDate.value)
+    // 刷新成功后选中日期可能已不在新范围内（如自定义范围被改变、该日期数据消失），清理脱节的选择，与列表保持一致。
+    if (!error.value && selectedDate.value
+      && !rows.value.some((row) => row.date === selectedDate.value)) {
+      resetSelectedDate()
+    }
   } finally {
     refreshInFlight = false
     if (!disposed && refreshPending) {

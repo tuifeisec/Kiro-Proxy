@@ -33,8 +33,10 @@ let refreshPending = false
 let refreshTimer = null
 let disposed = false
 
-watch(selectedItem, async (item) => {
+watch(selectedItem, async (item, oldItem) => {
   if (item) {
+    // 轮询重绑定同一记录（同 id 新引用）时不重置焦点，避免周期性打断用户在详情内的交互
+    if (oldItem && oldItem.id === item.id) return
     detailLastFocused = document.activeElement
     await nextTick()
     detailCloseRef.value?.focus()
@@ -147,6 +149,11 @@ async function load(resetPage = false, resetScroll = resetPage) {
       status: status.value,
     })
     items.value = data.items || []
+    // 轮询等静默刷新（resetPage=false）后同步详情：记录仍在列表则指向最新对象，已被清理或翻出当前筛选则关闭详情。
+    if (!resetPage && selectedItem.value) {
+      const selectedId = selectedItem.value.id
+      selectedItem.value = items.value.find((item) => item.id === selectedId) || null
+    }
     summary.value = data.summary || {}
     currentPage.value = Number(data.page || currentPage.value)
     pageSize.value = Number(data.page_size || pageSize.value)
@@ -400,7 +407,8 @@ onBeforeUnmount(() => {
           </table>
         </div>
         <div class="flex flex-wrap items-center justify-between gap-2 border-t border-[#edf0f5] px-3 py-2 text-[12px] text-[#64748b]">
-          <span>第 {{ totalPages ? currentPage : 0 }} / {{ totalPages }} 页</span>
+          <span v-if="!totalPages">共 {{ formatNum(total) }} 条</span>
+          <span v-else>第 {{ currentPage }} / {{ totalPages }} 页</span>
           <div class="flex items-center gap-2">
             <label class="flex items-center gap-1">
               每页

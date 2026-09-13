@@ -1,5 +1,6 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
+import ConfirmDialog from '../common/ConfirmDialog.vue'
 import IconArrowRight from '../icons/IconArrowRight.vue'
 import IconCheck from '../icons/IconCheck.vue'
 import IconEdit from '../icons/IconEdit.vue'
@@ -31,6 +32,8 @@ const memberConcurrency = ref({})
 const validationError = ref('')
 const deleteTarget = ref(null)
 const expandedGroupIDs = ref(new Set())
+const initialSnapshot = ref('')
+const discardConfirmVisible = ref(false)
 
 const modelByID = computed(() => new Map(props.models.map((model) => [model.id, model])))
 const healthByModelID = computed(() => new Map(props.health.map((status) => [status.model_config_id, status])))
@@ -76,6 +79,21 @@ function toggleAllGroups() {
 
 const allGroupsExpanded = computed(() => props.groups.length > 0 && props.groups.every((group) => isExpanded(group.id)))
 
+function editorSnapshot() {
+  return JSON.stringify({
+    name: groupName.value,
+    description: groupDescription.value,
+    enabled: groupEnabled.value,
+    first_byte_timeout_ms: firstByteTimeoutMs.value,
+    max_attempts: maxAttempts.value,
+    fallback_group_id: fallbackGroupID.value,
+    selected_model_ids: selectedModelIDs.value,
+    member_concurrency: memberConcurrency.value,
+  })
+}
+
+const isDirty = computed(() => Boolean(initialSnapshot.value) && editorSnapshot() !== initialSnapshot.value)
+
 function openCreate() {
   editingID.value = ''
   groupName.value = ''
@@ -87,7 +105,9 @@ function openCreate() {
   selectedModelIDs.value = []
   memberConcurrency.value = {}
   validationError.value = ''
+  discardConfirmVisible.value = false
   showEditor.value = true
+  nextTick(() => { initialSnapshot.value = editorSnapshot() })
 }
 
 function openEdit(group) {
@@ -102,12 +122,33 @@ function openEdit(group) {
   selectedModelIDs.value = members.map((member) => member.model_id)
   memberConcurrency.value = Object.fromEntries(members.map((member) => [member.model_id, Number(member.max_concurrency || 0)]))
   validationError.value = ''
+  discardConfirmVisible.value = false
   showEditor.value = true
+  nextTick(() => { initialSnapshot.value = editorSnapshot() })
 }
 
 function closeEditor() {
   if (props.saving) return
+  if (isDirty.value) {
+    discardConfirmVisible.value = true
+    return
+  }
+  discardEditorChanges()
+}
+
+function discardEditorChanges() {
+  discardConfirmVisible.value = false
+  initialSnapshot.value = ''
   showEditor.value = false
+}
+
+function cancelDeleteGroup() {
+  deleteTarget.value = null
+}
+
+function confirmDeleteGroup() {
+  if (!deleteTarget.value || props.deleting) return
+  emit('delete', { group: deleteTarget.value, done: () => { deleteTarget.value = null } })
 }
 
 function toggleMember(modelID) {
@@ -628,16 +669,29 @@ const memberRowsByGroupID = computed(() => {
         </div>
       </div>
 
-      <div v-if="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" @click.self="!deleting && (deleteTarget = null)">
-        <div class="w-full max-w-[400px] rounded-lg border border-[#e5e7eb] bg-white p-5 shadow-2xl">
-          <h3 class="text-[15px] font-semibold text-[#111827]">删除分组</h3>
-          <p class="mt-2 text-[13px] leading-5 text-[#475569]">确定删除「{{ deleteTarget.name }}」？模型配置会保留。</p>
-          <div class="mt-5 flex justify-end gap-2">
-            <button class="h-9 ui-control px-4 text-[13px]" :disabled="deleting" @click="deleteTarget = null">取消</button>
-            <button class="h-9 border border-[#dc2626] bg-[#dc2626] px-4 text-[13px] font-medium text-white disabled:opacity-60" :disabled="deleting" @click="emit('delete', { group: deleteTarget, done: () => { deleteTarget = null } })">{{ deleting ? '删除中...' : '删除' }}</button>
-          </div>
-        </div>
-      </div>
     </Teleport>
+
+    <ConfirmDialog
+      :visible="Boolean(deleteTarget)"
+      title="删除分组"
+      :message="`确定删除「${deleteTarget?.name || ''}」？模型配置会保留。`"
+      confirm-text="删除"
+      cancel-text="取消"
+      tone="danger"
+      :busy="deleting"
+      @confirm="confirmDeleteGroup"
+      @cancel="cancelDeleteGroup"
+    />
+
+    <ConfirmDialog
+      :visible="discardConfirmVisible"
+      title="放弃未保存的修改？"
+      message="当前分组编辑内容尚未保存，关闭后这些修改将丢失。"
+      confirm-text="放弃修改"
+      cancel-text="继续编辑"
+      tone="danger"
+      @confirm="discardEditorChanges"
+      @cancel="discardConfirmVisible = false"
+    />
   </div>
 </template>

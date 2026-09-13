@@ -99,6 +99,12 @@ const statusMeta = computed(() => {
   return { label: '连接失败', sub: props.testResult.error || '测试失败', badge: 'bg-[#fef2f2] text-[#dc2626]', dot: 'bg-[#ef4444]' }
 })
 
+const lastTestStatus = computed(() => {
+  if (!props.testResult) return { label: '未知', text: 'text-[#94a3b8]', dot: 'bg-[#94a3b8]', title: '从未测试' }
+  if (props.testResult.ok) return { label: '成功', text: 'text-[#059669]', dot: 'bg-[#10b981]', title: '最近一次连接测试成功' }
+  return { label: '失败', text: 'text-[#dc2626]', dot: 'bg-[#ef4444]', title: props.testResult.error || '最近一次连接测试失败' }
+})
+
 const codexUsage = computed(() => {
   if (!props.model.codex_usage_json) return null
   try {
@@ -324,7 +330,7 @@ function usedText(row) {
           <div class="mb-3 font-semibold text-[#111827]">最近刷新</div>
           <div class="mb-4 text-[#64748b]">{{ updatedAtLabel }}</div>
           <div class="mb-2 font-semibold text-[#111827]">最新状态</div>
-          <div class="mb-4 flex items-center gap-1.5 text-[#059669]"><span class="h-[7px] w-[7px] rounded-full bg-[#10b981]"></span>成功</div>
+          <div class="mb-4 flex items-center gap-1.5" :class="lastTestStatus.text" :title="lastTestStatus.title"><span class="h-[7px] w-[7px] rounded-full" :class="lastTestStatus.dot"></span>{{ lastTestStatus.label }}</div>
           <button
             class="inline-flex h-[30px] items-center gap-1 ui-control px-3 text-[12px] font-medium text-[#2563eb] hover:bg-[#eff6ff] disabled:opacity-50"
             :disabled="refreshingCodex"
