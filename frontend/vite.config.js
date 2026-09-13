@@ -4,6 +4,15 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [tailwindcss(), vue()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (/[\\/]node_modules[\\/](vue|@vue|vue-router)[\\/]/.test(id)) return 'vendor'
+        }
+      }
+    }
+  },
   server: {
     proxy: {
       '/api': 'http://localhost:18082',

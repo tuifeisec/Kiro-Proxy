@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDailyStats } from '../../composables/useStats.js'
 import IconRefresh from '../icons/IconRefresh.vue'
 import { ALL_STATS_START_DATE, statsDaysAgo } from '../../utils/date.js'
+import { formatTokens } from '../../utils/format.js'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -30,6 +31,7 @@ function applyDaysRange() {
 }
 
 function refreshTimerTick() {
+  if (document.hidden) return
   const nextStart = isAllRange.value ? ALL_STATS_START_DATE : statsDaysAgo(props.days)
   const nextEnd = statsDaysAgo(0)
   if (startDate.value === lastAutoStart && endDate.value === lastAutoEnd) {
@@ -39,6 +41,10 @@ function refreshTimerTick() {
     lastAutoEnd = nextEnd
   }
   void refresh()
+}
+
+function handleVisibilityChange() {
+  if (!document.hidden) refreshTimerTick()
 }
 
 applyDaysRange()
@@ -75,6 +81,7 @@ async function refresh() {
 onMounted(() => {
   refresh()
   refreshTimer = setInterval(refreshTimerTick, 5000)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 watch(() => props.refreshKey, refresh)
 watch(() => props.days, async () => {
@@ -85,14 +92,8 @@ onBeforeUnmount(() => {
   disposed = true
   if (refreshTimer) clearInterval(refreshTimer)
   refreshTimer = null
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
-
-function formatNum(n) {
-  const value = Number(n || 0)
-  if (value >= 1_000_000) return (value / 1_000_000).toFixed(2).replace(/\.00$/, '') + 'M'
-  if (value >= 1_000) return (value / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
-  return String(value)
-}
 
 function statNum(row, ...keys) {
   for (const key of keys) {
@@ -223,9 +224,9 @@ function formatCredits(n) {
             <td class="py-1.5 pr-3 font-medium text-[#0f172a]">{{ m.model_id }}</td>
             <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ m.requests }}</td>
             <td class="py-1.5 pr-3 text-right tabular-nums" :class="m.errors > 0 ? 'text-[#dc2626]' : 'text-[#94a3b8]'">{{ m.errors }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(m.input_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(m.output_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#059669]">{{ formatNum(m.cache_hit_tokens) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ formatTokens(m.input_tokens) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ formatTokens(m.output_tokens) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-[#059669]">{{ formatTokens(m.cache_hit_tokens) }}</td>
             <td class="py-1.5 pr-3 text-right tabular-nums text-[#d97706]">{{ formatCredits(m.credits) }}</td>
             <td class="py-1.5 text-right tabular-nums">
               <div class="flex items-center justify-end gap-2">

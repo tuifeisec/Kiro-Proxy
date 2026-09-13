@@ -8,6 +8,7 @@ import IconWifi from '../components/icons/IconWifi.vue'
 import IconArrowRight from '../components/icons/IconArrowRight.vue'
 import IconRefresh from '../components/icons/IconRefresh.vue'
 import { statsDaysAgo } from '../utils/date.js'
+import { formatCredits, formatTokens as formatNum } from '../utils/format.js'
 
 const { rows, loading, error, range, load } = useDailyStats()
 
@@ -23,8 +24,10 @@ let refreshInFlight = false
 let refreshPending = false
 let refreshTimer = null
 let disposed = false
+let selectSeq = 0
 
 function refreshTimerTick() {
+  if (document.hidden) return
   if (activeRange.value !== 'custom') {
     const option = quickRanges.find((item) => item.key === activeRange.value)
     if (option) {
@@ -35,25 +38,15 @@ function refreshTimerTick() {
   void refresh()
 }
 
+function handleVisibilityChange() {
+  if (!document.hidden) refreshTimerTick()
+}
+
 const quickRanges = [
   { key: 'today', label: '今天', days: 0 },
   { key: '7d', label: '最近 7 天', days: 6 },
   { key: '30d', label: '最近 30 天', days: 29 },
 ]
-
-function formatNum(n) {
-  const value = Number(n || 0)
-  if (value >= 1_000_000) return (value / 1_000_000).toFixed(2).replace(/\.00$/, '') + 'M'
-  if (value >= 1_000) return (value / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
-  return String(value)
-}
-
-function formatCredits(n) {
-  const value = Number(n || 0)
-  if (value >= 100) return '$' + value.toFixed(2)
-  if (value >= 1) return '$' + value.toFixed(4)
-  return '$' + value.toFixed(6)
-}
 
 function statNum(row, ...keys) {
   for (const key of keys) {
@@ -114,17 +107,22 @@ async function selectDate(date) {
     return
   }
 
+  const seq = ++selectSeq
   selectedDate.value = date
   selectedDateLogs.value = []
   logsError.value = ''
   logsLoading.value = true
   try {
     const data = await getLogsByDate(date, 200)
+    // 过期响应直接丢弃，避免旧请求覆盖最后点击日期的数据。
+    if (seq !== selectSeq) return
     selectedDateLogs.value = data.items || []
   } catch (e) {
+    if (seq !== selectSeq) return
     logsError.value = e.message || String(e)
   } finally {
-    logsLoading.value = false
+    // 过期请求不复位 loading，由最新请求负责。
+    if (seq === selectSeq) logsLoading.value = false
   }
 }
 
@@ -248,12 +246,14 @@ function closeSelectedDate() {
 onMounted(() => {
   refresh()
   refreshTimer = setInterval(refreshTimerTick, 5000)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onBeforeUnmount(() => {
   disposed = true
   if (refreshTimer) clearInterval(refreshTimer)
   refreshTimer = null
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 

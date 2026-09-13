@@ -16,6 +16,8 @@ import IconArrowRight from '../components/icons/IconArrowRight.vue'
 import IconMore from '../components/icons/IconMore.vue'
 import { useToast } from '../composables/useToast.js'
 import { statsDaysAgo } from '../utils/date.js'
+import { formatCredits, formatTokens } from '../utils/format.js'
+import { getProxyAccessMode, updateProxyAccessMode } from '../api/settings.js'
 
 const { stats, loading, error, clearStats, refresh } = useStats()
 const { showToast } = useToast()
@@ -55,8 +57,8 @@ const proxyAccessConfirmMessage = computed(() => {
 
 async function loadProxyAccess() {
   try {
-    const r = await fetch('/api/proxy-access-mode')
-    if (r.ok) proxyAccess.value = await r.json()
+    const data = await getProxyAccessMode()
+    if (data) proxyAccess.value = data
   } catch {
     // 诊断类请求，失败时保持默认值 local/127.0.0.1，不影响主流程
   }
@@ -73,13 +75,8 @@ async function confirmProxyAccessToggle() {
   if (!pendingProxyAccessMode.value) return
   proxyAccessLoading.value = true
   try {
-    const r = await fetch('/api/proxy-access-mode', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: pendingProxyAccessMode.value })
-    })
-    const data = await r.json()
-    if (!r.ok) throw new Error(data.error || '切换失败')
+    const data = await updateProxyAccessMode(pendingProxyAccessMode.value)
+    if (!data) throw new Error('切换失败')
     proxyAccess.value = data
     proxyAccessError.value = ''
     showProxyAccessConfirm.value = false
@@ -119,20 +116,6 @@ const rangeOptions = [
 ]
 
 const displayedStats = computed(() => selectedRangeDays.value < 0 ? stats.value : rangeSummary.value)
-
-function formatTokens(n) {
-  const value = Number(n || 0)
-  if (value >= 1_000_000) return (value / 1_000_000).toFixed(2).replace(/\.00$/, '') + 'M'
-  if (value >= 1_000) return (value / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
-  return String(value)
-}
-
-function formatCredits(n) {
-  const value = Number(n || 0)
-  if (value >= 100) return '$' + value.toFixed(2)
-  if (value >= 1) return '$' + value.toFixed(4)
-  return '$' + value.toFixed(6)
-}
 
 const cacheHitRate = computed(() => {
   const totalIn = Number(displayedStats.value.input_tokens || 0)

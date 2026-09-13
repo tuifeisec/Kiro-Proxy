@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { getModels } from '../../api/models.js'
 import { getSettings, updateSettings } from '../../api/settings.js'
+import { useToast } from '../../composables/useToast.js'
 
 const CLASSIFIER_DISABLED_VALUE = '__disabled__'
 
@@ -9,19 +10,31 @@ const models = ref([])
 const classifierModelId = ref('')
 const saving = ref(false)
 const saved = ref(false)
+const { showToast } = useToast()
 
 async function load() {
-  const [modelsData, settings] = await Promise.all([getModels(), getSettings()])
-  models.value = Array.isArray(modelsData) ? modelsData : []
-  classifierModelId.value = settings?.classifier_model_id || ''
+  try {
+    const [modelsData, settings] = await Promise.all([getModels(), getSettings()])
+    models.value = Array.isArray(modelsData) ? modelsData : []
+    classifierModelId.value = settings?.classifier_model_id || ''
+  } catch (e) {
+    console.error('加载高级设置失败', e)
+    showToast(e?.message || '加载高级设置失败', { tone: 'error' })
+  }
 }
 
 async function save() {
   saving.value = true
-  await updateSettings({ classifier_model_id: classifierModelId.value })
-  saving.value = false
-  saved.value = true
-  setTimeout(() => { saved.value = false }, 2000)
+  try {
+    await updateSettings({ classifier_model_id: classifierModelId.value })
+    saved.value = true
+    setTimeout(() => { saved.value = false }, 2000)
+  } catch (e) {
+    console.error('保存高级设置失败', e)
+    showToast(e?.message || '保存高级设置失败', { tone: 'error' })
+  } finally {
+    saving.value = false
+  }
 }
 
 onMounted(load)

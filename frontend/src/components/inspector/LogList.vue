@@ -2,6 +2,11 @@
 import { computed, ref, nextTick, watch } from 'vue'
 import IconCopy from '../icons/IconCopy.vue'
 import IconExport from '../icons/IconExport.vue'
+import { useCopy } from '../../composables/useCopy.js'
+import { useToast } from '../../composables/useToast.js'
+
+const { showToast } = useToast()
+const { copy } = useCopy()
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
@@ -44,7 +49,9 @@ watch(() => props.messages.length, () => {
   })
 })
 
-watch(() => visible.value.length, () => {
+// 监听 visible 引用而非 length：日志达到裁剪上限后 length 恒定，无法感知新消息；
+// visible 每次重算都产生新数组引用，新消息到达或筛选变化均触发重置
+watch(visible, () => {
   checkedSet.value = new Set()
   allChecked.value = false
 })
@@ -54,17 +61,17 @@ function toggleAll() {
     checkedSet.value = new Set()
     allChecked.value = false
   } else {
-    checkedSet.value = new Set(visible.value.map((_, i) => i))
+    checkedSet.value = new Set(visible.value)
     allChecked.value = true
   }
 }
 
-function toggleItem(idx) {
+function toggleItem(msg) {
   const s = new Set(checkedSet.value)
-  if (s.has(idx)) {
-    s.delete(idx)
+  if (s.has(msg)) {
+    s.delete(msg)
   } else {
-    s.add(idx)
+    s.add(msg)
   }
   checkedSet.value = s
   allChecked.value = s.size === visible.value.length
@@ -76,12 +83,15 @@ function cancelSelection() {
 }
 
 async function copySelected() {
-  const items = visible.value.filter((_, i) => checkedSet.value.has(i))
-  await navigator.clipboard.writeText(JSON.stringify(items, null, 2))
+  const items = visible.value.filter(m => checkedSet.value.has(m))
+  const ok = await copy(JSON.stringify(items, null, 2))
+  if (!ok) {
+    showToast('复制失败：无法访问剪贴板', { tone: 'error' })
+  }
 }
 
 function exportSelected() {
-  const items = visible.value.filter((_, i) => checkedSet.value.has(i))
+  const items = visible.value.filter(m => checkedSet.value.has(m))
   const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -141,13 +151,13 @@ function categoryColor(cat) {
         已隐藏较早的 {{ hiddenCount.toLocaleString() }} 条记录，仅渲染最近 {{ visible.length.toLocaleString() }} 条以保持流畅
       </div>
       <div
-        v-for="(msg, i) in visible"
-        :key="i"
+        v-for="msg in visible"
+        :key="msg"
         class="grid grid-cols-[28px_78px_64px_86px_1fr] items-center gap-2 border-b border-[#f3f4f6] px-3 py-2 cursor-pointer transition-colors hover:bg-[#f8fafc]"
         :class="selected === msg ? 'bg-[#eff6ff] ring-1 ring-inset ring-[#bfdbfe]' : ''"
         @click="emit('select', msg)"
       >
-        <input type="checkbox" :checked="checkedSet.has(i)" @click.stop @change="toggleItem(i)"
+        <input type="checkbox" :checked="checkedSet.has(msg)" @click.stop @change="toggleItem(msg)"
           class="h-3.5 w-3.5 accent-[#2563eb]" />
         <span class="font-mono text-[#6b7280]">{{ msg.time }}</span>
         <span class="inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[10px] font-medium"

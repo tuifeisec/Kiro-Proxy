@@ -1,16 +1,14 @@
+import { get, del } from './http.js'
+
 const BASE = '/api'
 
 export async function getStats() {
-  const res = await fetch(`${BASE}/stats`)
-  if (!res.ok) throw new Error(await res.text())
-  const data = await res.json()
+  const data = await get(`${BASE}/stats`)
   return data.data ?? data
 }
 
 export async function clearStats() {
-  const res = await fetch(`${BASE}/stats`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(await res.text())
-  const data = await res.json()
+  const data = await del(`${BASE}/stats`)
   return data.data ?? data
 }
 
@@ -20,8 +18,6 @@ export async function getDailyStats(start, end) {
   const params = new URLSearchParams({ type: 'daily' })
   if (start) params.set('start', start)
   if (end) params.set('end', end)
-  const res = await fetch(`${BASE}/stats?${params.toString()}`)
-  if (!res.ok) throw new Error(await res.text())
-  const data = await res.json()
+  const data = await get(`${BASE}/stats?${params.toString()}`)
   return data.data ?? data
 }

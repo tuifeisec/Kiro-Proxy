@@ -1,111 +1,60 @@
-const BASE = ''
+import { get, post, put, del, request } from './http.js'
 
-async function parseJSONResponse(r) {
-  const data = await r.json().catch(() => ({}))
-  if (!r.ok || data?.error) {
-    throw new Error(data?.error || `HTTP ${r.status}`)
-  }
-  return data
-}
+const BASE = '/api'
 
 export async function getModels() {
-  const r = await fetch(`${BASE}/api/models`)
-  return parseJSONResponse(r)
+  return get(`${BASE}/models`)
 }
 
 export async function createModel(data) {
-  const r = await fetch(`${BASE}/api/models`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  })
-  return parseJSONResponse(r)
+  return post(`${BASE}/models`, data)
 }
 
 export async function updateModel(id, data) {
-  const r = await fetch(`${BASE}/api/models/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  })
-  return parseJSONResponse(r)
+  return put(`${BASE}/models/${id}`, data)
 }
 
 export async function deleteModel(id) {
-  const r = await fetch(`${BASE}/api/models/${id}`, { method: 'DELETE' })
-  return parseJSONResponse(r)
+  return del(`${BASE}/models/${id}`)
 }
 
 export async function getModelGroups() {
-  const r = await fetch(`${BASE}/api/model-groups`)
-  return parseJSONResponse(r)
+  return get(`${BASE}/model-groups`)
 }
 
 export async function getModelGroupStatus() {
-  const r = await fetch(`${BASE}/api/model-groups/status`)
-  return parseJSONResponse(r)
+  return get(`${BASE}/model-groups/status`)
 }
 
 export async function createModelGroup(data) {
-  const r = await fetch(`${BASE}/api/model-groups`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  })
-  return parseJSONResponse(r)
+  return post(`${BASE}/model-groups`, data)
 }
 
 export async function updateModelGroup(id, data) {
-  const r = await fetch(`${BASE}/api/model-groups/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  })
-  return parseJSONResponse(r)
+  return put(`${BASE}/model-groups/${id}`, data)
 }
 
 export async function deleteModelGroup(id) {
-  const r = await fetch(`${BASE}/api/model-groups/${id}`, { method: 'DELETE' })
-  return parseJSONResponse(r)
+  return del(`${BASE}/model-groups/${id}`)
 }
 
 export async function testModel(modelId, model) {
-  const r = await fetch(`${BASE}/api/test-model`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model_id: modelId, model })
-  })
-  return parseJSONResponse(r)
+  // 后端上游测速超时为 30s（api/test_model.go），前端超时需长于它才能拿到后端的测试失败结果
+  return request(`${BASE}/test-model`, { ...jsonInit('POST', { model_id: modelId, model }), timeout: 60000 })
 }
 
 export async function fetchUpstreamModels(data) {
-  const r = await fetch(`${BASE}/api/upstream-models`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  })
-  return parseJSONResponse(r)
+  return post(`${BASE}/upstream-models`, data)
 }
 
 export async function refreshCodexModel(id) {
-  const r = await fetch(`${BASE}/api/refresh-codex-model`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model_id: id })
-  })
-  return parseJSONResponse(r)
+  return post(`${BASE}/refresh-codex-model`, { model_id: id })
 }
 
 export async function startCodexOAuth() {
-  const r = await fetch(`${BASE}/api/codex-oauth/start`, { method: 'POST' })
-  return parseJSONResponse(r)
+  return post(`${BASE}/codex-oauth/start`)
 }
 
 export async function exchangeCodexOAuth(callbackUrl, proxyUrl) {
-  const r = await fetch(`${BASE}/api/codex-oauth/exchange`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callback_url: callbackUrl, proxy_url: proxyUrl || '' })
-  })
-  return parseJSONResponse(r)
+  return post(`${BASE}/codex-oauth/exchange`, { callback_url: callbackUrl, proxy_url: proxyUrl || '' })
 }

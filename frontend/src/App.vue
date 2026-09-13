@@ -6,11 +6,12 @@ import ConfirmDialog from './components/common/ConfirmDialog.vue'
 import AdvertisementList from './components/common/AdvertisementList.vue'
 import ToastHost from './components/common/ToastHost.vue'
 import { computed, onMounted, ref } from 'vue'
-import { getLicenseInfo, getUpdateInfo, openExternalURL } from './api/license.js'
+import { getUpdateInfo, openExternalURL } from './api/license.js'
 import { useHeartbeat } from './composables/useHeartbeat.js'
+import { useLicense } from './composables/useLicense.js'
 import { startWebSocket } from './composables/useWebSocket.js'
 
-const licenseInfo = ref(null)
+const { licenseInfo, loadLicenseInfo } = useLicense()
 const updateDialogVisible = ref(false)
 const updateInfo = ref(null)
 
@@ -24,21 +25,6 @@ const updateMessage = computed(() => {
   const info = updateInfo.value || {}
   return `当前有更新的版本，建议更新，点击确定跳转更新地址\n\n当前版本：${info.current_version || '-'}\n最新版本：${info.latest_version || '-'}`
 })
-
-async function loadLicensePanel() {
-  try {
-    licenseInfo.value = await getLicenseInfo()
-  } catch (error) {
-    licenseInfo.value = {
-      authorized: false,
-      error: error.message,
-      branding: {
-        app_name: 'Kiro Proxy',
-        unauthorized_text: '请加入群获取免费授权后使用'
-      }
-    }
-  }
-}
 
 async function checkUpdate() {
   try {
@@ -66,7 +52,7 @@ async function confirmUpdate() {
 startWebSocket()
 useHeartbeat()
 onMounted(() => {
-  loadLicensePanel()
+  loadLicenseInfo()
   checkUpdate()
 })
 </script>

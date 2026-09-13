@@ -78,11 +78,11 @@ watch(() => props.visible, (val) => {
     oauthCallbackUrl.value = ''
     oauthError.value = ''
     resetUpstreamModels()
-    loadingModel.value = false
     document.addEventListener('keydown', onKeydown)
     nextTick(() => {
       initialSnapshot.value = JSON.stringify(form.value)
       modalRef.value?.querySelector('input, select, textarea')?.focus()
+      loadingModel.value = false
     })
   } else {
     document.removeEventListener('keydown', onKeydown)
@@ -161,6 +161,7 @@ function requestCancel() {
 }
 
 watch(() => form.value.provider, (val) => {
+  if (loadingModel.value) return
   const options = val === 'anthropic'
     ? ['/messages']
     : val === 'gemini'
@@ -171,9 +172,7 @@ watch(() => form.value.provider, (val) => {
   if (!form.value.disable_auto_suffix && !options.includes(form.value.endpoint)) {
     form.value.endpoint = options[0]
   }
-  if (!loadingModel.value) {
-    applyDefaultPrices(val)
-  }
+  applyDefaultPrices(val)
 })
 
 watch(

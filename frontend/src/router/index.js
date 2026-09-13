@@ -1,16 +1,12 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import Dashboard from '../views/Dashboard.vue'
-import Models from '../views/Models.vue'
-import Inspector from '../views/Inspector.vue'
-import Usage from '../views/Usage.vue'
-import RequestUsage from '../views/RequestUsage.vue'
 
 const routes = [
-  { path: '/', component: Dashboard },
-  { path: '/models', component: Models },
-  { path: '/usage', component: Usage },
-  { path: '/request-usage', component: RequestUsage },
-  { path: '/inspector', component: Inspector },
+  { path: '/', component: () => import('../views/Dashboard.vue') },
+  { path: '/models', component: () => import('../views/Models.vue') },
+  { path: '/usage', component: () => import('../views/Usage.vue') },
+  { path: '/request-usage', component: () => import('../views/RequestUsage.vue') },
+  { path: '/inspector', component: () => import('../views/Inspector.vue') },
+  { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
 export const router = createRouter({

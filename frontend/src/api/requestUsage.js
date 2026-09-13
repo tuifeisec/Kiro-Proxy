@@ -1,4 +1,6 @@
-const BASE = '/api/request-usage'
+import { get } from './http.js'
+
+const BASE = '/api'
 
 export async function getRequestUsage(start, end, options = {}) {
     const params = new URLSearchParams({
@@ -10,8 +12,5 @@ export async function getRequestUsage(start, end, options = {}) {
     for (const key of ['q', 'provider', 'status']) {
         if (options[key]) params.set(key, options[key])
     }
-    const response = await fetch(`${BASE}?${params.toString()}`)
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(data.error || '请求统计加载失败')
-    return data
+    return get(`${BASE}/request-usage?${params.toString()}`)
 }

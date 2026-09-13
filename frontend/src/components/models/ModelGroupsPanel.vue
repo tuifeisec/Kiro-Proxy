@@ -275,8 +275,7 @@ function memberPerformance(member) {
   }
 }
 
-function groupConcurrencyText(group) {
-  const summary = groupSummary(group)
+function groupConcurrencyText(summary) {
   return `${summary.active} / ${summary.concurrencyLimit > 0 ? summary.concurrencyLimit : '不限'}`
 }
 
@@ -291,6 +290,33 @@ function memberName(member) {
   const model = modelByID.value.get(member.model_id)
   return model?.name || model?.model_id || member.model_id
 }
+
+const groupSummariesByID = computed(() => {
+  const map = new Map()
+  for (const group of props.groups) map.set(group.id, groupSummary(group))
+  return map
+})
+
+const memberRowsByGroupID = computed(() => {
+  const map = new Map()
+  for (const group of props.groups) {
+    map.set(group.id, sortedMembers(group).map((member, index) => {
+      const model = modelByID.value.get(member.model_id)
+      const health = memberHealth(member)
+      return {
+        member,
+        index,
+        model,
+        health,
+        performance: memberPerformance(member),
+        healthMeta: healthMeta(model),
+        concurrencyText: concurrencyText(member),
+        openUntil: formatOpenUntil(health.open_until || health.latency_degraded_until),
+      }
+    }))
+  }
+  return map
+})
 </script>
 
 <template>
@@ -364,15 +390,15 @@ function memberName(member) {
               </div>
               <p v-if="group.description" class="mt-1 truncate text-[11px] text-[#64748b]" :title="group.description">{{ group.description }}</p>
               <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-[#64748b]">
-                <span><strong class="font-semibold text-[#334155]">{{ groupSummary(group).total }}</strong> 个候选</span>
-                <span><strong class="font-semibold text-[#059669]">{{ groupSummary(group).available }}</strong> 个可调度</span>
-                <span v-if="groupSummary(group).open"><strong class="font-semibold text-[#dc2626]">{{ groupSummary(group).open }}</strong> 个熔断</span>
-                <span v-if="groupSummary(group).avoided"><strong class="font-semibold text-[#c2410c]">{{ groupSummary(group).avoided }}</strong> 个回避</span>
+                <span><strong class="font-semibold text-[#334155]">{{ groupSummariesByID.get(group.id).total }}</strong> 个候选</span>
+                <span><strong class="font-semibold text-[#059669]">{{ groupSummariesByID.get(group.id).available }}</strong> 个可调度</span>
+                <span v-if="groupSummariesByID.get(group.id).open"><strong class="font-semibold text-[#dc2626]">{{ groupSummariesByID.get(group.id).open }}</strong> 个熔断</span>
+                <span v-if="groupSummariesByID.get(group.id).avoided"><strong class="font-semibold text-[#c2410c]">{{ groupSummariesByID.get(group.id).avoided }}</strong> 个回避</span>
               </div>
             </div>
             <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[#64748b] lg:justify-end">
-              <span>模型并发 <strong class="font-semibold tabular-nums text-[#111827]">{{ groupConcurrencyText(group) }}</strong></span>
-              <span>会话 <strong class="font-semibold tabular-nums text-[#2563eb]">{{ groupSummary(group).sessions }}</strong></span>
+              <span>模型并发 <strong class="font-semibold tabular-nums text-[#111827]">{{ groupConcurrencyText(groupSummariesByID.get(group.id)) }}</strong></span>
+              <span>会话 <strong class="font-semibold tabular-nums text-[#2563eb]">{{ groupSummariesByID.get(group.id).sessions }}</strong></span>
               <span title="流式响应按首内容、非流式响应按首字节评估">首响应慢阈值 <strong class="font-semibold tabular-nums text-[#111827]">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</strong></span>
               <span>最多尝试 <strong class="font-semibold tabular-nums text-[#111827]">{{ group.max_attempts ?? 4 }}</strong> 次</span>
             </div>
@@ -416,43 +442,43 @@ function memberName(member) {
                 <span>会话 / 回避</span>
                 <span>恢复 / 解除时间</span>
               </div>
-              <div v-for="(member, index) in sortedMembers(group)" :key="member.model_id" class="grid grid-cols-[minmax(52px,0.5fr)_minmax(145px,1.5fr)_minmax(120px,1.1fr)_minmax(104px,1fr)_minmax(80px,0.8fr)_minmax(82px,0.85fr)_minmax(82px,0.85fr)_minmax(118px,1.2fr)] items-center gap-2 border-b border-[#edf0f5] px-3 py-2 text-[11px] transition-colors last:border-b-0 hover:bg-[#fbfcfe]">
+              <div v-for="row in memberRowsByGroupID.get(group.id)" :key="row.member.model_id" class="grid grid-cols-[minmax(52px,0.5fr)_minmax(145px,1.5fr)_minmax(120px,1.1fr)_minmax(104px,1fr)_minmax(80px,0.8fr)_minmax(82px,0.85fr)_minmax(82px,0.85fr)_minmax(118px,1.2fr)] items-center gap-2 border-b border-[#edf0f5] px-3 py-2 text-[11px] transition-colors last:border-b-0 hover:bg-[#fbfcfe]">
                 <div class="flex items-center gap-1.5">
-                  <span class="font-mono text-[#64748b]">#{{ Number(member.priority || 0) + 1 }}</span>
-                    <span class="rounded px-1 py-0.5 text-[9px] font-medium" :class="index === 0 ? 'bg-[#eff6ff] text-[#2563eb]' : 'bg-[#f3f4f6] text-[#64748b]'">{{ memberRole(index) }}</span>
+                  <span class="font-mono text-[#64748b]">#{{ Number(row.member.priority || 0) + 1 }}</span>
+                    <span class="rounded px-1 py-0.5 text-[9px] font-medium" :class="row.index === 0 ? 'bg-[#eff6ff] text-[#2563eb]' : 'bg-[#f3f4f6] text-[#64748b]'">{{ memberRole(row.index) }}</span>
                 </div>
                 <div class="min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="truncate font-medium text-[#111827]">{{ memberName(member) }}</span>
-                    <span v-if="modelByID.get(member.model_id)?.enabled === false" class="shrink-0 rounded bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] text-[#64748b]">已禁用</span>
+                    <span class="truncate font-medium text-[#111827]">{{ memberName(row.member) }}</span>
+                    <span v-if="row.model?.enabled === false" class="shrink-0 rounded bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] text-[#64748b]">已禁用</span>
                   </div>
-                  <div class="mt-0.5 truncate font-mono text-[10px] text-[#94a3b8]" :title="modelByID.get(member.model_id)?.model_id || member.model_id">{{ modelByID.get(member.model_id)?.model_id || member.model_id }}</div>
+                  <div class="mt-0.5 truncate font-mono text-[10px] text-[#94a3b8]" :title="row.model?.model_id || row.member.model_id">{{ row.model?.model_id || row.member.model_id }}</div>
                 </div>
                 <div class="min-w-0">
-                  <div class="truncate font-medium uppercase text-[#334155]">{{ modelByID.get(member.model_id)?.provider || '-' }}</div>
-                  <div class="truncate font-mono text-[9px] text-[#94a3b8]" :title="`${modelByID.get(member.model_id)?.base_url || ''}${modelByID.get(member.model_id)?.endpoint || ''}`">{{ modelByID.get(member.model_id)?.endpoint || '-' }}</div>
+                  <div class="truncate font-medium uppercase text-[#334155]">{{ row.model?.provider || '-' }}</div>
+                  <div class="truncate font-mono text-[9px] text-[#94a3b8]" :title="`${row.model?.base_url || ''}${row.model?.endpoint || ''}`">{{ row.model?.endpoint || '-' }}</div>
                 </div>
                 <div class="min-w-0">
                   <div class="flex items-center gap-1.5">
-                    <span class="h-1.5 w-1.5 rounded-full" :class="memberPerformance(member).failed ? 'bg-[#ef4444]' : memberPerformance(member).hasMeasurement ? 'bg-[#10b981]' : 'bg-[#cbd5e1]'" aria-hidden="true"></span>
-                    <span class="font-semibold tabular-nums" :class="memberPerformance(member).failed ? 'text-[#dc2626]' : memberPerformance(member).hasMeasurement ? 'text-[#111827]' : 'text-[#94a3b8]'">{{ memberPerformance(member).firstByte }}</span>
+                    <span class="h-1.5 w-1.5 rounded-full" :class="row.performance.failed ? 'bg-[#ef4444]' : row.performance.hasMeasurement ? 'bg-[#10b981]' : 'bg-[#cbd5e1]'" aria-hidden="true"></span>
+                    <span class="font-semibold tabular-nums" :class="row.performance.failed ? 'text-[#dc2626]' : row.performance.hasMeasurement ? 'text-[#111827]' : 'text-[#94a3b8]'">{{ row.performance.firstByte }}</span>
                   </div>
-                  <div class="truncate text-[9px] tabular-nums text-[#64748b]" :title="memberPerformance(member).detail">{{ memberPerformance(member).detail }}</div>
+                  <div class="truncate text-[9px] tabular-nums text-[#64748b]" :title="row.performance.detail">{{ row.performance.detail }}</div>
                 </div>
                 <div class="min-w-0">
-                  <span class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium" :class="healthMeta(modelByID.get(member.model_id)).tone">
-                    <span class="h-1.5 w-1.5 rounded-full" :class="healthMeta(modelByID.get(member.model_id)).dot" aria-hidden="true"></span>
-                    {{ healthMeta(modelByID.get(member.model_id)).label }}
+                  <span class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium" :class="row.healthMeta.tone">
+                    <span class="h-1.5 w-1.5 rounded-full" :class="row.healthMeta.dot" aria-hidden="true"></span>
+                    {{ row.healthMeta.label }}
                   </span>
-                  <div v-if="Number(memberHealth(member).consecutive_failures || 0) > 0" class="mt-1 text-[10px] tabular-nums text-[#c2410c]">连续失败 {{ Number(memberHealth(member).consecutive_failures || 0) }}</div>
+                  <div v-if="Number(row.health.consecutive_failures || 0) > 0" class="mt-1 text-[10px] tabular-nums text-[#c2410c]">连续失败 {{ Number(row.health.consecutive_failures || 0) }}</div>
                 </div>
-                <span class="font-medium tabular-nums text-[#475569]">{{ concurrencyText(member) }}</span>
+                <span class="font-medium tabular-nums text-[#475569]">{{ row.concurrencyText }}</span>
                 <span class="tabular-nums text-[#64748b]">
-                  <strong :class="Number(memberHealth(member).affinity_sessions || 0) > 0 ? 'font-semibold text-[#2563eb]' : 'font-normal'">{{ Number(memberHealth(member).affinity_sessions || 0) }}</strong>
+                  <strong :class="Number(row.health.affinity_sessions || 0) > 0 ? 'font-semibold text-[#2563eb]' : 'font-normal'">{{ Number(row.health.affinity_sessions || 0) }}</strong>
                   /
-                  <strong :class="Number(memberHealth(member).avoided_scopes || 0) > 0 ? 'font-semibold text-[#c2410c]' : 'font-normal'">{{ Number(memberHealth(member).avoided_scopes || 0) }}</strong>
+                  <strong :class="Number(row.health.avoided_scopes || 0) > 0 ? 'font-semibold text-[#c2410c]' : 'font-normal'">{{ Number(row.health.avoided_scopes || 0) }}</strong>
                 </span>
-                <span class="truncate text-[11px] text-[#64748b]" :title="formatOpenUntil(memberHealth(member).open_until || memberHealth(member).latency_degraded_until)">{{ formatOpenUntil(memberHealth(member).open_until || memberHealth(member).latency_degraded_until) }}</span>
+                <span class="truncate text-[11px] text-[#64748b]" :title="row.openUntil">{{ row.openUntil }}</span>
               </div>
             </div>
           </div>

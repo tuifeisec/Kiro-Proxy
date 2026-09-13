@@ -1,14 +1,15 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { getAppVersion, getLicenseInfo } from '../../api/license.js'
+import { getAppVersion } from '../../api/license.js'
+import { useLicense } from '../../composables/useLicense.js'
 import IconDashboard from '../icons/IconDashboard.vue'
 import IconModels from '../icons/IconModels.vue'
 import IconUsage from '../icons/IconUsage.vue'
 import IconLogs from '../icons/IconLogs.vue'
 
 const route = useRoute()
-const trafficLogAllowed = ref(false)
+const { trafficLogAllowed, loadLicenseInfo } = useLicense()
 const appVersion = ref('dev')
 
 const navItems = computed(() => [
@@ -20,12 +21,7 @@ const navItems = computed(() => [
 ])
 
 onMounted(async () => {
-  try {
-    const info = await getLicenseInfo()
-    trafficLogAllowed.value = !!(info.authorized && info.traffic_logs)
-  } catch {
-    trafficLogAllowed.value = false
-  }
+  loadLicenseInfo()
 
   try {
     const versionInfo = await getAppVersion()

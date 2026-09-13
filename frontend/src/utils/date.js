@@ -7,12 +7,6 @@ function formatLocalDate(date) {
   return `${year}-${month}-${day}`
 }
 
-export function daysAgo(days = 0) {
-  const date = new Date()
-  date.setDate(date.getDate() - days)
-  return formatLocalDate(date)
-}
-
 export function statsDaysAgo(days = 0) {
   const date = new Date()
   if (date.getHours() < 6) {

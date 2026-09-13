@@ -13,6 +13,7 @@ const uptime = ref('')
 let timer = null
 
 async function checkStatus() {
+  if (document.hidden) return
   try {
     const res = await fetch('/api/service/status')
     if (!res.ok) throw new Error(await res.text())
@@ -50,11 +51,19 @@ function formatUptime(seconds) {
   return `${h}h ${m}m`
 }
 
+function handleVisibilityChange() {
+  if (!document.hidden) checkStatus()
+}
+
 onMounted(() => {
   checkStatus()
   timer = setInterval(checkStatus, 5000)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  clearInterval(timer)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 </script>
 
 <template>

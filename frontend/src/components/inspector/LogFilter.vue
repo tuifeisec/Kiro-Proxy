@@ -1,6 +1,9 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onScopeDispose } from 'vue'
 import IconSearch from '../icons/IconSearch.vue'
+
+// 搜索防抖时长：LogList 对全部日志（含 detail 大文本）线性扫描，逐键 emit 会造成输入卡顿
+const SEARCH_DEBOUNCE = 250
 
 defineProps({
   total: { type: Number, default: 0 },
@@ -12,9 +15,21 @@ const search = ref('')
 const level = ref('')
 const includeDetail = ref(false)
 
-watch([search, level, includeDetail], () => {
+let searchTimer = null
+
+function emitFilter() {
   emit('filter', { search: search.value, level: level.value, includeDetail: includeDetail.value })
+}
+
+// 级别 / 搜详情变化立即生效；仅对 search 做防抖，定时器触发时读取的是最新最终值
+watch([level, includeDetail], emitFilter)
+
+watch(search, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(emitFilter, SEARCH_DEBOUNCE)
 })
+
+onScopeDispose(() => clearTimeout(searchTimer))
 </script>
 
 <template>

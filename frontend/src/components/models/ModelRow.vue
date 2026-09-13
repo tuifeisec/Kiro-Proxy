@@ -135,6 +135,12 @@ const updatedAtLabel = computed(() => {
   return value.replace('T', ' ').slice(0, 19)
 })
 
+const expiresAtLabel = computed(() => {
+  const value = Number(props.model.access_token_expires_at || 0)
+  if (!value) return '-'
+  return new Date(value * 1000).toISOString().replace('T', ' ').slice(0, 19)
+})
+
 function formatPrice(value) {
   const num = Number(value || 0)
   if (!Number.isFinite(num)) return '$0'
@@ -282,7 +288,7 @@ function usedText(row) {
             <span class="text-[#64748b]">邮箱</span><span class="truncate text-[#111827]">{{ codexEmailLabel }}</span>
             <span class="text-[#64748b]">计划</span><span class="truncate text-[#111827]">{{ codexPlanLabel }}</span>
             <span class="text-[#64748b]">账户 ID</span><span class="truncate font-mono text-[#111827]">{{ codexAccountIdLabel }}</span>
-            <span class="text-[#64748b]">Access Token</span><span class="truncate text-[#f59e0b]">将于 {{ updatedAtLabel }} 过期</span>
+            <span class="text-[#64748b]">Access Token</span><span class="truncate text-[#f59e0b]">将于 {{ expiresAtLabel }} 过期</span>
           </div>
         </div>
 

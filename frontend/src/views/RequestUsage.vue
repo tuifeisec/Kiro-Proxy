@@ -6,6 +6,7 @@ import IconSearch from '../components/icons/IconSearch.vue'
 import IconCopy from '../components/icons/IconCopy.vue'
 import { useToast } from '../composables/useToast.js'
 import { statsDaysAgo } from '../utils/date.js'
+import { formatNum } from '../utils/format.js'
 
 const items = ref([])
 const summary = ref({})
@@ -75,13 +76,6 @@ const tooltipStyle = computed(() => {
   return { left: `${Math.max(12, left)}px`, top: `${Math.max(12, top)}px`, width: `${width}px` }
 })
 
-function formatNum(value) {
-  const number = Number(value || 0)
-  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(2)}M`
-  if (number >= 1_000) return `${(number / 1_000).toFixed(1)}K`
-  return number.toLocaleString()
-}
-
 function formatTime(value) {
   if (!value) return '—'
   const date = new Date(value)
@@ -131,7 +125,7 @@ function cacheTokens(item) {
   return Number(item.cache_read_tokens || 0) + Number(item.cache_write_tokens || 0)
 }
 
-async function load(resetPage = false) {
+async function load(resetPage = false, resetScroll = resetPage) {
   if (refreshInFlight) {
     refreshPending = refreshPending || resetPage
     return
@@ -158,8 +152,10 @@ async function load(resetPage = false) {
     pageSize.value = Number(data.page_size || pageSize.value)
     total.value = Number(data.total || 0)
     totalPages.value = Number(data.total_pages || 0)
-    await nextTick()
-    if (tableScrollRef.value) tableScrollRef.value.scrollTop = 0
+    if (resetScroll) {
+      await nextTick()
+      if (tableScrollRef.value) tableScrollRef.value.scrollTop = 0
+    }
   } catch (e) {
     error.value = e.message || String(e)
     items.value = []
@@ -186,7 +182,8 @@ function clearFilters() {
 function changePage(nextPage) {
   if (loading.value || nextPage < 1 || nextPage > totalPages.value) return
   currentPage.value = nextPage
-  load()
+  // 翻页属于用户主动操作，需要回到表格顶部；但不能传 resetPage=true，否则页码会被重置为 1。
+  load(false, true)
 }
 
 function openDetail(item) {
@@ -251,9 +248,19 @@ function contentMeasurementStatus(item) {
   return item.first_content_type || '已识别'
 }
 
+function refreshTimerTick() {
+  if (document.hidden) return
+  load()
+}
+
+function handleVisibilityChange() {
+  if (!document.hidden) refreshTimerTick()
+}
+
 onMounted(() => {
   load()
-  refreshTimer = setInterval(() => load(), 5000)
+  refreshTimer = setInterval(refreshTimerTick, 5000)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   document.addEventListener('keydown', handleKeydown)
 })
 
@@ -261,6 +268,7 @@ onBeforeUnmount(() => {
   disposed = true
   if (refreshTimer) clearInterval(refreshTimer)
   refreshTimer = null
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   document.removeEventListener('keydown', handleKeydown)
 })
 </script>

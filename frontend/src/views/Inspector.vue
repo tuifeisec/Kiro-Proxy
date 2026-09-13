@@ -9,6 +9,8 @@ import IconForward from '../components/icons/IconForward.vue'
 import IconCapture from '../components/icons/IconCapture.vue'
 import IconSettings from '../components/icons/IconSettings.vue'
 import { useToast } from '../composables/useToast.js'
+import { getProxyMode, updateProxyMode } from '../api/settings.js'
+import { getLogDetail, updateLogDetail } from '../api/logs.js'
 
 const { messages, connected, trafficLogAllowed, clearMessages, refreshTrafficLogPermission } = useWebSocket()
 const router = useRouter()
@@ -24,16 +26,9 @@ const logDetailSaving = ref(false)
 const settingsError = ref('')
 const { showToast } = useToast()
 
-async function readJSONResponse(response, fallbackMessage) {
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.error || `${fallbackMessage}（HTTP ${response.status}）`)
-  return data
-}
-
 async function fetchMode() {
   try {
-    const r = await fetch('/api/proxy-mode')
-    const data = await readJSONResponse(r, '读取代理模式失败')
+    const data = await getProxyMode()
     proxyMode.value = data.mode
   } catch (e) {
     settingsError.value = e.message || '读取代理模式失败'
@@ -42,8 +37,7 @@ async function fetchMode() {
 
 async function fetchLogDetail() {
   try {
-    const r = await fetch('/api/log-detail')
-    const data = await readJSONResponse(r, '读取日志模式失败')
+    const data = await getLogDetail()
     logDetailMode.value = data.mode || 'summary'
     logMaxBody.value = data.max_body || 65536
   } catch (e) {
@@ -56,12 +50,7 @@ async function setMode(mode) {
   modeSaving.value = true
   settingsError.value = ''
   try {
-    const response = await fetch('/api/proxy-mode', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode })
-    })
-    const data = await readJSONResponse(response, '切换代理模式失败')
+    const data = await updateProxyMode(mode)
     proxyMode.value = data.mode || mode
     showToast(proxyMode.value === 'capture' ? '已切换为抓包模式' : '已切换为转发模式')
   } catch (e) {
@@ -77,12 +66,7 @@ async function setLogDetail(mode) {
   logDetailSaving.value = true
   settingsError.value = ''
   try {
-    const r = await fetch('/api/log-detail', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode })
-    })
-    const data = await readJSONResponse(r, '切换日志模式失败')
+    const data = await updateLogDetail(mode)
     logDetailMode.value = data.mode || mode
     logMaxBody.value = data.max_body || logMaxBody.value
     showToast(logDetailMode.value === 'full' ? '已开启详细日志' : '已切换为默认摘要')

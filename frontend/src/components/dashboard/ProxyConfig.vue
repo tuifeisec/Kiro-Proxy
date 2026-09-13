@@ -2,38 +2,26 @@
 import { computed, ref, onMounted } from 'vue'
 import IconCopy from '../icons/IconCopy.vue'
 import IconCheck from '../icons/IconCheck.vue'
+import { useCopy } from '../../composables/useCopy.js'
+import { getProxyAccessMode, getKiroProxyStatus, configureKiroProxy, restoreKiroProxy, restartKiroProxy } from '../../api/settings.js'
 
-const proxyPort = '18081'
-const accessMode = ref({ mode: 'local', host: '127.0.0.1', proxy_url: 'http://127.0.0.1:18081' })
+// 后端代理服务监听端口：仅用于在未取到后端返回的 proxy_url 时，前端拼接展示/复制给 Kiro 的代理地址（数据，非 api 路径）
+const PROXY_PORT = '18081'
+const accessMode = ref({ mode: 'local', host: '127.0.0.1', proxy_url: `http://127.0.0.1:${PROXY_PORT}` })
 const proxyHost = computed(() => accessMode.value.host || '127.0.0.1')
-const proxyURL = computed(() => accessMode.value.proxy_url || `http://${proxyHost.value}:${proxyPort}`)
-const copied = ref(false)
-const copiedProxy = ref(false)
+const proxyURL = computed(() => accessMode.value.proxy_url || `http://${proxyHost.value}:${PROXY_PORT}`)
+// 两处复制按钮各自独立维护"已复制"反馈状态
+const { copied, copy: copyProxyURL } = useCopy()
+const { copied: copiedProxy, copy: copyCurrentProxy } = useCopy()
 const kiroStatus = ref(null)
 const loading = ref(false)
 const restartLoading = ref(false)
 const result = ref('')
 
-async function copyToClipboard(text, type = 'manual') {
-  try {
-    await navigator.clipboard.writeText(text)
-    if (type === 'proxy') {
-      copiedProxy.value = true
-      setTimeout(() => { copiedProxy.value = false }, 1500)
-    } else {
-      copied.value = true
-      setTimeout(() => { copied.value = false }, 1500)
-    }
-  } catch {
-    // 剪贴板 API 不可用或权限被拒时静默失败，不影响主流程
-  }
-}
-
 async function fetchProxyAccessMode() {
   try {
-    const r = await fetch('/api/proxy-access-mode')
-    if (!r.ok) return
-    accessMode.value = await r.json()
+    const data = await getProxyAccessMode()
+    if (data) accessMode.value = data
   } catch {
     // 诊断类请求，失败时保持默认值，不影响主流程
   }
@@ -41,8 +29,7 @@ async function fetchProxyAccessMode() {
 
 async function fetchKiroStatus() {
   try {
-    const r = await fetch('/api/kiro-proxy')
-    kiroStatus.value = await r.json()
+    kiroStatus.value = await getKiroProxyStatus()
   } catch {
     // 诊断类请求，失败时保持默认值，不影响主流程
   }
@@ -52,8 +39,7 @@ async function configureKiro() {
   loading.value = true
   result.value = ''
   try {
-    const r = await fetch('/api/kiro-proxy', { method: 'POST' })
-    const data = await r.json()
+    const data = await configureKiroProxy()
     result.value = data.message
     setTimeout(fetchKiroStatus, 3000)
   } catch (e) {
@@ -67,8 +53,7 @@ async function restoreKiro() {
   loading.value = true
   result.value = ''
   try {
-    const r = await fetch('/api/kiro-proxy', { method: 'DELETE' })
-    const data = await r.json()
+    const data = await restoreKiroProxy()
     result.value = data.message
     setTimeout(fetchKiroStatus, 3000)
   } catch (e) {
@@ -82,8 +67,7 @@ async function restartKiro() {
   restartLoading.value = true
   result.value = ''
   try {
-    const r = await fetch('/api/kiro-restart', { method: 'POST' })
-    const data = await r.json()
+    const data = await restartKiroProxy()
     result.value = data.message
   } catch (e) {
     result.value = '请求失败: ' + e.message
@@ -116,7 +100,7 @@ onMounted(() => {
       <div class="text-[12px] text-[#64748b]">目标代理地址</div>
       <div class="mt-1 flex items-center gap-2">
         <span class="min-w-0 flex-1 truncate font-mono text-[13px] text-[#0f172a]">{{ kiroStatus.current_proxy || proxyURL }}</span>
-        <button class="text-[#64748b] hover:text-[#0f172a]" aria-label="复制代理地址" @click="copyToClipboard(kiroStatus.current_proxy || proxyURL, 'proxy')">
+        <button class="text-[#64748b] hover:text-[#0f172a]" aria-label="复制代理地址" @click="copyCurrentProxy(kiroStatus.current_proxy || proxyURL)">
           <IconCheck v-if="copiedProxy" class="text-[#059669]" />
           <IconCopy v-else />
         </button>
@@ -159,7 +143,7 @@ onMounted(() => {
 
     <div v-if="!kiroStatus?.configured" class="mt-2 flex items-center gap-2 rounded-lg border border-[#e8edf5] bg-[#fbfdff] px-3 py-1.5 font-mono text-[12px]">
       <span class="flex-1 truncate text-[#059669]">{{ proxyURL }}</span>
-      <button class="text-[#64748b] hover:text-[#0f172a]" aria-label="复制代理地址" @click="copyToClipboard(proxyURL)">
+      <button class="text-[#64748b] hover:text-[#0f172a]" aria-label="复制代理地址" @click="copyProxyURL(proxyURL)">
         <IconCheck v-if="copied" class="text-[#059669]" />
         <IconCopy v-else />
       </button>

@@ -90,8 +90,8 @@ export function useDailyStats() {
       range.value = { start: data.start, end: data.end }
       error.value = null
     } catch (e) {
+      // 轮询中瞬时失败不清空已加载数据，避免界面闪"无数据"；错误由消费方横幅展示
       error.value = e.message
-      rows.value = []
     } finally {
       loading.value = false
     }

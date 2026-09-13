@@ -1,8 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import IconCopy from '../icons/IconCopy.vue'
 import IconCheck from '../icons/IconCheck.vue'
 import IconExport from '../icons/IconExport.vue'
+import { highlightJSON } from '../../utils/highlight.js'
+import { useCopy } from '../../composables/useCopy.js'
 
 const DETAIL_PREVIEW_LIMIT = 60000
 
@@ -10,53 +12,33 @@ const props = defineProps({
   entry: { type: Object, default: null }
 })
 
-const copied = ref('')
+// 复制详情 / 复制全部是两个独立按钮，各自持有"已复制"反馈状态
+const { copied: copiedDetail, copy: copyDetailText } = useCopy()
+const { copied: copiedAll, copy: copyAllText } = useCopy()
+
 const copyFailed = ref('')
+let copyFailedTimer = null
 
-function fallbackCopy(text) {
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', '')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.top = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
-  const ok = document.execCommand('copy')
-  document.body.removeChild(textarea)
-  if (!ok) throw new Error('copy command failed')
-}
+onScopeDispose(() => clearTimeout(copyFailedTimer))
 
-async function copyContent(text, label) {
+async function copyContent(text, label, copyFn) {
   copyFailed.value = ''
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      fallbackCopy(text)
-    }
-    copied.value = label
-    setTimeout(() => { copied.value = '' }, 1500)
-  } catch {
-    try {
-      fallbackCopy(text)
-      copied.value = label
-      setTimeout(() => { copied.value = '' }, 1500)
-    } catch {
-      copyFailed.value = label
-      setTimeout(() => { copyFailed.value = '' }, 1800)
-    }
+  const ok = await copyFn(text)
+  if (!ok) {
+    copyFailed.value = label
+    clearTimeout(copyFailedTimer)
+    copyFailedTimer = setTimeout(() => { copyFailed.value = '' }, 1800)
   }
 }
 
 async function copyAll() {
   if (!props.entry) return
-  await copyContent(JSON.stringify(props.entry, null, 2), 'all')
+  await copyContent(JSON.stringify(props.entry, null, 2), 'all', copyAllText)
 }
 
 async function copyDetail() {
   if (!props.entry?.detail) return
-  await copyContent(props.entry.detail, 'detail')
+  await copyContent(props.entry.detail, 'detail', copyDetailText)
 }
 
 function exportDetail() {
@@ -353,29 +335,6 @@ const parsedFieldGroups = computed(() => {
 })
 
 const parsedFieldCount = computed(() => parsedFieldGroups.value.reduce((total, group) => total + group.fields.length, 0))
-
-function highlightJSON(json) {
-  return json
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(
-      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-      (match) => {
-        let cls = 'json-str'
-        if (/^"/.test(match)) {
-          if (/:$/.test(match)) cls = 'json-key'
-        } else if (/true|false/.test(match)) {
-          cls = 'json-bool'
-        } else if (/null/.test(match)) {
-          cls = 'json-null'
-        } else {
-          cls = 'json-num'
-        }
-        return `<span class="${cls}">${match}</span>`
-      }
-    )
-}
 </script>
 
 <template>
@@ -386,18 +345,18 @@ function highlightJSON(json) {
           <h2 class="text-sm font-semibold text-[#111827]">日志详情</h2>
           <div class="flex items-center gap-2">
             <button @click="copyDetail" class="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#6b7280] hover:text-[#111827] disabled:opacity-50" :disabled="!entry.detail">
-              <IconCheck v-if="copied === 'detail'" class="h-3.5 w-3.5 text-[#10b981]" />
+              <IconCheck v-if="copiedDetail" class="h-3.5 w-3.5 text-[#10b981]" />
               <IconCopy v-else class="h-3.5 w-3.5" />
-              {{ copied === 'detail' ? '已复制' : copyFailed === 'detail' ? '复制失败' : '复制详情' }}
+              {{ copiedDetail ? '已复制' : copyFailed === 'detail' ? '复制失败' : '复制详情' }}
             </button>
             <button @click="exportDetail" class="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#6b7280] hover:text-[#111827] disabled:opacity-50" :disabled="!entry.detail">
               <IconExport class="h-3.5 w-3.5" />
               导出详情
             </button>
             <button @click="copyAll" class="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#6b7280] hover:text-[#111827]">
-              <IconCheck v-if="copied === 'all'" class="h-3.5 w-3.5 text-[#10b981]" />
+              <IconCheck v-if="copiedAll" class="h-3.5 w-3.5 text-[#10b981]" />
               <IconCopy v-else class="h-3.5 w-3.5" />
-              {{ copied === 'all' ? '已复制' : copyFailed === 'all' ? '复制失败' : '复制全部' }}
+              {{ copiedAll ? '已复制' : copyFailed === 'all' ? '复制失败' : '复制全部' }}
             </button>
           </div>
         </div>
@@ -468,11 +427,3 @@ function highlightJSON(json) {
     </div>
   </div>
 </template>
-
-<style scoped>
-:deep(.json-key) { color: #2563eb; }
-:deep(.json-str) { color: #059669; }
-:deep(.json-num) { color: #d97706; }
-:deep(.json-bool) { color: #7c3aed; }
-:deep(.json-null) { color: #6b7280; }
-</style>
