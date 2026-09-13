@@ -98,18 +98,23 @@ type RequestUsagePage struct {
 
 const requestUsageRetentionDays = 7
 
-// cleanupExpiredRequestUsage 保留今天及之前 6 个自然日的数据，每天最多执行一次。
+// cleanupExpiredRequestUsage 保留当前逻辑日及之前 6 个逻辑日的数据，每天最多执行一次。
 func (db *DB) cleanupExpiredRequestUsage(now time.Time) error {
 	if db == nil {
 		return nil
 	}
-	day := int64(now.Year()*10000 + int(now.Month())*100 + now.Day())
+	logicalNow := now
+	if logicalNow.Hour() < 6 {
+		logicalNow = logicalNow.AddDate(0, 0, -1)
+	}
+	day := int64(logicalNow.Year()*10000 + int(logicalNow.Month())*100 + logicalNow.Day())
 	previousDay := db.requestUsageCleanupDay.Load()
 	if previousDay == day || !db.requestUsageCleanupDay.CompareAndSwap(previousDay, day) {
 		return nil
 	}
 
-	cutoff := now.AddDate(0, 0, -(requestUsageRetentionDays - 1)).Format("2006-01-02")
+	// request_date 与 daily_stats 使用同一套本地时间 06:00 切日规则。
+	cutoff := statsDay(now.AddDate(0, 0, -(requestUsageRetentionDays - 1)))
 	if _, err := db.conn.Exec(`DELETE FROM request_usage WHERE request_date < ?`, cutoff); err != nil {
 		db.requestUsageCleanupDay.CompareAndSwap(day, previousDay)
 		return fmt.Errorf("删除 %s 之前的请求统计失败: %w", cutoff, err)
@@ -129,7 +134,7 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 		item.CreatedAt = now.Format(time.RFC3339Nano)
 	}
 	if item.RequestDate == "" {
-		item.RequestDate = now.Format("2006-01-02")
+		item.RequestDate = statsDay(now)
 	}
 	_, err := db.conn.Exec(`
 		INSERT INTO request_usage (
@@ -160,6 +165,15 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 		item.ResponseHeaderMS, item.StreamWaitMS, item.RetryCount, boolToInt(item.ReusedConnection), item.WireAttemptCount, item.TransportFallbackCount, item.ReasoningEffort,
 		item.ServiceTier, item.RequestedModel, item.RouteGroupID, item.SelectedModelConfigID,
 		item.FailoverCount, item.DispatchReason, item.FailoverReason, item.CapacityWaitMS, item.ErrorMessage)
+	return err
+}
+
+// ClearRequestUsage 清空所有单次请求统计。
+func (db *DB) ClearRequestUsage() error {
+	if db == nil {
+		return nil
+	}
+	_, err := db.conn.Exec(`DELETE FROM request_usage`)
 	return err
 }
 

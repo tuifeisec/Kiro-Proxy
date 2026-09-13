@@ -5,14 +5,14 @@ import IconClose from '../components/icons/IconClose.vue'
 import IconSearch from '../components/icons/IconSearch.vue'
 import IconCopy from '../components/icons/IconCopy.vue'
 import { useToast } from '../composables/useToast.js'
-import { daysAgo } from '../utils/date.js'
+import { statsDaysAgo } from '../utils/date.js'
 
 const items = ref([])
 const summary = ref({})
 const loading = ref(false)
 const error = ref('')
-const startDate = ref(daysAgo(6))
-const endDate = ref(daysAgo(0))
+const startDate = ref(statsDaysAgo(6))
+const endDate = ref(statsDaysAgo(0))
 const keyword = ref('')
 const provider = ref('')
 const status = ref('')
@@ -27,6 +27,10 @@ const detailRef = ref(null)
 const detailCloseRef = ref(null)
 const { showToast } = useToast()
 let detailLastFocused = null
+let refreshInFlight = false
+let refreshPending = false
+let refreshTimer = null
+let disposed = false
 
 watch(selectedItem, async (item) => {
   if (item) {
@@ -128,11 +132,16 @@ function cacheTokens(item) {
 }
 
 async function load(resetPage = false) {
+  if (refreshInFlight) {
+    refreshPending = refreshPending || resetPage
+    return
+  }
   if (resetPage) currentPage.value = 1
   if (startDate.value && endDate.value && startDate.value > endDate.value) {
     error.value = '开始日期不能晚于结束日期'
     return
   }
+  refreshInFlight = true
   loading.value = true
   error.value = ''
   try {
@@ -158,6 +167,12 @@ async function load(resetPage = false) {
     totalPages.value = 0
   } finally {
     loading.value = false
+    refreshInFlight = false
+    if (!disposed && refreshPending) {
+      const pendingReset = refreshPending
+      refreshPending = false
+      void load(pendingReset)
+    }
   }
 }
 
@@ -238,10 +253,16 @@ function contentMeasurementStatus(item) {
 
 onMounted(() => {
   load()
+  refreshTimer = setInterval(() => load(), 5000)
   document.addEventListener('keydown', handleKeydown)
 })
 
-onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
+onBeforeUnmount(() => {
+  disposed = true
+  if (refreshTimer) clearInterval(refreshTimer)
+  refreshTimer = null
+  document.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <template>

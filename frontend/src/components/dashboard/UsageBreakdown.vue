@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDailyStats } from '../../composables/useStats.js'
 import IconRefresh from '../icons/IconRefresh.vue'
 import { ALL_STATS_START_DATE, statsDaysAgo } from '../../utils/date.js'
@@ -15,35 +15,76 @@ const isAllRange = computed(() => props.days < 0)
 
 const startDate = ref('')
 const endDate = ref('')
+let lastAutoStart = ''
+let lastAutoEnd = ''
+let refreshInFlight = false
+let refreshPending = false
+let refreshTimer = null
+let disposed = false
 
 function applyDaysRange() {
   startDate.value = isAllRange.value ? ALL_STATS_START_DATE : statsDaysAgo(props.days)
   endDate.value = statsDaysAgo(0)
+  lastAutoStart = startDate.value
+  lastAutoEnd = endDate.value
+}
+
+function refreshTimerTick() {
+  const nextStart = isAllRange.value ? ALL_STATS_START_DATE : statsDaysAgo(props.days)
+  const nextEnd = statsDaysAgo(0)
+  if (startDate.value === lastAutoStart && endDate.value === lastAutoEnd) {
+    startDate.value = nextStart
+    endDate.value = nextEnd
+    lastAutoStart = nextStart
+    lastAutoEnd = nextEnd
+  }
+  void refresh()
 }
 
 applyDaysRange()
 
 async function refresh() {
+  if (refreshInFlight) {
+    refreshPending = true
+    return
+  }
   if (startDate.value && endDate.value && startDate.value > endDate.value) {
     validationError.value = '开始日期不能晚于结束日期'
     return
   }
   validationError.value = ''
-  await load(startDate.value, endDate.value)
-  if (!error.value) {
-    emit('range-change', {
-      all: isAllRange.value,
-      start: range.value.start || startDate.value,
-      end: range.value.end || endDate.value,
-    })
+  refreshInFlight = true
+  try {
+    await load(startDate.value, endDate.value)
+    if (!error.value) {
+      emit('range-change', {
+        all: isAllRange.value,
+        start: range.value.start || startDate.value,
+        end: range.value.end || endDate.value,
+      })
+    }
+  } finally {
+    refreshInFlight = false
+    if (!disposed && refreshPending) {
+      refreshPending = false
+      void refresh()
+    }
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  refreshTimer = setInterval(refreshTimerTick, 5000)
+})
 watch(() => props.refreshKey, refresh)
 watch(() => props.days, async () => {
   applyDaysRange()
   await refresh()
+})
+onBeforeUnmount(() => {
+  disposed = true
+  if (refreshTimer) clearInterval(refreshTimer)
+  refreshTimer = null
 })
 
 function formatNum(n) {

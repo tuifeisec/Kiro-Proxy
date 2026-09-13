@@ -1,6 +1,41 @@
 package store
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestStatsDayUsesSixAMBoundary(t *testing.T) {
+	location := time.FixedZone("test", 8*60*60)
+	if got := statsDay(time.Date(2026, 9, 13, 5, 59, 59, 0, location)); got != "2026-09-12" {
+		t.Fatalf("statsDay before boundary = %q", got)
+	}
+	if got := statsDay(time.Date(2026, 9, 13, 6, 0, 0, 0, location)); got != "2026-09-13" {
+		t.Fatalf("statsDay at boundary = %q", got)
+	}
+}
+
+func TestRequestUsageDefaultsToStatsDay(t *testing.T) {
+	db, err := Open(t.TempDir() + "/request-date.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.InsertRequestUsage(&RequestUsage{}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := db.QueryRequestUsagePage(RequestUsageQuery{PageSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("items=%d", len(page.Items))
+	}
+	if got, want := page.Items[0].RequestDate, statsDay(time.Now()); got != want {
+		t.Fatalf("request date = %q, want current stats day %q", got, want)
+	}
+}
 
 func TestRequestUsageAverageIncludesMeasuredZero(t *testing.T) {
 	db, err := Open(t.TempDir() + "/zero.db")

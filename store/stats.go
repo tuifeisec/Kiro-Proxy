@@ -154,7 +154,7 @@ func (s *Stats) Flush() {
 	defer s.flushMu.Unlock()
 	revision := s.revision.Load()
 	if s.pendingClear.Load() {
-		if err := s.db.ClearDailyStats(); err != nil {
+		if err := errors.Join(s.db.ClearDailyStats(), s.db.ClearRequestUsage()); err != nil {
 			log.Printf("[stats] 清空日统计重试失败，将在下次周期重试: %v", err)
 			return
 		}
@@ -378,6 +378,9 @@ func (s *Stats) Clear() error {
 	if err := s.db.ClearDailyStats(); err != nil {
 		return err
 	}
+	if err := s.db.ClearRequestUsage(); err != nil {
+		return err
+	}
 	s.pendingClear.Store(false)
 	s.flushed.Store(revision)
 	return nil
@@ -480,4 +483,10 @@ func statsDay(t time.Time) string {
 		t = t.AddDate(0, 0, -1)
 	}
 	return t.Format("2006-01-02")
+}
+
+// StatsDay 返回按本地时间每日 6:00 分界的逻辑日期。
+// 对外提供统一日期口径，供 API 和存储查询共同使用。
+func StatsDay(t time.Time) string {
+	return statsDay(t)
 }

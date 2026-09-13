@@ -17,10 +17,10 @@ func (s *Server) handleRequestUsage(w http.ResponseWriter, r *http.Request) {
 	startDate := query.Get("start")
 	endDate := query.Get("end")
 	if startDate == "" {
-		startDate = time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+		startDate = store.StatsDay(time.Now().AddDate(0, 0, -6))
 	}
 	if endDate == "" {
-		endDate = time.Now().Format("2006-01-02")
+		endDate = store.StatsDay(time.Now())
 	}
 	if _, err := time.Parse("2006-01-02", startDate); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid start date")

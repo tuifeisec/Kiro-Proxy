@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useDailyStats } from '../composables/useStats.js'
 import { getLogsByDate } from '../api/logs.js'
 import IconUsage from '../components/icons/IconUsage.vue'
@@ -19,6 +19,21 @@ const selectedDateLogs = ref([])
 const logsLoading = ref(false)
 const logsError = ref('')
 const validationError = ref('')
+let refreshInFlight = false
+let refreshPending = false
+let refreshTimer = null
+let disposed = false
+
+function refreshTimerTick() {
+  if (activeRange.value !== 'custom') {
+    const option = quickRanges.find((item) => item.key === activeRange.value)
+    if (option) {
+      startDate.value = statsDaysAgo(option.days)
+      endDate.value = statsDaysAgo(0)
+    }
+  }
+  void refresh()
+}
 
 const quickRanges = [
   { key: 'today', label: '今天', days: 0 },
@@ -72,13 +87,25 @@ function applyQuickRange(option) {
 }
 
 async function refresh() {
+  if (refreshInFlight) {
+    refreshPending = true
+    return
+  }
   if (startDate.value && endDate.value && startDate.value > endDate.value) {
     validationError.value = '开始日期不能晚于结束日期'
     return
   }
   validationError.value = ''
-  resetSelectedDate()
-  await load(startDate.value, endDate.value)
+  refreshInFlight = true
+  try {
+    await load(startDate.value, endDate.value)
+  } finally {
+    refreshInFlight = false
+    if (!disposed && refreshPending) {
+      refreshPending = false
+      void refresh()
+    }
+  }
 }
 
 async function selectDate(date) {
@@ -218,7 +245,16 @@ function closeSelectedDate() {
   resetSelectedDate()
 }
 
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  refreshTimer = setInterval(refreshTimerTick, 5000)
+})
+
+onBeforeUnmount(() => {
+  disposed = true
+  if (refreshTimer) clearInterval(refreshTimer)
+  refreshTimer = null
+})
 </script>
 
 <template>
@@ -419,7 +455,7 @@ onMounted(refresh)
                 <th class="py-2 pr-3 text-right font-medium">错误</th>
                 <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
-                <th class="py-2 pr-3 text-right font-medium">缓存写入</th>
+                <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
                 <th class="py-2 pr-3 text-right font-medium">Credits</th>
                 <th class="py-2 text-right font-medium">命中率</th>
               </tr>
@@ -432,7 +468,7 @@ onMounted(refresh)
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#f8fafc] text-[#94a3b8]'">{{ row.errors }}</span></td>
                 <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.input) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.output) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#059669]">{{ formatNum(row.cacheWrite) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-[#059669]">{{ formatNum(row.cacheRead) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-[#d97706]">{{ formatCredits(row.credits) }}</td>
                 <td class="py-2 text-right tabular-nums"><span class="rounded-full bg-[#f0fdf4] px-2 py-0.5 text-[11px] text-[#059669]">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
               </tr>

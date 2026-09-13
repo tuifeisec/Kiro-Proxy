@@ -6,6 +6,7 @@ package api
 
 import (
 	"kiro-proxy/converter"
+	"kiro-proxy/store"
 	"net/http"
 	"time"
 )
@@ -35,10 +36,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		endDate := query.Get("end")
 		if startDate == "" {
 			// 默认最近 7 天
-			startDate = time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+			startDate = store.StatsDay(time.Now().AddDate(0, 0, -6))
 		}
 		if endDate == "" {
-			endDate = time.Now().Format("2006-01-02")
+			endDate = store.StatsDay(time.Now())
 		}
 		daily := s.stats.GetDailyStats(startDate, endDate)
 		writeOK(w, map[string]interface{}{
