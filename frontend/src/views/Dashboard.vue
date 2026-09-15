@@ -82,7 +82,7 @@ async function confirmProxyAccessToggle() {
     proxyAccessError.value = ''
     showProxyAccessConfirm.value = false
     pendingProxyAccessMode.value = ''
-    showToast(data.mode === 'lan' ? '已切换为局域网代理' : '已切换为本地代理')
+    showToast(data.mode === 'lan' ? '已保存为局域网代理，重启 Kiro Proxy 后生效' : '已保存为本地代理，重启 Kiro Proxy 后生效')
   } catch (e) {
     proxyAccessError.value = e.message || '切换失败'
     showToast(proxyAccessError.value, { tone: 'error' })

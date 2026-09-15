@@ -19,6 +19,7 @@ const error = ref(null)
 
 let timer = null
 let refCount = 0
+let activeIntervalMs = 0
 let fetching = false
 
 async function fetchStats() {
@@ -50,10 +51,14 @@ async function clearStats() {
   }
 }
 
+// 多使用方要求不同间隔时以最快者为准；更快者卸载后不回退到更慢间隔。
 function ensureTimer(intervalMs) {
-  if (timer) return
+  if (timer && activeIntervalMs <= intervalMs) return
+  const nextIntervalMs = timer ? Math.min(activeIntervalMs, intervalMs) : intervalMs
+  if (timer) clearInterval(timer)
+  activeIntervalMs = nextIntervalMs
   fetchStats()
-  timer = setInterval(fetchStats, intervalMs)
+  timer = setInterval(fetchStats, nextIntervalMs)
 }
 
 function releaseTimer() {
@@ -62,6 +67,7 @@ function releaseTimer() {
     clearInterval(timer)
     timer = null
     refCount = 0
+    activeIntervalMs = 0
   }
 }
 

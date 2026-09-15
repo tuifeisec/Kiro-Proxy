@@ -8,10 +8,8 @@ function formatLocalDate(date) {
 }
 
 export function statsDaysAgo(days = 0) {
+  // 统计日为自然日（本地 00:00 分界）
   const date = new Date()
-  if (date.getHours() < 6) {
-    date.setDate(date.getDate() - 1)
-  }
   date.setDate(date.getDate() - days)
   return formatLocalDate(date)
 }

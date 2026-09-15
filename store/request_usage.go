@@ -98,22 +98,19 @@ type RequestUsagePage struct {
 
 const requestUsageRetentionDays = 7
 
-// cleanupExpiredRequestUsage 保留当前逻辑日及之前 6 个逻辑日的数据，每天最多执行一次。
+// cleanupExpiredRequestUsage 保留当前自然日及之前 6 个自然日的数据，每天最多执行一次。
 func (db *DB) cleanupExpiredRequestUsage(now time.Time) error {
 	if db == nil {
 		return nil
 	}
 	logicalNow := now
-	if logicalNow.Hour() < 6 {
-		logicalNow = logicalNow.AddDate(0, 0, -1)
-	}
 	day := int64(logicalNow.Year()*10000 + int(logicalNow.Month())*100 + logicalNow.Day())
 	previousDay := db.requestUsageCleanupDay.Load()
 	if previousDay == day || !db.requestUsageCleanupDay.CompareAndSwap(previousDay, day) {
 		return nil
 	}
 
-	// request_date 与 daily_stats 使用同一套本地时间 06:00 切日规则。
+	// request_date 与 daily_stats 使用同一套本地时间自然日（00:00）切日规则。
 	cutoff := statsDay(now.AddDate(0, 0, -(requestUsageRetentionDays - 1)))
 	if _, err := db.conn.Exec(`DELETE FROM request_usage WHERE request_date < ?`, cutoff); err != nil {
 		db.requestUsageCleanupDay.CompareAndSwap(day, previousDay)

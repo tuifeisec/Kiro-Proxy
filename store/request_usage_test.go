@@ -5,13 +5,17 @@ import (
 	"time"
 )
 
-func TestStatsDayUsesSixAMBoundary(t *testing.T) {
+func TestStatsDayUsesNaturalDayBoundary(t *testing.T) {
 	location := time.FixedZone("test", 8*60*60)
-	if got := statsDay(time.Date(2026, 9, 13, 5, 59, 59, 0, location)); got != "2026-09-12" {
-		t.Fatalf("statsDay before boundary = %q", got)
+	if got := statsDay(time.Date(2026, 9, 13, 23, 59, 59, 0, location)); got != "2026-09-13" {
+		t.Fatalf("statsDay before midnight rollover = %q", got)
 	}
-	if got := statsDay(time.Date(2026, 9, 13, 6, 0, 0, 0, location)); got != "2026-09-13" {
-		t.Fatalf("statsDay at boundary = %q", got)
+	if got := statsDay(time.Date(2026, 9, 14, 0, 0, 0, 0, location)); got != "2026-09-14" {
+		t.Fatalf("statsDay at midnight rollover = %q", got)
+	}
+	// 凌晨时段必须归属当天，锁定已删除的切日前回退不再回归。
+	if got := statsDay(time.Date(2026, 9, 13, 5, 59, 59, 0, location)); got != "2026-09-13" {
+		t.Fatalf("statsDay early morning stays same day = %q", got)
 	}
 }
 

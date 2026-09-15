@@ -387,9 +387,6 @@ func truncateLogDetail(detail string, maxBytes int) string {
 }
 
 func logStatsDay(t time.Time) string {
-	if t.Hour() < 6 {
-		t = t.AddDate(0, 0, -1)
-	}
 	return t.Format("2006-01-02")
 }
 

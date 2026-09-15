@@ -435,7 +435,7 @@ func (s *Stats) GetDailyStats(startDate, endDate string) []DailyModelStats {
 	return results
 }
 
-// TodayStats 返回按本地时间每日 6:00 分界的当日聚合统计。
+// TodayStats 返回按本地时间自然日（00:00）分界的当日聚合统计。
 func (s *Stats) TodayStats() DailyModelStats {
 	today := statsDay(time.Now())
 	var total DailyModelStats
@@ -452,7 +452,7 @@ func (s *Stats) TodayStats() DailyModelStats {
 	return total
 }
 
-// TodayCredits 返回按本地时间每日 6:00 分界的当日 Credit 用量。
+// TodayCredits 返回按本地时间自然日（00:00）分界的当日 Credit 用量。
 func (s *Stats) TodayCredits() float64 {
 	return s.TodayStats().Credits
 }
@@ -479,13 +479,10 @@ type StatsSnapshot struct {
 }
 
 func statsDay(t time.Time) string {
-	if t.Hour() < 6 {
-		t = t.AddDate(0, 0, -1)
-	}
 	return t.Format("2006-01-02")
 }
 
-// StatsDay 返回按本地时间每日 6:00 分界的逻辑日期。
+// StatsDay 返回按本地时间自然日（00:00）分界的日期。
 // 对外提供统一日期口径，供 API 和存储查询共同使用。
 func StatsDay(t time.Time) string {
 	return statsDay(t)

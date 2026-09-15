@@ -159,7 +159,7 @@ function categoryColor(cat) {
       >
         <input type="checkbox" :checked="checkedSet.has(msg)" @click.stop @change="toggleItem(msg)"
           class="h-3.5 w-3.5 accent-[#2563eb]" />
-        <span class="font-mono text-[#6b7280]">{{ msg.time }}</span>
+        <span class="font-mono text-[#6b7280]" :title="msg.full_time || msg.time">{{ msg.time }}</span>
         <span class="inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[10px] font-medium"
           :class="{
             'bg-[#fef2f2] text-[#ef4444]': msg.level === 'error',

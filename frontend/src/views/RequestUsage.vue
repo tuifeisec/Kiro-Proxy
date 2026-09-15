@@ -12,8 +12,10 @@ const items = ref([])
 const summary = ref({})
 const loading = ref(false)
 const error = ref('')
-const startDate = ref(statsDaysAgo(6))
-const endDate = ref(statsDaysAgo(0))
+const startDate = ref('')
+const endDate = ref('')
+let lastAutoStart = ''
+let lastAutoEnd = ''
 const keyword = ref('')
 const provider = ref('')
 const status = ref('')
@@ -165,10 +167,8 @@ async function load(resetPage = false, resetScroll = resetPage) {
       if (tableScrollRef.value) tableScrollRef.value.scrollTop = 0
     }
   } catch (e) {
+    // 轮询瞬时失败保留已加载数据避免界面闪空（与 useDailyStats 同策略），错误由横幅展示。
     error.value = e.message || String(e)
-    items.value = []
-    total.value = 0
-    totalPages.value = 0
   } finally {
     loading.value = false
     refreshInFlight = false
@@ -256,8 +256,26 @@ function contentMeasurementStatus(item) {
   return item.first_content_type || '已识别'
 }
 
+function applyAutoRange() {
+  startDate.value = statsDaysAgo(6)
+  endDate.value = statsDaysAgo(0)
+  lastAutoStart = startDate.value
+  lastAutoEnd = endDate.value
+}
+
+applyAutoRange()
+
 function refreshTimerTick() {
   if (document.hidden) return
+  // 跨自然日后自动跟进新统计范围；用户手动改过范围则不覆盖。
+  const nextStart = statsDaysAgo(6)
+  const nextEnd = statsDaysAgo(0)
+  if (startDate.value === lastAutoStart && endDate.value === lastAutoEnd) {
+    startDate.value = nextStart
+    endDate.value = nextEnd
+    lastAutoStart = nextStart
+    lastAutoEnd = nextEnd
+  }
   load()
 }
 

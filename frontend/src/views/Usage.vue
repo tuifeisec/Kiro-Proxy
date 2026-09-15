@@ -442,7 +442,7 @@ onBeforeUnmount(() => {
                 </thead>
                 <tbody>
                   <tr v-for="entry in selectedDateLogs" :key="entry.id" class="border-b border-[#f1f5f9] last:border-b-0 hover:bg-[#fbfdff]">
-                    <td class="whitespace-nowrap py-2 pl-3 pr-3 font-mono text-[11px] text-[#475569]">{{ logTime(entry) }}</td>
+                    <td class="whitespace-nowrap py-2 pl-3 pr-3 font-mono text-[11px] text-[#475569]" :title="entry.full_time || entry.time">{{ logTime(entry) }}</td>
                     <td class="py-2 pr-3"><span class="rounded-full px-2 py-0.5 text-[11px] font-medium ring-1" :class="logLevelClass(entry.level)">{{ entry.level || 'info' }}</span></td>
                     <td class="py-2 pr-3"><span class="rounded-md bg-[#f8fafc] px-2 py-1 font-mono text-[11px] text-[#475569] ring-1 ring-[#e2e8f0]">{{ entry.category || '—' }}</span></td>
                     <td class="max-w-[300px] truncate py-2 pr-3 font-medium text-[#0f172a]">{{ logTextPreview(entry.message, 160) || '—' }}</td>
