@@ -174,7 +174,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			continue
 		}
 
-		candidatePrepared, prepareErr := s.prepareLocalCompatCandidate(body, api, candidate, clientWantsStream)
+		candidatePrepared, prepareErr := s.prepareLocalCompatCandidate(body, api, candidate, clientWantsStream, sessionID)
 		if prepareErr != nil {
 			if grouped {
 				s.forwarder.health.neutral(candidate)
@@ -632,7 +632,7 @@ type localCompatPreparedCandidate struct {
 	aggregateCodex    bool
 }
 
-func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, model *store.Model, clientWantsStream bool) (*localCompatPreparedCandidate, error) {
+func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, model *store.Model, clientWantsStream bool, sessionID string) (*localCompatPreparedCandidate, error) {
 	prepared := &localCompatPreparedCandidate{}
 	prepared.upstreamBody = replaceModelInBody(body, model.ModelID)
 	prepared.responsesFallback = api == localCompatResponses && responsesNeedsChatFallback(model)
@@ -644,7 +644,7 @@ func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, mo
 		}
 	}
 	if prepared.responsesFallback {
-		previousMessages, err := s.fallbackMessages(responsesPreviousResponseID(prepared.upstreamBody))
+		previousMessages, err := s.fallbackMessages(responsesPreviousResponseID(prepared.upstreamBody), sessionID, model.ID, model.Provider)
 		if err != nil {
 			return nil, err
 		}
@@ -652,6 +652,9 @@ func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, mo
 		if err != nil {
 			return nil, err
 		}
+		prepared.fallbackState.Provider = model.Provider
+		prepared.fallbackState.ModelConfigID = model.ID
+		prepared.fallbackState.SessionIDHash = sessionIDHash(sessionID)
 	}
 	prepared.aggregateCodex = api == localCompatResponses && model.Provider == "codex" && !clientWantsStream
 	if api == localCompatResponses && model.Provider == "codex" {
@@ -829,10 +832,20 @@ func localCompatUpstreamURL(api localCompatAPI, m *store.Model) (string, error) 
 }
 
 func copyLocalCompatHeaders(dst, src http.Header) {
+	dynamicHopByHop := make(map[string]struct{})
+	for _, value := range src.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			dynamicHopByHop[strings.ToLower(strings.TrimSpace(token))] = struct{}{}
+		}
+	}
 	for k, values := range src {
 		key := http.CanonicalHeaderKey(k)
-		switch strings.ToLower(key) {
-		case "content-length", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		lowerKey := strings.ToLower(key)
+		if _, dynamic := dynamicHopByHop[lowerKey]; dynamic {
+			continue
+		}
+		switch lowerKey {
+		case "content-length", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "set-cookie":
 			continue
 		}
 		for _, v := range values {

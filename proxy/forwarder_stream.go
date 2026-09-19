@@ -86,15 +86,11 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 					logger.Info("forwarder", "续传状态未保存：请求代次已被替代或快照超过预算")
 					return
 				}
-				ridShort := responseID
-				if len(ridShort) > 12 {
-					ridShort = ridShort[:12]
-				}
 				stateScope := "conversation"
 				if stateKey != pre.Conv.ConversationID {
 					stateScope = "branch"
 				}
-				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, stateScope=%s, responseId=%s, session_write_ms=%d", pre.Conv.ConversationID, stateScope, ridShort, time.Since(persistenceStarted).Milliseconds()))
+				logger.Info("forwarder", fmt.Sprintf("续传状态已保存: convId=%s, stateScope=%s, responseIdHash=%s, session_write_ms=%d", pre.Conv.ConversationID, stateScope, opaqueIDForLog(responseID), time.Since(persistenceStarted).Milliseconds()))
 			}
 		}
 	default: // /v1/chat/completions（含 classifier）

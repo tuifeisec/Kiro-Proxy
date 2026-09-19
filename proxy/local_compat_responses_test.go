@@ -127,3 +127,25 @@ func TestAggregateResponsesSSERequiresCompletedTerminal(t *testing.T) {
 		t.Fatalf("expected missing response.completed error, got %v", err)
 	}
 }
+
+func TestFallbackMessagesRequiresExplicitSession(t *testing.T) {
+	s := &Server{responsesFallback: map[string]fallbackResponseState{}}
+	s.saveFallbackResponse("resp_1", &fallbackResponseState{
+		Model:         "gpt-4o",
+		Provider:      "openai",
+		ModelConfigID: "model-1",
+		SessionIDHash: sessionIDHash("session-1"),
+		Messages:      []map[string]interface{}{{"role": "user", "content": "hello"}},
+	}, nil)
+
+	if _, err := s.fallbackMessages("resp_1", "", "model-1", "openai"); err == nil {
+		t.Fatal("expected previous_response_id without explicit session to be rejected")
+	}
+	messages, err := s.fallbackMessages("resp_1", "session-1", "model-1", "openai")
+	if err != nil {
+		t.Fatalf("explicit session lookup failed: %v", err)
+	}
+	if len(messages) != 1 || messages[0]["content"] != "hello" {
+		t.Fatalf("unexpected fallback messages: %#v", messages)
+	}
+}

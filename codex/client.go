@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"io"
 	"kiro-proxy/store"
 	"kiro-proxy/upstreamproxy"
@@ -15,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 const (
@@ -452,12 +453,12 @@ func findNestedAccountID(v interface{}) string {
 }
 
 func NewRequestBodyFromResponses(body []byte, serviceTier string) []byte {
-	var parsed map[string]interface{}
+	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return body
 	}
-	parsed["store"] = false
-	parsed["stream"] = true
+	parsed["store"] = json.RawMessage(`false`)
+	parsed["stream"] = json.RawMessage(`true`)
 
 	// Codex backend is close to Responses API, but not identical.
 	// Remove/reshape fields accepted by /v1/responses but rejected by /codex/responses.
@@ -466,24 +467,30 @@ func NewRequestBodyFromResponses(body []byte, serviceTier string) []byte {
 
 	delete(parsed, "service_tier")
 	if strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
-		parsed["service_tier"] = "priority"
+		parsed["service_tier"] = json.RawMessage(`"priority"`)
 	}
 
-	if effort, ok := parsed["reasoning_effort"]; ok {
+	if rawEffort, ok := parsed["reasoning_effort"]; ok {
 		delete(parsed, "reasoning_effort")
-		if s, ok := effort.(string); ok && strings.TrimSpace(s) != "" {
-			parsed["reasoning"] = map[string]interface{}{
-				"effort": strings.TrimSpace(s),
+		var effort string
+		if json.Unmarshal(rawEffort, &effort) == nil && strings.TrimSpace(effort) != "" {
+			effortJSON, err := json.Marshal(strings.TrimSpace(effort))
+			if err != nil {
+				return body
 			}
+			parsed["reasoning"] = json.RawMessage(`{"effort":` + string(effortJSON) + `}`)
 		}
 	}
 	ensureCodexReasoningSummary(parsed)
 
-	if input, ok := parsed["input"].([]interface{}); ok {
-		parsed["input"] = sanitizeCodexInput(input)
+	if rawInput, ok := parsed["input"]; ok {
+		var input []json.RawMessage
+		if json.Unmarshal(rawInput, &input) == nil {
+			parsed["input"] = sanitizeCodexInput(input)
+		}
 	}
 	if _, ok := parsed["instructions"]; !ok {
-		parsed["instructions"] = ""
+		parsed["instructions"] = json.RawMessage(`""`)
 	}
 	out, err := json.Marshal(parsed)
 	if err != nil {
@@ -492,30 +499,47 @@ func NewRequestBodyFromResponses(body []byte, serviceTier string) []byte {
 	return bytes.TrimSpace(out)
 }
 
-func ensureCodexReasoningSummary(parsed map[string]interface{}) {
-	reasoning, ok := parsed["reasoning"].(map[string]interface{})
-	if !ok || reasoning == nil {
+func ensureCodexReasoningSummary(parsed map[string]json.RawMessage) {
+	rawReasoning, ok := parsed["reasoning"]
+	if !ok {
+		return
+	}
+	var reasoning map[string]json.RawMessage
+	if json.Unmarshal(rawReasoning, &reasoning) != nil || reasoning == nil {
 		return
 	}
 	if _, ok := reasoning["summary"]; !ok {
-		reasoning["summary"] = "auto"
+		reasoning["summary"] = json.RawMessage(`"auto"`)
+		if encoded, err := json.Marshal(reasoning); err == nil {
+			parsed["reasoning"] = encoded
+		}
 	}
 }
 
-func sanitizeCodexInput(input []interface{}) []interface{} {
-	out := make([]interface{}, 0, len(input))
-	for _, item := range input {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			out = append(out, item)
+func sanitizeCodexInput(input []json.RawMessage) json.RawMessage {
+	out := make([]json.RawMessage, 0, len(input))
+	for _, rawItem := range input {
+		var item map[string]json.RawMessage
+		if json.Unmarshal(rawItem, &item) != nil || item == nil {
+			out = append(out, rawItem)
 			continue
 		}
-		if m["type"] == "message" {
-			delete(m, "type")
+		var itemType string
+		if json.Unmarshal(item["type"], &itemType) == nil && itemType == "message" {
+			delete(item, "type")
 		}
-		out = append(out, m)
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			out = append(out, rawItem)
+			continue
+		}
+		out = append(out, encoded)
 	}
-	return out
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return json.RawMessage(`[]`)
+	}
+	return encoded
 }
 
 func stringFromAny(v interface{}) string {

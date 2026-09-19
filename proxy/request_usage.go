@@ -232,9 +232,16 @@ func (r *requestUsageRecorder) addAuthDuration(duration time.Duration) {
 	r.traceMu.Unlock()
 }
 
-func (r *requestUsageRecorder) traceContext(ctx context.Context) context.Context {
+func (r *requestUsageRecorder) traceContext(ctx context.Context, attempt ...*upstreamAttemptState) context.Context {
 	if r == nil {
+		if len(attempt) > 0 && attempt[0] != nil {
+			return withUpstreamOperation(ctx, attempt[0])
+		}
 		return ctx
+	}
+	var op *upstreamAttemptState
+	if len(attempt) > 0 {
+		op = attempt[0]
 	}
 	trace := &httptrace.ClientTrace{
 		DNSStart: func(httptrace.DNSStartInfo) {
@@ -279,7 +286,14 @@ func (r *requestUsageRecorder) traceContext(ctx context.Context) context.Context
 			r.trace.gotConnection = time.Now()
 			r.traceMu.Unlock()
 		},
-		WroteRequest: func(httptrace.WroteRequestInfo) {
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if op != nil {
+				if info.Err != nil {
+					op.mark(upstreamSendWriteStarted)
+				} else {
+					op.mark(upstreamSendWritten)
+				}
+			}
 			r.traceMu.Lock()
 			r.trace.requestWritten = time.Now()
 			started := r.trace.gotConnection
@@ -292,6 +306,9 @@ func (r *requestUsageRecorder) traceContext(ctx context.Context) context.Context
 			r.traceMu.Unlock()
 		},
 		GotFirstResponseByte: func() {
+			if op != nil {
+				op.mark(upstreamResponseHeaders)
+			}
 			r.traceMu.Lock()
 			r.trace.responseHeaderMS = time.Since(r.start).Milliseconds()
 			if !r.trace.requestWritten.IsZero() {

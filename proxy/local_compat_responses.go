@@ -28,22 +28,31 @@ func responsesNeedsChatFallback(m *store.Model) bool {
 }
 
 type fallbackResponseState struct {
-	Model     string
-	Messages  []map[string]interface{}
-	ExpiresAt time.Time
+	Model         string
+	Provider      string
+	ModelConfigID string
+	SessionIDHash string
+	Messages      []map[string]interface{}
+	ExpiresAt     time.Time
 }
 
-func (s *Server) fallbackMessages(previousID string) ([]map[string]interface{}, error) {
+func (s *Server) fallbackMessages(previousID, sessionID, modelConfigID, provider string) ([]map[string]interface{}, error) {
 	previousID = strings.TrimSpace(previousID)
 	if previousID == "" {
 		return nil, nil
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, fmt.Errorf("previous_response_id is unavailable without an explicit local session; resend the full input")
 	}
 	s.responsesFallbackMu.Lock()
 	defer s.responsesFallbackMu.Unlock()
 	state, ok := s.responsesFallback[previousID]
 	if !ok || time.Now().After(state.ExpiresAt) {
 		delete(s.responsesFallback, previousID)
-		return nil, fmt.Errorf("previous_response_id %q is not available on the local chat fallback; resend the full input", previousID)
+		return nil, fmt.Errorf("previous_response_id %q is not available on the local chat fallback; resend the full input", opaqueIDForLog(previousID))
+	}
+	if state.SessionIDHash != sessionIDHash(sessionID) || state.ModelConfigID != strings.TrimSpace(modelConfigID) || state.Provider != strings.TrimSpace(provider) {
+		return nil, fmt.Errorf("previous_response_id %q is not available for this local session; resend the full input", opaqueIDForLog(previousID))
 	}
 	return cloneFallbackMessages(state.Messages), nil
 }
@@ -70,9 +79,19 @@ func (s *Server) saveFallbackResponse(responseID string, state *fallbackResponse
 			break
 		}
 	}
-	s.responsesFallback[responseID] = fallbackResponseState{Model: state.Model, Messages: messages, ExpiresAt: now.Add(24 * time.Hour)}
+	state.Messages = messages
+	state.ExpiresAt = now.Add(24 * time.Hour)
+	s.responsesFallback[responseID] = *state
 }
 
+func sessionIDHash(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return hex.EncodeToString(sum[:16])
+}
 func cloneFallbackMessages(messages []map[string]interface{}) []map[string]interface{} {
 	cloned := make([]map[string]interface{}, 0, len(messages))
 	for _, message := range messages {

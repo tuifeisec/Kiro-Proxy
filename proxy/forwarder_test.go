@@ -876,3 +876,46 @@ func TestSendWithRetryCommitsAfterResponsesMetadata(t *testing.T) {
 		t.Fatalf("probe did not commit the first live stream: %s", stream)
 	}
 }
+
+func TestResponsesOrCodexRequestUsesActualUpstreamURL(t *testing.T) {
+	model := &store.Model{Provider: "openai", Endpoint: "/responses"}
+	body := []byte(`{"stream":true}`)
+	if responsesOrCodexRequest(model, body, "https://upstream.example/v1/chat/completions") {
+		t.Fatal("forced Chat request must not use Responses retry policy")
+	}
+	if !responsesOrCodexRequest(model, body, "https://upstream.example/v1/responses") {
+		t.Fatal("Responses URL must use Responses retry policy")
+	}
+	codexModel := &store.Model{Provider: "codex", Endpoint: "/chat/completions"}
+	if !responsesOrCodexRequest(codexModel, body, "https://upstream.example/v1/chat/completions") {
+		t.Fatal("Codex must retain Responses-like retry policy")
+	}
+}
+
+func TestRequestWithProtocolFallbackDoesNotReplayWrittenResponsesRequest(t *testing.T) {
+	var attempts atomic.Int32
+	model := &store.Model{Provider: "openai", Endpoint: "/responses"}
+	body := []byte(`{"stream":true}`)
+	send := func(ctx context.Context) (*http.Response, error) {
+		attempts.Add(1)
+		operation := upstreamRequestOperationFromContext(ctx)
+		attempt := &upstreamAttemptState{}
+		attempt.mark(upstreamSendWritten)
+		operation.recordAttempt(model, body, "https://upstream.example/v1/responses", attempt)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       &fixedErrorBody{err: errors.New("http2: response body closed")},
+		}, nil
+	}
+
+	_, _, err := requestWithProtocolFallback(context.Background(), time.Second, send, func(ctx context.Context, resp *http.Response, timeout time.Duration) error {
+		return probeSSEPrecommit(ctx, resp, "openai", "/responses", timeout, 0)
+	})
+	if err == nil {
+		t.Fatal("expected written Responses request to fail without replay")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	}
+}

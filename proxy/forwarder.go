@@ -6,6 +6,8 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,10 +19,12 @@ import (
 	"kiro-proxy/upstreamproxy"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -48,6 +52,175 @@ var (
 	errUpstreamErrorBodyTimeout  = errors.New("upstream error response body timeout")
 	errUpstreamErrorBodyTooLarge = errors.New("upstream error response body too large")
 )
+
+type upstreamSendState uint8
+
+const (
+	upstreamSendNotStarted upstreamSendState = iota
+	upstreamSendWriteStarted
+	upstreamSendWritten
+	upstreamResponseHeaders
+	upstreamEventSeen
+)
+
+type upstreamRequestOperation struct {
+	mu                sync.Mutex
+	requestID         string
+	lastAttempt       *upstreamAttemptState
+	lastResponsesLike bool
+}
+
+type upstreamAttemptState struct {
+	state atomic.Uint32
+}
+
+func newUpstreamRequestOperation() *upstreamRequestOperation {
+	return &upstreamRequestOperation{requestID: uuid.NewString()}
+}
+
+func (a *upstreamAttemptState) mark(state upstreamSendState) {
+	if a == nil {
+		return
+	}
+	a.state.Store(uint32(state))
+}
+
+func (a *upstreamAttemptState) current() upstreamSendState {
+	if a == nil {
+		return upstreamSendNotStarted
+	}
+	return upstreamSendState(a.state.Load())
+}
+
+func responsesOrCodexRequest(model *store.Model, body []byte, upstreamURL string) bool {
+	if model == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(model.Provider), "codex") {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(model.Provider), "openai") {
+		return false
+	}
+	if endpoint := strings.ToLower(strings.TrimSpace(upstreamURL)); strings.Contains(endpoint, "/chat/completions") {
+		return false
+	} else if strings.Contains(endpoint, "/responses") {
+		return true
+	}
+	endpoint := strings.ToLower(strings.TrimSpace(model.Endpoint))
+	return strings.Contains(endpoint, "/responses") && !strings.Contains(endpoint, "/chat/completions")
+}
+
+func (o *upstreamRequestOperation) recordAttempt(model *store.Model, body []byte, upstreamURL string, attempt *upstreamAttemptState) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.lastAttempt = attempt
+	o.lastResponsesLike = responsesOrCodexRequest(model, body, upstreamURL)
+	o.mu.Unlock()
+}
+
+func (o *upstreamRequestOperation) allowsProtocolFallback() bool {
+	if o == nil {
+		return true
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.lastResponsesLike {
+		return true
+	}
+	return o.lastAttempt == nil || o.lastAttempt.current() < upstreamSendWriteStarted
+}
+
+type upstreamContextKey struct{}
+
+var upstreamOperationContextKey upstreamContextKey
+
+func withUpstreamRequestOperation(ctx context.Context, operation *upstreamRequestOperation) context.Context {
+	if operation == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, upstreamOperationContextKey, operation)
+}
+
+func upstreamRequestOperationFromContext(ctx context.Context) *upstreamRequestOperation {
+	if ctx == nil {
+		return nil
+	}
+	operation, _ := ctx.Value(upstreamOperationContextKey).(*upstreamRequestOperation)
+	return operation
+}
+
+func withUpstreamOperation(ctx context.Context, attempt *upstreamAttemptState) context.Context {
+	if attempt == nil {
+		return ctx
+	}
+	trace := &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err != nil {
+				attempt.mark(upstreamSendWriteStarted)
+			} else {
+				attempt.mark(upstreamSendWritten)
+			}
+		},
+		GotFirstResponseByte: func() {
+			attempt.mark(upstreamResponseHeaders)
+		},
+	}
+	return httptrace.WithClientTrace(ctx, trace)
+}
+
+func shouldRetryResponsesTransport(model *store.Model, body []byte, upstreamURL string, attempt *upstreamAttemptState) bool {
+	if !responsesOrCodexRequest(model, body, upstreamURL) {
+		return true
+	}
+	return attempt == nil || attempt.current() < upstreamSendWriteStarted
+}
+
+func shouldRetryResponsesStatus(model *store.Model, body []byte, upstreamURL string, attempt *upstreamAttemptState) bool {
+	if !responsesOrCodexRequest(model, body, upstreamURL) {
+		return true
+	}
+	return attempt == nil || attempt.current() < upstreamEventSeen
+}
+
+func shouldRetryResponsesPrecommit(model *store.Model, body []byte, upstreamURL string, attempt *upstreamAttemptState) bool {
+	if !responsesOrCodexRequest(model, body, upstreamURL) {
+		return true
+	}
+	return attempt == nil || attempt.current() < upstreamEventSeen
+}
+
+func shouldRetryUpstreamStatusForRequest(status int, model *store.Model, body []byte, upstreamURL string, attempt *upstreamAttemptState) bool {
+	if !shouldRetryUpstreamStatus(status) {
+		return false
+	}
+	if responsesOrCodexRequest(model, body, upstreamURL) && status == http.StatusInternalServerError {
+		return false
+	}
+	return shouldRetryResponsesStatus(model, body, upstreamURL, attempt)
+}
+
+func requestOperationState(attempt *upstreamAttemptState) string {
+	if attempt == nil {
+		return "unknown"
+	}
+	switch attempt.current() {
+	case upstreamSendNotStarted:
+		return "not_started"
+	case upstreamSendWriteStarted:
+		return "write_started"
+	case upstreamSendWritten:
+		return "written"
+	case upstreamResponseHeaders:
+		return "response_headers"
+	case upstreamEventSeen:
+		return "event_seen"
+	default:
+		return "unknown"
+	}
+}
 
 // Forwarder 负责转发请求到上游
 type Forwarder struct {
@@ -101,9 +274,11 @@ func requestWithProtocolFallback(
 	send func(context.Context) (*http.Response, error),
 	probe responsePrecommitProbe,
 ) (*http.Response, time.Duration, error) {
+	operation := newUpstreamRequestOperation()
+	operationCtx := withUpstreamRequestOperation(parent, operation)
 	startedAt := time.Now()
-	resp, duration, err := requestWithFirstByteTimeout(parent, timeout, send, probe)
-	if err == nil || !upstreamproxy.IsHTTP2Failure(err) || parent.Err() != nil {
+	resp, duration, err := requestWithFirstByteTimeout(operationCtx, timeout, send, probe)
+	if err == nil || !upstreamproxy.IsHTTP2Failure(err) || parent.Err() != nil || !operation.allowsProtocolFallback() {
 		return resp, duration, err
 	}
 
@@ -114,7 +289,7 @@ func requestWithProtocolFallback(
 			return nil, 0, err
 		}
 	}
-	resp, _, retryErr := requestWithFirstByteTimeout(parent, retryTimeout, send, probe)
+	resp, _, retryErr := requestWithFirstByteTimeout(operationCtx, retryTimeout, send, probe)
 	if retryErr != nil {
 		return nil, 0, retryErr
 	}
@@ -866,11 +1041,8 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		if err == nil && contResult != nil {
 			contResult.StateGeneration = generation
 			if contResult.UsedContinuation {
-				prevID := prevState.ResponseID
-				if len(prevID) > 12 {
-					prevID = prevID[:12]
-				}
-				logger.Info("forwarder", fmt.Sprintf("续传命中: convId=%s, prev_response=%s, delta_size=%d bytes", pre.Conv.ConversationID, prevID, len(contResult.Body)))
+				prevID := opaqueIDForLog(prevState.ResponseID)
+				logger.Info("forwarder", fmt.Sprintf("续传命中: convId=%s, prev_response_hash=%s, delta_size=%d bytes", pre.Conv.ConversationID, prevID, len(contResult.Body)))
 			}
 			upstreamBody = contResult.Body
 		}
@@ -1101,6 +1273,10 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 }
 
 func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration) (*http.Response, error) {
+	operation := upstreamRequestOperationFromContext(ctx)
+	if operation == nil {
+		operation = newUpstreamRequestOperation()
+	}
 	if retryBudget <= 0 {
 		retryBudget = minimumRetryBudget
 	}
@@ -1130,7 +1306,9 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
 		budgetTimer := time.AfterFunc(remaining, cancelAttempt)
-		resp, err := f.doRequest(attemptCtx, url, body, m, sessionID, usage)
+		attemptState := &upstreamAttemptState{}
+		operation.recordAttempt(m, body, url, attemptState)
+		resp, err := f.doRequestWithOperation(attemptCtx, url, body, m, sessionID, operation, attemptState, usage)
 		if err != nil {
 			budgetTimer.Stop()
 			cancelAttempt()
@@ -1139,6 +1317,9 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 				return nil, ctx.Err()
 			}
 			logger.Error("forwarder", fmt.Sprintf("请求失败 (attempt %d): %v", attempt, err))
+			if !shouldRetryResponsesTransport(m, body, url, attemptState) {
+				return nil, fmt.Errorf("上游请求发送状态不明确，拒绝重放 (%s): %w", requestOperationState(attemptState), lastErr)
+			}
 			transportRetries++
 			if transportRetries > maxTransportRetries {
 				return nil, fmt.Errorf("上游失败（网络重试 %d 次）: %w", maxTransportRetries, lastErr)
@@ -1152,7 +1333,7 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 			cancelAttempt()
 		}
 
-		if shouldRetryUpstreamStatus(resp.StatusCode) && attempt < maxRetries {
+		if shouldRetryUpstreamStatusForRequest(resp.StatusCode, m, body, url, attemptState) && attempt < maxRetries {
 			statusRetries++
 			nextRetryDelay = upstreamStatusRetryDelay(statusRetries, resp.Header.Get("Retry-After"))
 			if resp.ContentLength >= 0 && resp.ContentLength <= 32*1024 {
@@ -1181,6 +1362,9 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 					break
 				}
 				logger.Warn("forwarder", fmt.Sprintf("上游流在首个有效事件前失败 (attempt %d): %v", attempt, probeErr))
+				if !shouldRetryResponsesPrecommit(m, body, url, attemptState) && !errors.Is(probeErr, errSSEPrecommitUpstream) {
+					return nil, fmt.Errorf("Responses 上游已发送但首事件前失败，拒绝重放 (%s): %w", requestOperationState(attemptState), probeErr)
+				}
 				transportRetries++
 				if transportRetries > maxTransportRetries {
 					return nil, fmt.Errorf("上游失败（流式预提交重试 %d 次）: %w", maxTransportRetries, lastErr)
@@ -1188,6 +1372,7 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 				nextRetryDelay = transportRetryDelay
 				continue
 			}
+			attemptState.mark(upstreamEventSeen)
 		}
 		if !budgetTimer.Stop() {
 			if resp.Body != nil {
@@ -1262,6 +1447,28 @@ func minRetryDelay(delay time.Duration) time.Duration {
 }
 
 func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *store.Model, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
+	return f.doRequestWithOperation(ctx, url, body, m, sessionID, nil, nil, usage)
+}
+
+func (f *Forwarder) doRequestWithOperation(ctx context.Context, url string, body []byte, m *store.Model, sessionID string, operation *upstreamRequestOperation, attempt *upstreamAttemptState, usage *requestUsageRecorder) (*http.Response, error) {
+	if operation == nil {
+		operation = upstreamRequestOperationFromContext(ctx)
+	}
+	if operation != nil && attempt == nil {
+		attempt = &upstreamAttemptState{}
+	}
+	if operation != nil {
+		operation.recordAttempt(m, body, url, attempt)
+	}
+	if operation != nil {
+		operation.requestID = strings.TrimSpace(operation.requestID)
+		if operation.requestID == "" {
+			operation.requestID = uuid.NewString()
+		}
+	}
+	if attempt != nil {
+		attempt.mark(upstreamSendNotStarted)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -1296,9 +1503,11 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 		}
 		codex.ApplyHeaders(req, ensured.APIKey, ensured.CodexAccountID, true)
 		req.Header.Set("Accept", "text/event-stream")
-		req.Header.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
 		req.Header.Set("x-openai-internal-codex-residency", "us")
-		req.Header.Set("x-client-request-id", sessionIDOrRandom(sessionID))
+		if operation != nil && strings.TrimSpace(operation.requestID) == "" {
+			operation.requestID = uuid.NewString()
+		}
+		req.Header.Set("x-client-request-id", operationRequestID(operation))
 	default:
 		req.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}
@@ -1321,7 +1530,9 @@ func (f *Forwarder) doRequest(ctx context.Context, url string, body []byte, m *s
 	}
 	if usage != nil {
 		usage.beginAttempt()
-		req = req.WithContext(usage.traceContext(ctx))
+		req = req.WithContext(usage.traceContext(ctx, attempt))
+	} else if attempt != nil {
+		req = req.WithContext(withUpstreamOperation(ctx, attempt))
 	}
 	resp, err := client.Do(req)
 	if err == nil {
@@ -1649,11 +1860,20 @@ func findErrorReason(v interface{}, depth int) string {
 	return ""
 }
 
-func sessionIDOrRandom(sessionID string) string {
-	if strings.TrimSpace(sessionID) != "" {
-		return sessionID
+func operationRequestID(operation *upstreamRequestOperation) string {
+	if operation != nil && operation.requestID != "" {
+		return operation.requestID
 	}
 	return uuid.NewString()
+}
+
+func opaqueIDForLog(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 func streamLogMeta(pre *Preflight, m *store.Model, resp *http.Response, in, out, cacheRead, cacheWrite int, credits float64) LogMeta {
