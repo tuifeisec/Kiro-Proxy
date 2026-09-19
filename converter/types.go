@@ -14,7 +14,12 @@ type KiroRequest struct {
 }
 
 type KiroAdditionalModelRequestFields struct {
-	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	ReasoningEffort string                     `json:"reasoningEffort,omitempty"`
+	Reasoning       *KiroReasoningRequestField `json:"reasoning,omitempty"`
+}
+
+type KiroReasoningRequestField struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type KiroConversationState struct {

@@ -48,7 +48,11 @@ func ParseKiroRequest(body []byte) (*ParsedConversation, error) {
 		conv.TopP = req.InferenceConfig.TopP
 	}
 	if fields := req.AdditionalModelRequestFields; fields != nil {
-		effort, err := NormalizeReasoningEffort(fields.ReasoningEffort)
+		effortValue := fields.ReasoningEffort
+		if fields.Reasoning != nil && strings.TrimSpace(fields.Reasoning.Effort) != "" {
+			effortValue = fields.Reasoning.Effort
+		}
+		effort, err := NormalizeReasoningEffort(effortValue)
 		if err != nil {
 			return nil, err
 		}
