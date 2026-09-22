@@ -32,33 +32,38 @@ const (
 	dwmwaColorDefault           = 0xffffffff
 	wmDestroy                   = 0x0002
 	wmSize                      = 0x0005
-	wmUserShow                  = 0x0401
-	wmUserHide                  = 0x0402
-	wmUserQuit                  = 0x0403
-	wmNCCalcSize                = 0x0083
-	wmNCLButtonDown             = 0x00a1
-	wmClose                     = 0x0010
-	htCaption                   = 2
+	// wmUserShow（0x0401）定义在 single_instance_windows.go，与跨进程激活协议放在一起维护。
+	wmUserHide      = 0x0402
+	wmUserQuit      = 0x0403
+	wmNCCalcSize    = 0x0083
+	wmNCLButtonDown = 0x00a1
+	wmClose         = 0x0010
+	htCaption       = 2
 )
 
 var (
-	procCreateWindowExW       = user32.NewProc("CreateWindowExW")
-	procDestroyWindow         = user32.NewProc("DestroyWindow")
-	procDefWindowProcW        = user32.NewProc("DefWindowProcW")
-	procEnumChildWindows      = user32.NewProc("EnumChildWindows")
-	procGetClientRect         = user32.NewProc("GetClientRect")
-	procMoveWindow            = user32.NewProc("MoveWindow")
-	procRegisterClassExW      = user32.NewProc("RegisterClassExW")
-	procSetWindowPos          = user32.NewProc("SetWindowPos")
-	procShowWindow            = user32.NewProc("ShowWindow")
-	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
-	procReleaseCapture        = user32.NewProc("ReleaseCapture")
-	procPostMessageW          = user32.NewProc("PostMessageW")
-	procIsWindow              = user32.NewProc("IsWindow")
-	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
-	dwmapi                    = windows.NewLazySystemDLL("dwmapi.dll")
-	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
-	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
+	procDestroyWindow            = user32.NewProc("DestroyWindow")
+	procDefWindowProcW           = user32.NewProc("DefWindowProcW")
+	procEnumChildWindows         = user32.NewProc("EnumChildWindows")
+	procGetClientRect            = user32.NewProc("GetClientRect")
+	procMoveWindow               = user32.NewProc("MoveWindow")
+	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
+	procSetWindowPos             = user32.NewProc("SetWindowPos")
+	procShowWindow               = user32.NewProc("ShowWindow")
+	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	procReleaseCapture           = user32.NewProc("ReleaseCapture")
+	procPostMessageW             = user32.NewProc("PostMessageW")
+	procIsWindow                 = user32.NewProc("IsWindow")
+	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procAttachThreadInput        = user32.NewProc("AttachThreadInput")
+	procBringWindowToTop         = user32.NewProc("BringWindowToTop")
+	kernel32                     = windows.NewLazySystemDLL("kernel32.dll")
+	dwmapi                       = windows.NewLazySystemDLL("dwmapi.dll")
+	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
+	procGetCurrentThreadId       = kernel32.NewProc("GetCurrentThreadId")
+	procDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
 )
 
 var desktopHostWndProc = windows.NewCallback(desktopHostWindowProc)
@@ -166,12 +171,33 @@ func showDesktopWindow(c *desktopWindowController) {
 	}
 }
 
+// forceDesktopWindowForeground 是 SetForegroundWindow 被系统拒绝时的兜底：
+// 把本线程临时附加到当前前台窗口所在线程的输入队列，绕过"非前台进程不能设置前台窗口"的限制。
+// 附加后必须立刻解除，否则两个线程会一直共享输入队列。
+func forceDesktopWindowForeground(hwnd uintptr) {
+	foreground, _, _ := procGetForegroundWindow.Call()
+	if foreground == 0 || foreground == hwnd {
+		procBringWindowToTop.Call(hwnd)
+		return
+	}
+
+	foregroundThread, _, _ := procGetWindowThreadProcessId.Call(foreground, 0)
+	currentThread, _, _ := procGetCurrentThreadId.Call()
+	if foregroundThread != 0 && foregroundThread != currentThread {
+		procAttachThreadInput.Call(currentThread, foregroundThread, 1)
+		defer procAttachThreadInput.Call(currentThread, foregroundThread, 0)
+	}
+
+	procBringWindowToTop.Call(hwnd)
+	procSetForegroundWindow.Call(hwnd)
+}
+
 func topLevelWindow(w webview.WebView) uintptr {
 	return uintptr(w.Window())
 }
 
 func createDesktopHostWindow() uintptr {
-	className, _ := windows.UTF16PtrFromString("KiroProxyFramelessWindow")
+	className, _ := windows.UTF16PtrFromString(desktopWindowClassName)
 	title, _ := windows.UTF16PtrFromString("Kiro Proxy")
 	instance, _, _ := procGetModuleHandleW.Call(0)
 	wc := wndClassEx{
@@ -247,7 +273,10 @@ func desktopHostWindowProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uin
 	case wmUserShow:
 		procShowWindow.Call(hwnd, swShow)
 		procShowWindow.Call(hwnd, swRestore)
-		procSetForegroundWindow.Call(hwnd)
+		// SetForegroundWindow 在非前台进程调用时会被系统拒绝，此时退回 AttachThreadInput 方案。
+		if ret, _, _ := procSetForegroundWindow.Call(hwnd); ret == 0 {
+			forceDesktopWindowForeground(hwnd)
+		}
 		resizeDesktopHostChildren(hwnd)
 		return 0
 	case wmUserHide:
