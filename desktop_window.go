@@ -19,12 +19,31 @@ type desktopWindowController struct {
 	w        webview.WebView
 	url      string
 	window   uintptr
+	windowMu sync.RWMutex
 	quitting atomic.Bool
 	quitOnce sync.Once
 }
 
 func newDesktopWindowController(url string) *desktopWindowController {
 	return &desktopWindowController{url: url}
+}
+
+func (c *desktopWindowController) windowHandle() uintptr {
+	c.windowMu.RLock()
+	defer c.windowMu.RUnlock()
+	return c.window
+}
+
+func (c *desktopWindowController) setWindowHandle(hwnd uintptr) {
+	c.windowMu.Lock()
+	c.window = hwnd
+	c.windowMu.Unlock()
+}
+
+func (c *desktopWindowController) windowMatches(hwnd uintptr) bool {
+	c.windowMu.RLock()
+	defer c.windowMu.RUnlock()
+	return c.window == hwnd
 }
 
 func (c *desktopWindowController) create() {

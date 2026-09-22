@@ -11,8 +11,12 @@ const service = ref({
 const status = ref('checking')
 const uptime = ref('')
 
+const REQUEST_TIMEOUT_MS = 3000
 let timer = null
 let refCount = 0
+let inFlight = false
+let controller = null
+let requestGeneration = 0
 
 function formatUptime(seconds) {
   if (seconds < 60) return `${seconds}s`
@@ -22,12 +26,24 @@ function formatUptime(seconds) {
   return `${h}h ${m}m`
 }
 
-async function checkStatusFromStats() {
+async function fetchJSON(path, generation = requestGeneration) {
+  const requestController = new AbortController()
+  controller = requestController
+  const timeout = setTimeout(() => requestController.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch('/api/stats')
+    const res = await fetch(path, { signal: requestController.signal })
     if (!res.ok) throw new Error(await res.text())
+    return await res.json()
+  } finally {
+    clearTimeout(timeout)
+    if (controller === requestController && generation === requestGeneration) controller = null
+  }
+}
 
-    const payload = await res.json()
+async function checkStatusFromStats(generation = requestGeneration) {
+  try {
+    const payload = await fetchJSON('/api/stats', generation)
+    if (generation !== requestGeneration) return
     const data = payload.data ?? payload
     status.value = 'running'
     uptime.value = formatUptime(Number(data.uptime_seconds || 0))
@@ -38,29 +54,31 @@ async function checkStatusFromStats() {
 }
 
 async function checkStatus() {
-  if (document.hidden) return
+  if (document.hidden || inFlight) return
+  const generation = requestGeneration
+  inFlight = true
   try {
-    const res = await fetch('/api/service/status')
-    if (!res.ok) throw new Error(await res.text())
-
-    const data = await res.json()
+    const data = await fetchJSON('/api/service/status', generation)
+    if (generation !== requestGeneration) return
     service.value = data
     // 能拿到 service/status 响应，说明 UI/API 服务正在运行；不要只因 proxy_running 字段异常就显示“已停止”。
     status.value = data.running || data.proxy_running || data.ui_running ? 'running' : 'stopped'
     uptime.value = formatUptime(Number(data.uptime_seconds || 0))
   } catch {
-    await checkStatusFromStats()
+    await checkStatusFromStats(generation)
+  } finally {
+    inFlight = false
   }
 }
 
 function handleVisibilityChange() {
-  if (!document.hidden) checkStatus()
+  if (!document.hidden) void checkStatus()
 }
 
 function ensureTimer(intervalMs) {
   if (timer) return
-  checkStatus()
-  timer = setInterval(checkStatus, intervalMs)
+  void checkStatus()
+  timer = setInterval(() => { void checkStatus() }, intervalMs)
   document.addEventListener('visibilitychange', handleVisibilityChange)
 }
 
@@ -71,6 +89,10 @@ function releaseTimer() {
     timer = null
     refCount = 0
     document.removeEventListener('visibilitychange', handleVisibilityChange)
+    requestGeneration++
+    controller?.abort()
+    controller = null
+    inFlight = false
   }
 }
 

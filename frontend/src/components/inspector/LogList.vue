@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, nextTick, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import IconCopy from '../icons/IconCopy.vue'
 import IconExport from '../icons/IconExport.vue'
 import { useCopy } from '../../composables/useCopy.js'
@@ -14,11 +14,16 @@ const props = defineProps({
   filter: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'filtered-count'])
 const listEl = ref(null)
 const checkedSet = ref(new Set())
 const allChecked = ref(false)
-const visibleLimit = ref(800)
+const scrollTop = ref(0)
+const viewportHeight = ref(0)
+const ROW_HEIGHT = 41
+const OVERSCAN_ROWS = 12
+
+let resizeObserver = null
 
 const filtered = computed(() => {
   let list = props.messages
@@ -38,22 +43,67 @@ const filtered = computed(() => {
   return list
 })
 
-const visible = computed(() => filtered.value.slice(Math.max(0, filtered.value.length - visibleLimit.value)))
-const hiddenCount = computed(() => Math.max(0, filtered.value.length - visible.value.length))
+watch(filtered, (value) => emit('filtered-count', value.length), { immediate: true })
 
-watch(() => props.messages.length, () => {
+const BANNER_HEIGHT = 0
+
+const virtualStart = computed(() => {
+  const contentScrollTop = Math.max(0, scrollTop.value - BANNER_HEIGHT)
+  return Math.max(0, Math.floor(contentScrollTop / ROW_HEIGHT) - OVERSCAN_ROWS)
+})
+const virtualEnd = computed(() => {
+  const visibleRows = Math.ceil((viewportHeight.value || ROW_HEIGHT * 12) / ROW_HEIGHT)
+  return Math.min(filtered.value.length, virtualStart.value + visibleRows + OVERSCAN_ROWS * 2)
+})
+const visible = computed(() => filtered.value.slice(virtualStart.value, virtualEnd.value))
+const topSpacerHeight = computed(() => virtualStart.value * ROW_HEIGHT)
+const bottomSpacerHeight = computed(() => Math.max(0, (filtered.value.length - virtualEnd.value) * ROW_HEIGHT))
+const renderedRangeLabel = computed(() => {
+  if (!filtered.value.length) return '0'
+  return `${virtualStart.value + 1}-${virtualEnd.value}`
+})
+
+function updateViewport() {
+  viewportHeight.value = listEl.value?.clientHeight || 0
+}
+
+function handleScroll() {
+  if (listEl.value) scrollTop.value = listEl.value.scrollTop
+}
+
+function resetSelection() {
+  checkedSet.value = new Set()
+  allChecked.value = false
+}
+
+watch([() => props.messages.length, () => props.messages.at(-1)?.id], () => {
   nextTick(() => {
     if (listEl.value) {
       listEl.value.scrollTop = listEl.value.scrollHeight
+      scrollTop.value = listEl.value.scrollTop
+    }
+  })
+  resetSelection()
+})
+
+watch(() => `${props.filter.search}|${props.filter.level}|${props.filter.includeDetail}`, () => {
+  resetSelection()
+  nextTick(() => {
+    if (listEl.value) {
+      listEl.value.scrollTop = listEl.value.scrollHeight
+      scrollTop.value = listEl.value.scrollTop
     }
   })
 })
 
-// 监听 visible 引用而非 length：日志达到裁剪上限后 length 恒定，无法感知新消息；
-// visible 每次重算都产生新数组引用，新消息到达或筛选变化均触发重置
-watch(visible, () => {
-  checkedSet.value = new Set()
-  allChecked.value = false
+onMounted(() => {
+  updateViewport()
+  resizeObserver = new ResizeObserver(updateViewport)
+  if (listEl.value) resizeObserver.observe(listEl.value)
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
 })
 
 function toggleAll() {
@@ -61,8 +111,8 @@ function toggleAll() {
     checkedSet.value = new Set()
     allChecked.value = false
   } else {
-    checkedSet.value = new Set(visible.value)
-    allChecked.value = true
+    checkedSet.value = new Set(filtered.value)
+    allChecked.value = filtered.value.length > 0
   }
 }
 
@@ -74,16 +124,15 @@ function toggleItem(msg) {
     s.add(msg)
   }
   checkedSet.value = s
-  allChecked.value = s.size === visible.value.length
+  allChecked.value = s.size === filtered.value.length && filtered.value.length > 0
 }
 
 function cancelSelection() {
-  checkedSet.value = new Set()
-  allChecked.value = false
+  resetSelection()
 }
 
 async function copySelected() {
-  const items = visible.value.filter(m => checkedSet.value.has(m))
+  const items = filtered.value.filter(m => checkedSet.value.has(m))
   const ok = await copy(JSON.stringify(items, null, 2))
   if (!ok) {
     showToast('复制失败：无法访问剪贴板', { tone: 'error' })
@@ -91,7 +140,7 @@ async function copySelected() {
 }
 
 function exportSelected() {
-  const items = visible.value.filter(m => checkedSet.value.has(m))
+  const items = filtered.value.filter(m => checkedSet.value.has(m))
   const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -99,24 +148,6 @@ function exportSelected() {
   a.download = `logs-${Date.now()}.json`
   a.click()
   URL.revokeObjectURL(url)
-}
-
-function levelColor(level) {
-  switch (level) {
-    case 'error': return 'text-[#ef4444]'
-    case 'warn': return 'text-[#f59e0b]'
-    case 'info': return 'text-[#10b981]'
-    default: return 'text-[#6b7280]'
-  }
-}
-
-function levelIcon(level) {
-  switch (level) {
-    case 'error': return '✗'
-    case 'warn': return '⚠'
-    case 'info': return '→'
-    default: return '·'
-  }
 }
 
 function categoryColor(cat) {
@@ -146,13 +177,15 @@ function categoryColor(cat) {
       等待日志...
     </div>
 
-    <div v-else ref="listEl" class="flex-1 overflow-y-auto text-[11px] leading-5">
-      <div v-if="hiddenCount" class="border-b border-[#e5e7eb] bg-[#fffbeb] px-3 py-1.5 text-center text-[11px] text-[#92400e]">
-        已隐藏较早的 {{ hiddenCount.toLocaleString() }} 条记录，仅渲染最近 {{ visible.length.toLocaleString() }} 条以保持流畅
+    <div v-else class="flex min-h-0 flex-1 flex-col">
+      <div class="shrink-0 border-b border-[#e5e7eb] bg-[#fffbeb] px-3 py-1.5 text-center text-[11px] leading-4 text-[#92400e]">
+        共 {{ filtered.length.toLocaleString() }} 条，仅渲染当前可视区域 {{ renderedRangeLabel }}
       </div>
+      <div ref="listEl" class="min-h-0 flex-1 overflow-y-auto text-[11px] leading-5" @scroll="handleScroll">
+        <div :style="{ height: `${topSpacerHeight}px` }" aria-hidden="true"></div>
       <div
         v-for="msg in visible"
-        :key="msg"
+        :key="msg.id || msg.full_time || `${msg.time}-${msg.message}`"
         class="log-row grid grid-cols-[28px_78px_64px_86px_1fr] items-center gap-2 border-b border-[#f3f4f6] px-3 py-2 cursor-pointer transition-colors hover:bg-[#f8fafc]"
         :class="selected === msg ? 'bg-[#eff6ff] ring-1 ring-inset ring-[#bfdbfe]' : ''"
         @click="emit('select', msg)"
@@ -172,6 +205,8 @@ function categoryColor(cat) {
         <span class="truncate font-medium" :class="categoryColor(msg.category)">{{ msg.category || '-' }}</span>
         <span class="truncate text-[#111827]" :title="msg.message">{{ msg.message }}</span>
       </div>
+      <div :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true"></div>
+      </div>
     </div>
 
     <div v-if="checkedSet.size > 0"
@@ -189,11 +224,9 @@ function categoryColor(cat) {
 </template>
 
 <style scoped>
-/* 长列表优化：视口外行跳过布局与绘制（滚动容器为上方 overflow-y-auto 的 listEl，行是其直接子元素）。
-   41px = badge 内容行高 20px（text-[10px] 不带 line-height，继承 leading-5）
-   + badge py-0.5 4px + 行 py-2 16px + border-b 1px；auto 在行渲染过一次后改用实际尺寸 */
 .log-row {
+  height: 41px;
   content-visibility: auto;
-  contain-intrinsic-size: auto 41px;
+  contain-intrinsic-size: 41px;
 }
 </style>

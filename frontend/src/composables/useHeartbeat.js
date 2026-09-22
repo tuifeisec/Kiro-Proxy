@@ -4,19 +4,43 @@
 
 import { onMounted, onUnmounted } from 'vue'
 
+const REQUEST_TIMEOUT_MS = 3000
+
 export function useHeartbeat(intervalMs = 3000) {
   let timer = null
+  let controller = null
+  let inFlight = false
 
-  function sendHeartbeat() {
-    fetch('/api/heartbeat').catch(() => {})
+  async function sendHeartbeat() {
+    if (document.hidden || inFlight) return
+    inFlight = true
+    controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    try {
+      await fetch('/api/heartbeat', { signal: controller.signal })
+    } catch {
+      // 心跳仅用于诊断，网络错误不影响页面状态。
+    } finally {
+      clearTimeout(timeout)
+      controller = null
+      inFlight = false
+    }
+  }
+
+  function handleVisibilityChange() {
+    if (!document.hidden) void sendHeartbeat()
   }
 
   onMounted(() => {
-    sendHeartbeat()
-    timer = setInterval(sendHeartbeat, intervalMs)
+    void sendHeartbeat()
+    timer = setInterval(() => { void sendHeartbeat() }, intervalMs)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
   })
 
   onUnmounted(() => {
     clearInterval(timer)
+    timer = null
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+    controller?.abort()
   })
 }

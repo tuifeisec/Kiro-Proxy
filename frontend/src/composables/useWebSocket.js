@@ -9,10 +9,39 @@ const { trafficLogAllowed, loadLicenseInfo } = useLicense()
 
 const messages = ref([])
 const connected = ref(false)
-const MAX_MESSAGES = 1000
+const MAX_MESSAGES = 500
+const MAX_PENDING_MESSAGES = 500
+const MAX_TOTAL_DETAIL_BYTES = 8 * 1024 * 1024
+const MAX_MESSAGE_DETAIL_BYTES = 512 * 1024
+let messageSequence = 0
+
+function detailBytes(msg) {
+  return typeof msg?.detail === 'string' ? msg.detail.length : 0
+}
+
+function normalizeMessage(msg) {
+  if (!msg || typeof msg !== 'object') return msg
+  const detail = msg.detail
+  const normalized = msg.id ? msg : { ...msg, id: `ws-${Date.now()}-${messageSequence++}` }
+  if (typeof detail !== 'string' || detail.length <= MAX_MESSAGE_DETAIL_BYTES) return normalized
+
+  return {
+    ...normalized,
+    detail: `${detail.slice(0, MAX_MESSAGE_DETAIL_BYTES)}\n\n... 已截断，原始详情过大。`,
+  }
+}
+
+function trimMessages(list, maxMessages = MAX_MESSAGES) {
+  let totalDetailBytes = list.reduce((total, msg) => total + detailBytes(msg), 0)
+  while (list.length > maxMessages || totalDetailBytes > MAX_TOTAL_DETAIL_BYTES) {
+    const removed = list.shift()
+    if (!removed) break
+    totalDetailBytes -= detailBytes(removed)
+  }
+}
 
 // rAF 合帧：到达的消息先进入普通缓冲，每帧最多 flush 一次到响应式 messages，
-// 避免日志高峰期每条消息各触发一次响应式更新与列表重渲
+// 同时限制条数和 detail 总大小，避免转发模式长时间运行后 WebView 内存膨胀。
 let pendingMessages = []
 let flushHandle = 0
 
@@ -22,17 +51,12 @@ function flushMessages() {
   const batch = pendingMessages
   pendingMessages = []
   messages.value.push(...batch)
-  if (messages.value.length > MAX_MESSAGES) {
-    messages.value.splice(0, messages.value.length - MAX_MESSAGES)
-  }
+  trimMessages(messages.value)
 }
 
 function enqueueMessage(msg) {
-  pendingMessages.push(msg)
-  // 标签页隐藏时 rAF 暂停、消息持续缓冲；与 messages 同策略只保留最新 MAX_MESSAGES 条，防止后台无限增长
-  if (pendingMessages.length > MAX_MESSAGES) {
-    pendingMessages.splice(0, pendingMessages.length - MAX_MESSAGES)
-  }
+  pendingMessages.push(normalizeMessage(msg))
+  trimMessages(pendingMessages, MAX_PENDING_MESSAGES)
   if (!flushHandle) {
     flushHandle = requestAnimationFrame(flushMessages)
   }
@@ -82,14 +106,17 @@ function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const url = `${protocol}//${location.host}/ws`
 
-  ws = new WebSocket(url)
+  const socket = new WebSocket(url)
+  ws = socket
 
-  ws.onopen = () => {
+  socket.onopen = () => {
+    if (ws !== socket) return
     connected.value = true
     reconnectDelay = RECONNECT_BASE_DELAY_MS
   }
 
-  ws.onmessage = (event) => {
+  socket.onmessage = (event) => {
+    if (ws !== socket) return
     try {
       enqueueMessage(JSON.parse(event.data))
     } catch {
@@ -97,11 +124,13 @@ function connect() {
     }
   }
 
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (ws !== socket) return
     connected.value = false
     ws = null
     if (intentionalClose) {
       intentionalClose = false
+      if (trafficLogAllowed.value) scheduleReconnect()
       return
     }
     if (trafficLogAllowed.value) {
@@ -109,8 +138,8 @@ function connect() {
     }
   }
 
-  ws.onerror = () => {
-    if (ws) ws.close()
+  socket.onerror = () => {
+    if (ws === socket) socket.close()
   }
 }
 

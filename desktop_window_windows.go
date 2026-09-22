@@ -3,6 +3,7 @@
 package main
 
 import (
+	"sync"
 	"unsafe"
 
 	webview "github.com/webview/webview_go"
@@ -53,6 +54,7 @@ var (
 	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
 	procReleaseCapture        = user32.NewProc("ReleaseCapture")
 	procPostMessageW          = user32.NewProc("PostMessageW")
+	procIsWindow              = user32.NewProc("IsWindow")
 	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
 	dwmapi                    = windows.NewLazySystemDLL("dwmapi.dll")
 	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
@@ -61,7 +63,11 @@ var (
 
 var desktopHostWndProc = windows.NewCallback(desktopHostWindowProc)
 var resizeDesktopChildProc = windows.NewCallback(resizeDesktopHostChild)
-var currentDesktopWindow *desktopWindowController
+
+var (
+	desktopWindowMu      sync.RWMutex
+	currentDesktopWindow *desktopWindowController
+)
 
 type rect struct {
 	Left   int32
@@ -85,10 +91,22 @@ type wndClassEx struct {
 	IconSm     uintptr
 }
 
-func newDesktopWebView(debug bool, c *desktopWindowController) webview.WebView {
+func setCurrentDesktopWindow(c *desktopWindowController) {
+	desktopWindowMu.Lock()
 	currentDesktopWindow = c
+	desktopWindowMu.Unlock()
+}
+
+func getCurrentDesktopWindow() *desktopWindowController {
+	desktopWindowMu.RLock()
+	defer desktopWindowMu.RUnlock()
+	return currentDesktopWindow
+}
+
+func newDesktopWebView(debug bool, c *desktopWindowController) webview.WebView {
+	setCurrentDesktopWindow(c)
 	hwnd := createDesktopHostWindow()
-	c.window = hwnd
+	c.setWindowHandle(hwnd)
 	if hwnd != 0 {
 		return webview.NewWindow(debug, unsafe.Pointer(hwnd))
 	}
@@ -102,11 +120,20 @@ func configureDesktopWindow(w webview.WebView) {
 	}
 }
 
-func closeDesktopWindow(c *desktopWindowController) {
-	if c.window != 0 {
-		procDestroyWindow.Call(c.window)
-		c.window = 0
+func desktopWindowIsValid(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
 	}
+	ret, _, _ := procIsWindow.Call(hwnd)
+	return ret != 0
+}
+
+func closeDesktopWindow(c *desktopWindowController) {
+	hwnd := c.windowHandle()
+	if hwnd != 0 && desktopWindowIsValid(hwnd) {
+		procDestroyWindow.Call(hwnd)
+	}
+	c.setWindowHandle(0)
 }
 
 func destroyDesktopHostWindow(c *desktopWindowController) {
@@ -114,24 +141,28 @@ func destroyDesktopHostWindow(c *desktopWindowController) {
 }
 
 func hideDesktopWindow(c *desktopWindowController) {
-	if c.window != 0 {
-		procPostMessageW.Call(c.window, wmUserHide, 0, 0)
+	hwnd := c.windowHandle()
+	if desktopWindowIsValid(hwnd) {
+		procPostMessageW.Call(hwnd, wmUserHide, 0, 0)
 	}
 }
 
 func hideDesktopWindowController(w webview.WebView) {
-	if currentDesktopWindow != nil && currentDesktopWindow.window != 0 {
-		procPostMessageW.Call(currentDesktopWindow.window, wmUserHide, 0, 0)
-		return
+	if c := getCurrentDesktopWindow(); c != nil {
+		if hwnd := c.windowHandle(); desktopWindowIsValid(hwnd) {
+			procPostMessageW.Call(hwnd, wmUserHide, 0, 0)
+			return
+		}
 	}
-	if hwnd := topLevelWindow(w); hwnd != 0 {
+	if hwnd := topLevelWindow(w); desktopWindowIsValid(hwnd) {
 		procPostMessageW.Call(hwnd, wmUserHide, 0, 0)
 	}
 }
 
 func showDesktopWindow(c *desktopWindowController) {
-	if c.window != 0 {
-		procPostMessageW.Call(c.window, wmUserShow, 0, 0)
+	hwnd := c.windowHandle()
+	if desktopWindowIsValid(hwnd) {
+		procPostMessageW.Call(hwnd, wmUserShow, 0, 0)
 	}
 }
 
@@ -194,8 +225,9 @@ func applyDesktopWindowDwmAttributes(hwnd uintptr) {
 }
 
 func requestDesktopWindowQuit(c *desktopWindowController) {
-	if c.window != 0 {
-		procPostMessageW.Call(c.window, wmUserQuit, 0, 0)
+	hwnd := c.windowHandle()
+	if desktopWindowIsValid(hwnd) {
+		procPostMessageW.Call(hwnd, wmUserQuit, 0, 0)
 		return
 	}
 	if c.w != nil {
@@ -222,23 +254,23 @@ func desktopHostWindowProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uin
 		procShowWindow.Call(hwnd, swHide)
 		return 0
 	case wmUserQuit:
-		if currentDesktopWindow != nil {
-			currentDesktopWindow.quitting.Store(true)
+		if c := getCurrentDesktopWindow(); c != nil {
+			c.quitting.Store(true)
 		}
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case wmClose:
-		if currentDesktopWindow != nil && currentDesktopWindow.quitting.Load() {
+		if c := getCurrentDesktopWindow(); c != nil && c.quitting.Load() {
 			procDestroyWindow.Call(hwnd)
 			return 0
 		}
 		procShowWindow.Call(hwnd, swHide)
 		return 0
 	case wmDestroy:
-		if currentDesktopWindow != nil && currentDesktopWindow.window == hwnd {
-			currentDesktopWindow.window = 0
-			if currentDesktopWindow.quitting.Load() {
-				currentDesktopWindow.w.Terminate()
+		if c := getCurrentDesktopWindow(); c != nil && c.windowMatches(hwnd) {
+			c.setWindowHandle(0)
+			if c.quitting.Load() {
+				c.w.Terminate()
 			}
 		}
 		return 0
@@ -271,12 +303,14 @@ func resizeDesktopHostChild(child uintptr, lparam uintptr) uintptr {
 var _ = wsChild
 
 func startDesktopWindowDrag(w webview.WebView) {
-	if currentDesktopWindow != nil && currentDesktopWindow.window != 0 {
-		procReleaseCapture.Call()
-		procSendMessageW.Call(currentDesktopWindow.window, wmNCLButtonDown, htCaption, 0)
-		return
+	if c := getCurrentDesktopWindow(); c != nil {
+		if hwnd := c.windowHandle(); desktopWindowIsValid(hwnd) {
+			procReleaseCapture.Call()
+			procSendMessageW.Call(hwnd, wmNCLButtonDown, htCaption, 0)
+			return
+		}
 	}
-	if hwnd := topLevelWindow(w); hwnd != 0 {
+	if hwnd := topLevelWindow(w); desktopWindowIsValid(hwnd) {
 		procReleaseCapture.Call()
 		procSendMessageW.Call(hwnd, wmNCLButtonDown, htCaption, 0)
 	}

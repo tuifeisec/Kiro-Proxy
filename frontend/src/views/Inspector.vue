@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWebSocket } from '../composables/useWebSocket.js'
 import LogFilter from '../components/inspector/LogFilter.vue'
@@ -92,20 +92,11 @@ onMounted(async () => {
   fetchLogDetail()
 })
 
-const filteredCount = computed(() => {
-  let list = messages.value
-  const { search, level, includeDetail } = filter.value
-  if (search) {
-    const q = search.toLowerCase()
-    list = list.filter(m =>
-      (m.message || '').toLowerCase().includes(q) ||
-      (m.category || '').toLowerCase().includes(q) ||
-      (includeDetail && (m.detail || '').toLowerCase().includes(q))
-    )
-  }
-  if (level) list = list.filter(m => m.level === level)
-  return list.length
-})
+const filteredCount = ref(0)
+
+function handleFilteredCount(count) {
+  filteredCount.value = count
+}
 
 function handleFilter(f) {
   filter.value = f
@@ -113,6 +104,7 @@ function handleFilter(f) {
 
 function handleClear() {
   clearMessages()
+  filteredCount.value = 0
   selected.value = null
 }
 </script>
@@ -224,6 +216,7 @@ function handleClear() {
           :selected="selected"
           :filter="filter"
           @select="selected = $event"
+          @filtered-count="handleFilteredCount"
         />
       </div>
       <div class="min-w-0 flex-1 overflow-hidden ui-card bg-white">
