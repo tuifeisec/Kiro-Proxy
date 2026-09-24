@@ -3,7 +3,9 @@
 package main
 
 import (
+	"log"
 	"sync"
+	"time"
 	"unsafe"
 
 	webview "github.com/webview/webview_go"
@@ -42,32 +44,29 @@ const (
 )
 
 var (
-	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
-	procDestroyWindow            = user32.NewProc("DestroyWindow")
-	procDefWindowProcW           = user32.NewProc("DefWindowProcW")
-	procEnumChildWindows         = user32.NewProc("EnumChildWindows")
-	procGetClientRect            = user32.NewProc("GetClientRect")
-	procMoveWindow               = user32.NewProc("MoveWindow")
-	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
-	procSetWindowPos             = user32.NewProc("SetWindowPos")
-	procShowWindow               = user32.NewProc("ShowWindow")
-	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
-	procReleaseCapture           = user32.NewProc("ReleaseCapture")
-	procPostMessageW             = user32.NewProc("PostMessageW")
-	procIsWindow                 = user32.NewProc("IsWindow")
-	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
-	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	procAttachThreadInput        = user32.NewProc("AttachThreadInput")
-	procBringWindowToTop         = user32.NewProc("BringWindowToTop")
-	kernel32                     = windows.NewLazySystemDLL("kernel32.dll")
-	dwmapi                       = windows.NewLazySystemDLL("dwmapi.dll")
-	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
-	procGetCurrentThreadId       = kernel32.NewProc("GetCurrentThreadId")
-	procDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
+	procCreateWindowExW       = user32.NewProc("CreateWindowExW")
+	procDestroyWindow         = user32.NewProc("DestroyWindow")
+	procDefWindowProcW        = user32.NewProc("DefWindowProcW")
+	procFindWindowExW         = user32.NewProc("FindWindowExW")
+	procGetClientRect         = user32.NewProc("GetClientRect")
+	procGetWindowRect         = user32.NewProc("GetWindowRect")
+	procMoveWindow            = user32.NewProc("MoveWindow")
+	procMapWindowPoints       = user32.NewProc("MapWindowPoints")
+	procRegisterClassExW      = user32.NewProc("RegisterClassExW")
+	procSetWindowPos          = user32.NewProc("SetWindowPos")
+	procShowWindow            = user32.NewProc("ShowWindow")
+	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	procReleaseCapture        = user32.NewProc("ReleaseCapture")
+	procPostMessageW          = user32.NewProc("PostMessageW")
+	procIsWindow              = user32.NewProc("IsWindow")
+	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
+	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
+	dwmapi                    = windows.NewLazySystemDLL("dwmapi.dll")
+	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
+	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 )
 
 var desktopHostWndProc = windows.NewCallback(desktopHostWindowProc)
-var resizeDesktopChildProc = windows.NewCallback(resizeDesktopHostChild)
 
 var (
 	desktopWindowMu      sync.RWMutex
@@ -166,30 +165,29 @@ func hideDesktopWindowController(w webview.WebView) {
 
 func showDesktopWindow(c *desktopWindowController) {
 	hwnd := c.windowHandle()
-	if desktopWindowIsValid(hwnd) {
-		procPostMessageW.Call(hwnd, wmUserShow, 0, 0)
-	}
-}
-
-// forceDesktopWindowForeground 是 SetForegroundWindow 被系统拒绝时的兜底：
-// 把本线程临时附加到当前前台窗口所在线程的输入队列，绕过"非前台进程不能设置前台窗口"的限制。
-// 附加后必须立刻解除，否则两个线程会一直共享输入队列。
-func forceDesktopWindowForeground(hwnd uintptr) {
-	foreground, _, _ := procGetForegroundWindow.Call()
-	if foreground == 0 || foreground == hwnd {
-		procBringWindowToTop.Call(hwnd)
+	if !desktopWindowIsValid(hwnd) {
+		log.Printf("[desktop] 无法打开窗口: 宿主窗口无效 hwnd=%#x", hwnd)
 		return
 	}
-
-	foregroundThread, _, _ := procGetWindowThreadProcessId.Call(foreground, 0)
-	currentThread, _, _ := procGetCurrentThreadId.Call()
-	if foregroundThread != 0 && foregroundThread != currentThread {
-		procAttachThreadInput.Call(currentThread, foregroundThread, 1)
-		defer procAttachThreadInput.Call(currentThread, foregroundThread, 0)
+	if ret, _, err := procPostMessageW.Call(hwnd, wmUserShow, 0, 0); ret == 0 {
+		log.Printf("[desktop] 无法投递打开窗口消息: hwnd=%#x error=%v", hwnd, err)
+		return
 	}
-
-	procBringWindowToTop.Call(hwnd)
-	procSetForegroundWindow.Call(hwnd)
+	// 托盘运行在独立线程；延迟检查不会阻塞 GUI 消息循环。
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		valid := desktopWindowIsValid(hwnd)
+		visible, _, _ := procSingleInstanceIsWindowVisible.Call(hwnd)
+		foreground, _, _ := procSingleInstanceGetForegroundWindow.Call()
+		if valid && visible != 0 {
+			return
+		}
+		probe := "未探测（窗口已失效）"
+		if valid {
+			probe = probeDesktopWindowMessageLoop(hwnd)
+		}
+		log.Printf("[desktop] 托盘打开窗口未显示: hwnd=%#x valid=%t visible=%t foreground=%#x WM_NULL=%s", hwnd, valid, visible != 0, foreground, probe)
+	}()
 }
 
 func topLevelWindow(w webview.WebView) uintptr {
@@ -273,9 +271,9 @@ func desktopHostWindowProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uin
 	case wmUserShow:
 		procShowWindow.Call(hwnd, swShow)
 		procShowWindow.Call(hwnd, swRestore)
-		// SetForegroundWindow 在非前台进程调用时会被系统拒绝，此时退回 AttachThreadInput 方案。
-		if ret, _, _ := procSetForegroundWindow.Call(hwnd); ret == 0 {
-			forceDesktopWindowForeground(hwnd)
+		if ret, _, err := procSetForegroundWindow.Call(hwnd); ret == 0 {
+			foreground, _, _ := procGetForegroundWindow.Call()
+			log.Printf("[desktop] 请求窗口前台失败: hwnd=%#x foreground=%#x error=%v", hwnd, foreground, err)
 		}
 		resizeDesktopHostChildren(hwnd)
 		return 0
@@ -309,24 +307,32 @@ func desktopHostWindowProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uin
 }
 
 func resizeDesktopHostChildren(hwnd uintptr) {
-	var rc rect
-	ret, _, _ := procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
-	if ret == 0 {
+	// WebView2 会在 webview_widget 下创建跨进程子窗口；这里只调整直属容器，
+	// 让 WebView2 自己维护内部窗口尺寸，避免直接同步移动跨进程后代窗口。
+	className, _ := windows.UTF16PtrFromString("webview_widget")
+	child, _, _ := procFindWindowExW.Call(hwnd, 0, uintptr(unsafe.Pointer(className)), 0)
+	if child == 0 {
 		return
 	}
-	width := uintptr(rc.Right - rc.Left)
-	height := uintptr(rc.Bottom - rc.Top)
-	if width == 0 || height == 0 {
-		return
-	}
-	procEnumChildWindows.Call(hwnd, resizeDesktopChildProc, width|(height<<32))
-}
 
-func resizeDesktopHostChild(child uintptr, lparam uintptr) uintptr {
-	width := int32(lparam & 0xffffffff)
-	height := int32((lparam >> 32) & 0xffffffff)
+	var client, bounds rect
+	if ret, _, _ := procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client))); ret == 0 {
+		return
+	}
+	width, height := client.Right-client.Left, client.Bottom-client.Top
+	if width <= 0 || height <= 0 {
+		return
+	}
+	if ret, _, _ := procGetWindowRect.Call(child, uintptr(unsafe.Pointer(&bounds))); ret == 0 {
+		return
+	}
+	// 返回值为 0 也可能表示两个窗口原点重合，不能据此判为失败。
+	procMapWindowPoints.Call(0, hwnd, uintptr(unsafe.Pointer(&bounds)), 2)
+	if bounds.Left == client.Left && bounds.Top == client.Top &&
+		bounds.Right-bounds.Left == width && bounds.Bottom-bounds.Top == height {
+		return
+	}
 	procMoveWindow.Call(child, 0, 0, uintptr(width), uintptr(height), 1)
-	return 1
 }
 
 var _ = wsChild
