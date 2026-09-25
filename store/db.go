@@ -112,6 +112,7 @@ func (db *DB) migrate() error {
 		{"model_groups", "first_byte_timeout_ms", "INTEGER NOT NULL DEFAULT 10000"},
 		{"model_groups", "max_attempts", "INTEGER NOT NULL DEFAULT 4"},
 		{"model_groups", "fallback_group_id", "TEXT NOT NULL DEFAULT ''"},
+		{"model_groups", "reasoning_effort", "TEXT NOT NULL DEFAULT ''"},
 		{"model_groups", "description", "TEXT NOT NULL DEFAULT ''"},
 		{"model_group_members", "max_concurrency", "INTEGER NOT NULL DEFAULT 0"},
 	}
@@ -202,6 +203,7 @@ CREATE TABLE IF NOT EXISTS model_groups (
     first_byte_timeout_ms INTEGER NOT NULL DEFAULT 10000,
     max_attempts INTEGER NOT NULL DEFAULT 4,
     fallback_group_id TEXT NOT NULL DEFAULT '',
+    reasoning_effort TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );

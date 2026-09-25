@@ -214,6 +214,11 @@ func (r *Router) EnabledModels() []store.Model {
 		}
 
 		// 修复 ML-04: 分组虚拟模型应聚合所有候选能力，而非只继承首候选
+		// 旧分组沿用候选一致时的默认值，新分组使用显式配置的统一默认值。
+		defaultReasoningEffort := group.ReasoningEffort
+		if defaultReasoningEffort == "" {
+			defaultReasoningEffort = groupReasoningEffort(route.Candidates)
+		}
 		virtual := store.Model{
 			ID:              group.ID,
 			Name:            group.Name,
@@ -221,7 +226,7 @@ func (r *Router) EnabledModels() []store.Model {
 			ImageInputMode:  groupImageInputMode(route.Candidates),
 			ContextWindow:   groupMinContextWindow(route.Candidates),
 			MaxTokens:       groupMinMaxTokens(route.Candidates),
-			ReasoningEffort: groupReasoningEffort(route.Candidates),
+			ReasoningEffort: defaultReasoningEffort,
 			Provider:        "group", // 标记为分组，避免误用首候选 provider
 			RateMultiplier:  groupRateMultiplier(route.Candidates),
 			Enabled:         true,
@@ -276,20 +281,22 @@ func groupMinMaxTokens(candidates []*store.Model) int {
 	return min
 }
 
-// groupReasoningEffort 返回所有候选共同支持的 reasoning effort
-// 当前简化策略：如果候选间不一致，返回空（不声明 reasoning schema）
+// groupReasoningEffort 返回旧分组候选一致时的默认档位
+// 候选默认值不代表其完整支持的档位集合。
 func groupReasoningEffort(candidates []*store.Model) string {
 	if len(candidates) == 0 {
 		return ""
 	}
 	first := ""
+	initialized := false
 	for _, c := range candidates {
 		if c == nil {
 			continue
 		}
 		effort := strings.TrimSpace(c.ReasoningEffort)
-		if first == "" {
+		if !initialized {
 			first = effort
+			initialized = true
 		} else if first != effort {
 			// 候选间 reasoning 配置不一致，保守返回空
 			return ""

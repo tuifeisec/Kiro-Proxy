@@ -311,6 +311,7 @@ async function handleGroupSave(payload) {
       enabled: payload.enabled,
       first_byte_timeout_ms: payload.first_byte_timeout_ms,
       max_attempts: payload.max_attempts,
+      reasoning_effort: payload.reasoning_effort,
       fallback_group_id: payload.fallback_group_id,
       members: payload.members,
     }

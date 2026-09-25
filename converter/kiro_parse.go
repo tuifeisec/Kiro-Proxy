@@ -113,11 +113,30 @@ func NormalizeReasoningEffort(value string) (string, error) {
 	}
 
 	switch value {
-	case "low", "medium", "high", "xhigh":
+	case "none", "low", "medium", "high", "xhigh", "max":
 		return value, nil
 	default:
 		return "", fmt.Errorf("unsupported reasoning effort %q", value)
 	}
+}
+
+// ValidateProviderReasoningEffort 仅检查本地转换器能否表达该档位，
+// 不代表具体上游模型或端点一定接受该配置。
+func ValidateProviderReasoningEffort(provider, effort string) error {
+	if effort == "" {
+		return nil
+	}
+	switch provider {
+	case "anthropic":
+		if anthropicThinkingFromEffort(effort) == nil {
+			return fmt.Errorf("Anthropic 模型不支持思考强度 %q", effort)
+		}
+	case "gemini":
+		if geminiThinkingFromEffort(effort) == nil {
+			return fmt.Errorf("Gemini 模型不支持思考强度 %q", effort)
+		}
+	}
+	return nil
 }
 
 func keepBootstrapAsUser(agentMode string) bool {

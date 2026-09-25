@@ -1,8 +1,9 @@
 package converter
 
 import (
-	json "github.com/goccy/go-json"
 	"strings"
+
+	json "github.com/goccy/go-json"
 )
 
 // KiroToAnthropic 将解析好的会话转换为 Anthropic Messages 请求体
@@ -27,6 +28,9 @@ func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffo
 	}
 	if conv.MaxTokens > 0 {
 		req.MaxTokens = conv.MaxTokens
+	}
+	if err := ValidateProviderReasoningEffort("anthropic", reasoningEffort); err != nil {
+		return nil, err
 	}
 	if thinking := anthropicThinkingFromEffort(reasoningEffort); thinking != nil {
 		req.Thinking = thinking
@@ -242,6 +246,8 @@ func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse, reason
 
 func anthropicThinkingFromEffort(effort string) *AnthropicThinking {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none":
+		return &AnthropicThinking{Type: "disabled"}
 	case "low":
 		return &AnthropicThinking{Type: "enabled", BudgetTokens: 1024}
 	case "medium":

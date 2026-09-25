@@ -23,6 +23,7 @@ type ModelGroup struct {
 	FirstByteTimeoutMS int                `json:"first_byte_timeout_ms"`
 	MaxAttempts        int                `json:"max_attempts"`
 	FallbackGroupID    string             `json:"fallback_group_id"`
+	ReasoningEffort    string             `json:"reasoning_effort"`
 	Members            []ModelGroupMember `json:"members"`
 	CreatedAt          string             `json:"created_at"`
 	UpdatedAt          string             `json:"updated_at"`
@@ -54,7 +55,7 @@ type ModelHealthStatus struct {
 func (db *DB) GetModelGroups() ([]ModelGroup, error) {
 	rows, err := db.conn.Query(`
 		SELECT id, name, description, enabled, first_byte_timeout_ms, max_attempts,
-		       fallback_group_id, created_at, updated_at
+		       fallback_group_id, reasoning_effort, created_at, updated_at
 		FROM model_groups
 		ORDER BY created_at ASC
 	`)
@@ -69,7 +70,7 @@ func (db *DB) GetModelGroups() ([]ModelGroup, error) {
 		var group ModelGroup
 		var enabled int
 		if err := rows.Scan(&group.ID, &group.Name, &group.Description, &enabled, &group.FirstByteTimeoutMS,
-			&group.MaxAttempts, &group.FallbackGroupID, &group.CreatedAt, &group.UpdatedAt); err != nil {
+			&group.MaxAttempts, &group.FallbackGroupID, &group.ReasoningEffort, &group.CreatedAt, &group.UpdatedAt); err != nil {
 			return nil, err
 		}
 		group.Enabled = enabled == 1
@@ -125,12 +126,12 @@ func (db *DB) FindModelGroupByName(name string) (*ModelGroup, error) {
 	var enabled int
 	err := db.conn.QueryRow(`
 		SELECT id, name, description, enabled, first_byte_timeout_ms, max_attempts,
-		       fallback_group_id, created_at, updated_at
+		       fallback_group_id, reasoning_effort, created_at, updated_at
 		FROM model_groups
 		WHERE name = ? COLLATE NOCASE
 		LIMIT 1
 	`, name).Scan(&group.ID, &group.Name, &group.Description, &enabled, &group.FirstByteTimeoutMS,
-		&group.MaxAttempts, &group.FallbackGroupID, &group.CreatedAt, &group.UpdatedAt)
+		&group.MaxAttempts, &group.FallbackGroupID, &group.ReasoningEffort, &group.CreatedAt, &group.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +182,12 @@ func (db *DB) saveModelGroup(group *ModelGroup, create bool) error {
 		return fmt.Errorf("max attempts must be between 1 and 16")
 	}
 	group.FallbackGroupID = strings.TrimSpace(group.FallbackGroupID)
+	group.ReasoningEffort = strings.ToLower(strings.TrimSpace(group.ReasoningEffort))
+	switch group.ReasoningEffort {
+	case "", "none", "low", "medium", "high", "xhigh", "max":
+	default:
+		return fmt.Errorf("unsupported group reasoning effort %q", group.ReasoningEffort)
+	}
 	if group.FallbackGroupID == group.ID {
 		return fmt.Errorf("fallback group cannot reference itself")
 	}
@@ -207,19 +214,19 @@ func (db *DB) saveModelGroup(group *ModelGroup, create bool) error {
 		_, err = tx.Exec(`
 			INSERT INTO model_groups (
 				id, name, description, enabled, first_byte_timeout_ms, max_attempts,
-				fallback_group_id, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				fallback_group_id, reasoning_effort, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, group.ID, group.Name, group.Description, enabled, group.FirstByteTimeoutMS, group.MaxAttempts,
-			group.FallbackGroupID, group.CreatedAt, group.UpdatedAt)
+			group.FallbackGroupID, group.ReasoningEffort, group.CreatedAt, group.UpdatedAt)
 	} else {
 		var result sql.Result
 		result, err = tx.Exec(`
 			UPDATE model_groups
 			SET name = ?, description = ?, enabled = ?, first_byte_timeout_ms = ?, max_attempts = ?,
-			    fallback_group_id = ?, updated_at = ?
+			    fallback_group_id = ?, reasoning_effort = ?, updated_at = ?
 			WHERE id = ?
 		`, group.Name, group.Description, enabled, group.FirstByteTimeoutMS, group.MaxAttempts,
-			group.FallbackGroupID, group.UpdatedAt, group.ID)
+			group.FallbackGroupID, group.ReasoningEffort, group.UpdatedAt, group.ID)
 		if err == nil {
 			if count, rowsErr := result.RowsAffected(); rowsErr == nil && count == 0 {
 				return fmt.Errorf("model group not found: %s", group.ID)

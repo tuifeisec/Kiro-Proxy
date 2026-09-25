@@ -26,6 +26,7 @@ const groupDescription = ref('')
 const groupEnabled = ref(true)
 const firstByteTimeoutMs = ref(10000)
 const maxAttempts = ref(4)
+const groupReasoningEffort = ref('medium')
 const fallbackGroupID = ref('')
 const selectedModelIDs = ref([])
 const memberConcurrency = ref({})
@@ -86,6 +87,7 @@ function editorSnapshot() {
     enabled: groupEnabled.value,
     first_byte_timeout_ms: firstByteTimeoutMs.value,
     max_attempts: maxAttempts.value,
+    reasoning_effort: groupReasoningEffort.value,
     fallback_group_id: fallbackGroupID.value,
     selected_model_ids: selectedModelIDs.value,
     member_concurrency: memberConcurrency.value,
@@ -101,6 +103,7 @@ function openCreate() {
   groupEnabled.value = true
   firstByteTimeoutMs.value = 10000
   maxAttempts.value = 4
+  groupReasoningEffort.value = 'medium'
   fallbackGroupID.value = ''
   selectedModelIDs.value = []
   memberConcurrency.value = {}
@@ -117,6 +120,7 @@ function openEdit(group) {
   groupEnabled.value = group.enabled !== false
   firstByteTimeoutMs.value = Number(group.first_byte_timeout_ms ?? 10000)
   maxAttempts.value = Number(group.max_attempts ?? 4)
+  groupReasoningEffort.value = group.reasoning_effort || ''
   fallbackGroupID.value = group.fallback_group_id || ''
   const members = sortedMembers(group)
   selectedModelIDs.value = members.map((member) => member.model_id)
@@ -200,6 +204,7 @@ function saveGroup() {
     enabled: groupEnabled.value,
     first_byte_timeout_ms: Math.min(300000, Math.max(10000, Math.floor(Number(firstByteTimeoutMs.value) || 10000))),
     max_attempts: Math.min(16, Math.max(1, Math.floor(Number(maxAttempts.value) || 1))),
+    reasoning_effort: groupReasoningEffort.value,
     fallback_group_id: fallbackGroupID.value || '',
     members: selectedModelIDs.value.map((modelID, priority) => ({
       model_id: modelID,
@@ -568,6 +573,19 @@ const memberRowsByGroupID = computed(() => {
                 分组说明
                 <textarea v-model="groupDescription" maxlength="500" rows="2" class="mt-1.5 w-full resize-none ui-control px-3 py-2 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" placeholder="说明该组的用途、模型范围或调度定位"></textarea>
                 <span class="mt-1 block text-right font-normal tabular-nums text-[#94a3b8]">{{ groupDescription.length }} / 500</span>
+              </label>
+              <label class="mt-3 block text-[11px] font-medium text-[#475569]">
+                Kiro 分组默认思考强度
+                <select v-model="groupReasoningEffort" class="mt-1.5 h-9 w-full ui-control bg-white px-2 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]">
+                  <option value="">沿用成员默认（旧组）</option>
+                  <option value="none">None</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">xHigh</option>
+                  <option value="max">Max</option>
+                </select>
+                <span class="mt-1 block font-normal text-[#94a3b8]">Kiro 默认选项；所选档位优先于组内模型默认值。不同上游不一定支持全部档位。</span>
               </label>
             </section>
 

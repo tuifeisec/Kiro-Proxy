@@ -34,14 +34,15 @@ var errMITMRequestBodyTooLarge = errors.New("MITM request body too large")
 
 // Preflight 一次解析的结果，贯穿整个请求生命周期
 type Preflight struct {
-	Body           []byte
-	Conv           *converter.ParsedConversation // nil 表示非 Kiro 请求
-	Protocol       string
-	SourceModel    string
-	IsClassifier   bool
-	ConversationID string
-	StartTime      time.Time
-	usage          *requestUsageRecorder
+	Body                 []byte
+	Conv                 *converter.ParsedConversation // nil 表示非 Kiro 请求
+	Protocol             string
+	SourceModel          string
+	IsClassifier         bool
+	ConversationID       string
+	StartTime            time.Time
+	GroupReasoningEffort string
+	usage                *requestUsageRecorder
 }
 
 // isKiroConversationBody 检查 runtime 根路径请求是否具有对话操作的稳定结构。
@@ -210,6 +211,9 @@ func (s *Server) setupInterceptor() {
 		if route == nil {
 			s.logger.Error("interceptor", "无可用路由: model="+pre.SourceModel)
 			return req, errorResponse(req, http.StatusServiceUnavailable, "no route for model: "+pre.SourceModel)
+		}
+		if !pre.IsClassifier && route.Group != nil {
+			pre.GroupReasoningEffort = route.Group.ReasoningEffort
 		}
 		if result, err := s.licenseClient.CheckCached(); err != nil || !result.Authorized {
 			msg := "未授权，请加入群获取免费授权并在后台添加机器码"

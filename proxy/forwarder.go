@@ -549,6 +549,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 	attemptsByGroup := make(map[string]int)
 	var lastErr error
 	var lastResp *http.Response
+	var unsupportedEffortErr error
 	var lastContResult *converter.ResponsesContinuationResult
 	var lastModel *store.Model
 
@@ -623,6 +624,14 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 
 			if attemptsByGroup[candidateGroup] >= groupMaxAttempts {
 				break
+			}
+
+			if pre != nil && pre.Protocol == "kiro" && pre.Conv != nil {
+				if err := converter.ValidateProviderReasoningEffort(model.Provider, resolveReasoningEffort(pre, model)); err != nil {
+					unsupportedEffortErr = err
+					logger.Info("dispatcher", fmt.Sprintf("跳过无法表达思考强度的候选: stage=%d group=%s model=%s error=%v", stageIndex, stage.GroupName, statsModelID(model), err))
+					continue
+				}
 			}
 
 			allowed, circuitState := f.health.allow(model, time.Now())
@@ -937,6 +946,18 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 		return nil, fmt.Errorf("模型组 %s 请求失败: %w", route.Group.Name, lastErr)
 	}
 	if attempted == 0 {
+		if unsupportedEffortErr != nil {
+			allUnsupported := true
+			for _, candidate := range route.Candidates {
+				if candidate != nil && converter.ValidateProviderReasoningEffort(candidate.Provider, resolveReasoningEffort(pre, candidate)) == nil {
+					allUnsupported = false
+					break
+				}
+			}
+			if allUnsupported {
+				return nil, fmt.Errorf("模型组 %s 无法使用所选思考强度: %w", route.Group.Name, unsupportedEffortErr)
+			}
+		}
 		return nil, fmt.Errorf("模型组 %s 当前没有可用候选", route.Group.Name)
 	}
 	return nil, fmt.Errorf("模型组 %s 已超过请求时间预算", route.Group.Name)

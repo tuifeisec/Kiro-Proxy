@@ -44,6 +44,9 @@ func KiroToGemini(conv *ParsedConversation, targetModel string, reasoningEffort 
 		genConfig.TopP = conv.TopP
 		hasConfig = true
 	}
+	if err := ValidateProviderReasoningEffort("gemini", reasoningEffort); err != nil {
+		return nil, err
+	}
 	if thinking := geminiThinkingFromEffort(reasoningEffort); thinking != nil {
 		genConfig.ThinkingConfig = thinking
 		hasConfig = true

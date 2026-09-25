@@ -36,14 +36,19 @@ func buildUpstreamURL(baseURL, endpoint string) string {
 }
 
 func resolveReasoningEffort(pre *Preflight, model *store.Model) string {
-	defaultEffort := ""
-	if model != nil {
-		defaultEffort, _ = converter.NormalizeReasoningEffort(model.ReasoningEffort)
+	if pre != nil && pre.Conv != nil && !pre.IsClassifier {
+		if pre.Conv.ReasoningEffort != "" {
+			return pre.Conv.ReasoningEffort
+		}
+		if pre.GroupReasoningEffort != "" {
+			return pre.GroupReasoningEffort
+		}
 	}
-	if pre == nil || pre.Conv == nil || pre.IsClassifier || pre.Conv.ReasoningEffort == "" {
-		return defaultEffort
+	if model == nil {
+		return ""
 	}
-	return pre.Conv.ReasoningEffort
+	defaultEffort, _ := converter.NormalizeReasoningEffort(model.ReasoningEffort)
+	return defaultEffort
 }
 
 // convertRequest 将请求体转换为上游格式
