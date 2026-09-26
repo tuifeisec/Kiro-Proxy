@@ -178,20 +178,20 @@ function formatCredits(n) {
 
 <template>
   <div class="ui-card">
-    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[#edf0f5] px-3 py-2">
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line-2 px-3 py-2">
       <div class="min-w-0">
-        <h3 class="text-[14px] font-semibold text-[#0f172a]">用量明细</h3>
-        <p class="mt-0.5 text-[12px] text-[#64748b]">按模型聚合 token、Credits 和缓存命中</p>
+        <h3 class="text-[14px] font-semibold text-ink">用量明细</h3>
+        <p class="mt-0.5 text-[12px] text-ink-3">按模型聚合 token、Credits 和缓存命中</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <template v-if="!isAllRange">
-          <input v-model="startDate" type="date" class="h-8 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569]" />
-          <span class="text-[12px] text-[#94a3b8]">至</span>
-          <input v-model="endDate" type="date" class="h-8 rounded-lg border border-[#e2e8f0] bg-white px-2 text-[12px] text-[#475569]" />
+          <input v-model="startDate" type="date" class="h-8 rounded-lg border border-line bg-surface px-2 text-[12px] text-ink-2" />
+          <span class="text-[12px] text-ink-4">至</span>
+          <input v-model="endDate" type="date" class="h-8 rounded-lg border border-line bg-surface px-2 text-[12px] text-ink-2" />
         </template>
-        <span v-else class="inline-flex h-8 items-center rounded-lg border border-[#e2e8f0] bg-[#f8fafc] px-3 text-[12px] text-[#64748b]">全部历史数据</span>
+        <span v-else class="inline-flex h-8 items-center rounded-lg border border-line bg-surface-2 px-3 text-[12px] text-ink-3">全部历史数据</span>
         <button
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e2e8f0] bg-white px-3 text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
+          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface px-3 text-[12px] font-medium text-ink-2 hover:bg-hover disabled:opacity-60"
           :disabled="loading"
           @click="refresh"
         >
@@ -201,14 +201,14 @@ function formatCredits(n) {
       </div>
     </div>
 
-    <div v-if="validationError || error" class="mx-4 mt-3 rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">{{ validationError || error }}</div>
+    <div v-if="validationError || error" class="mx-4 mt-3 rounded-lg border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger">{{ validationError || error }}</div>
 
-    <div v-if="rows.length === 0 && !loading" class="py-12 text-center text-[13px] text-[#64748b]">该时间段无数据</div>
+    <div v-if="rows.length === 0 && !loading" class="py-12 text-center text-[13px] text-ink-3">该时间段无数据</div>
 
     <div v-else class="overflow-x-auto px-3 pb-3 pt-2">
       <table class="w-full min-w-[720px] text-[12px]">
         <thead>
-          <tr class="border-b border-[#edf0f5] text-left text-[#64748b]">
+          <tr class="border-b border-line-2 text-left text-ink-3">
             <th class="py-1.5 pr-3 font-medium">模型</th>
             <th class="py-1.5 pr-3 text-right font-medium">请求数</th>
             <th class="py-1.5 pr-3 text-right font-medium">错误</th>
@@ -220,24 +220,24 @@ function formatCredits(n) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="m in byModel" :key="m.model_id" class="border-b border-[#f1f5f9] last:border-b-0 hover:bg-[#fbfdff]">
-            <td class="py-1.5 pr-3 font-medium text-[#0f172a]">{{ m.model_id }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ m.requests }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums" :class="m.errors > 0 ? 'text-[#dc2626]' : 'text-[#94a3b8]'">{{ m.errors }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ formatTokens(m.input_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#334155]">{{ formatTokens(m.output_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#059669]">{{ formatTokens(m.cache_hit_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-[#d97706]">{{ formatCredits(m.credits) }}</td>
+          <tr v-for="m in byModel" :key="m.model_id" class="border-b border-line-2 last:border-b-0 hover:bg-hover">
+            <td class="py-1.5 pr-3 font-medium text-ink">{{ m.model_id }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ m.requests }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums" :class="m.errors > 0 ? 'text-danger' : 'text-ink-4'">{{ m.errors }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ formatTokens(m.input_tokens) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ formatTokens(m.output_tokens) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-success">{{ formatTokens(m.cache_hit_tokens) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-warning">{{ formatCredits(m.credits) }}</td>
             <td class="py-1.5 text-right tabular-nums">
               <div class="flex items-center justify-end gap-2">
-                <span class="text-[#334155]">{{ cacheHitRate(m).toFixed(1) }}%</span>
-                <span class="h-1.5 w-10 overflow-hidden rounded-full bg-[#e2e8f0]"><span class="block h-full rounded-full bg-[#22c55e]" :style="{ width: `${Math.min(100, cacheHitRate(m))}%` }"></span></span>
+                <span class="text-ink-2">{{ cacheHitRate(m).toFixed(1) }}%</span>
+                <span class="h-1.5 w-10 overflow-hidden rounded-full bg-hover-strong"><span class="block h-full rounded-full bg-success" :style="{ width: `${Math.min(100, cacheHitRate(m))}%` }"></span></span>
               </div>
             </td>
           </tr>
         </tbody>
       </table>
-      <div class="mt-2 text-[11px] text-[#94a3b8]">范围：{{ range.start }} ~ {{ range.end }}</div>
+      <div class="mt-2 text-[11px] text-ink-4">范围：{{ range.start }} ~ {{ range.end }}</div>
     </div>
   </div>
 </template>

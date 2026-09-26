@@ -44,17 +44,17 @@ onMounted(loadAdvertisements)
       v-for="(ad, index) in advertisements"
       :key="advertisementKey(ad, index)"
       type="button"
-      class="group h-[96px] overflow-hidden rounded-xl border border-[#e2e8f0] bg-white text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition hover:border-[#bfdbfe] hover:shadow-[0_8px_20px_rgba(37,99,235,0.08)]"
+      class="group h-[96px] overflow-hidden rounded-xl border border-line bg-surface text-left shadow-card transition hover:border-primary-tint-line hover:shadow-[0_8px_20px_rgba(37,99,235,0.08)]"
       :class="ad.link_url ? 'cursor-pointer' : 'cursor-default'"
       @click="openAdvertisement(ad)"
     >
       <div
-        class="flex h-full items-center justify-center bg-[#f8fafc] bg-cover bg-center px-4 text-center"
+        class="flex h-full items-center justify-center bg-surface-2 bg-cover bg-center px-4 text-center"
         :style="advertisementImageStyle(ad)"
       >
         <div
           v-if="!ad.image_url"
-          class="line-clamp-2 text-[14px] font-semibold leading-5 text-[#334155]"
+          class="line-clamp-2 text-[14px] font-semibold leading-5 text-ink-2"
         >
           {{ advertisementText(ad) }}
         </div>

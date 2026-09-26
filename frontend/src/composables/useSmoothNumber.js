@@ -59,6 +59,12 @@ export function useSmoothNumber(source, options = {}) {
       output.value = target
       return
     }
+    // 偏好减弱动效：数字滚动属装饰性运动，直接落位不启动循环
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      stopLoop()
+      output.value = target
+      return
+    }
     if (Math.abs(target - output.value) <= settleEpsilon()) {
       // 已在收敛阈值内（含微小变化），直接落位，不启动循环。
       stopLoop()

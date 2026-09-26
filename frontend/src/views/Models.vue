@@ -16,6 +16,7 @@ import {
 import ModelRow from '../components/models/ModelRow.vue'
 import ModelForm from '../components/models/ModelForm.vue'
 import ModelGroupsPanel from '../components/models/ModelGroupsPanel.vue'
+import ConfirmDialog from '../components/common/ConfirmDialog.vue'
 import IconPlus from '../components/icons/IconPlus.vue'
 import IconModels from '../components/icons/IconModels.vue'
 import IconSearch from '../components/icons/IconSearch.vue'
@@ -110,14 +111,19 @@ const summary = computed(() => {
 })
 
 const summaryItems = computed(() => [
-  { label: '模型总数', value: summary.value.total, suffix: '', icon: 'cube', tone: 'text-[#111827] bg-[#f8fafc] border-[#e5e7eb]' },
-  { label: '已启用', value: summary.value.enabled, suffix: '', icon: 'server', tone: 'text-[#2563eb] bg-[#eff6ff] border-[#bfdbfe]', dot: true },
-  { label: '测试成功', value: summary.value.success, suffix: '', icon: 'check', tone: 'text-[#059669] bg-[#ecfdf5] border-[#a7f3d0]' },
-  { label: '测试失败', value: summary.value.failed, suffix: '', icon: 'alert', tone: 'text-[#dc2626] bg-[#fef2f2] border-[#fecaca]' },
-  { label: '平均响应速度', value: summary.value.avgSpeed ? summary.value.avgSpeed.toFixed(1) : '-', suffix: summary.value.avgSpeed ? 't/s' : '', icon: 'trend', tone: 'text-[#2563eb] bg-[#eff6ff] border-[#bfdbfe]' }
+  { label: '模型总数', value: summary.value.total, suffix: '', icon: 'cube', tone: 'text-ink bg-surface-2 border-line' },
+  { label: '已启用', value: summary.value.enabled, suffix: '', icon: 'server', tone: 'text-primary-fg bg-primary-tint border-primary-tint-line', dot: true },
+  { label: '测试成功', value: summary.value.success, suffix: '', icon: 'check', tone: 'text-success bg-success-tint border-success-tint-line' },
+  { label: '测试失败', value: summary.value.failed, suffix: '', icon: 'alert', tone: 'text-danger bg-danger-tint border-danger-tint-line' },
+  { label: '平均响应速度', value: summary.value.avgSpeed ? summary.value.avgSpeed.toFixed(1) : '-', suffix: summary.value.avgSpeed ? 't/s' : '', icon: 'trend', tone: 'text-primary-fg bg-primary-tint border-primary-tint-line' }
 ])
 
 const deleteTargetName = computed(() => deleteTarget.value?.name || deleteTarget.value?.model_id || '当前模型')
+
+const deleteConfirmMessage = computed(() => {
+  const base = `确定删除模型「${deleteTargetName.value}」？此操作无法撤销。`
+  return deleteError.value ? `${base}\n\n${deleteError.value}` : base
+})
 
 const TEST_RESULTS_STORAGE_KEY = 'kiro-proxy:model-test-results:v1'
 const HIDE_PRIVATE_INFO_STORAGE_KEY = 'kiro-proxy:models-hide-private-info:v1'
@@ -400,7 +406,16 @@ onMounted(() => {
   loadStoredTestResults()
   loadModels()
   loadGroups()
+  window.addEventListener('keydown', onGlobalKeydown)
 })
+
+// Ctrl/Cmd+K 聚焦搜索框（工具栏徽章承诺的快捷键）
+function onGlobalKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    searchInput.value?.focus()
+  }
+}
 
 watch(activeView, (view) => {
   if (view === 'groups') {
@@ -411,7 +426,10 @@ watch(activeView, (view) => {
   stopGroupHealthRefresh()
 })
 
-onBeforeUnmount(stopGroupHealthRefresh)
+onBeforeUnmount(() => {
+  stopGroupHealthRefresh()
+  window.removeEventListener('keydown', onGlobalKeydown)
+})
 </script>
 
 <template>
@@ -419,25 +437,26 @@ onBeforeUnmount(stopGroupHealthRefresh)
     <div class="ui-page-inner space-y-3">
       <header class="flex flex-wrap items-start justify-between gap-4 px-1 pt-1">
         <div class="min-w-0">
-          <h1 class="text-[22px] font-semibold leading-7 tracking-tight text-[#111827]">模型配置</h1>
-          <p class="mt-1 text-[12px] leading-4 text-[#6b7280]">配置 Kiro 可用的 AI 模型，每个模型对应一个上游 API 接口</p>
+          <h1 class="text-[22px] font-semibold leading-7 tracking-tight text-ink">模型配置</h1>
+          <p class="mt-1 text-[12px] leading-4 text-ink-3">配置 Kiro 可用的 AI 模型，每个模型对应一个上游 API 接口</p>
         </div>
 
         <div class="flex w-full flex-wrap items-center justify-end gap-2 lg:w-auto">
           <div v-if="activeView === 'models'" class="relative w-full sm:w-auto">
             <input
+              ref="searchInput"
               v-model="searchText"
-              class="ui-control-h ui-control w-full pl-9 pr-10 text-[12px] text-[#111827] shadow-sm outline-none transition focus:border-[#bfdbfe] focus:ring-2 focus:ring-[#eff6ff] sm:w-[280px] lg:w-[330px]"
+              class="ui-control-h ui-control w-full pl-9 pr-10 text-[12px] text-ink shadow-sm outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring sm:w-[280px] lg:w-[330px]"
               placeholder="搜索模型名称、ID 或 Provider..."
             />
-            <IconSearch class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9ca3af]" />
-            <span class="absolute right-3 top-1/2 -translate-y-1/2 rounded border border-[#edf0f5] px-1.5 py-[1px] text-[10px] text-[#9ca3af]">Ctrl K</span>
+            <IconSearch class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-4" />
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 rounded border border-line-2 px-1.5 py-[1px] text-[10px] text-ink-4">Ctrl K</span>
           </div>
 
           <select
             v-if="activeView === 'models'"
             v-model="providerFilter"
-            class="ui-control-h ui-control px-3 text-[12px] text-[#374151] shadow-sm outline-none"
+            class="ui-control-h ui-control px-3 text-[12px] text-ink-2 shadow-sm outline-none"
           >
             <option v-for="option in providerOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
@@ -445,7 +464,7 @@ onBeforeUnmount(stopGroupHealthRefresh)
           <select
             v-if="activeView === 'models'"
             v-model="statusFilter"
-            class="ui-control-h ui-control px-3 text-[12px] text-[#374151] shadow-sm outline-none"
+            class="ui-control-h ui-control px-3 text-[12px] text-ink-2 shadow-sm outline-none"
           >
             <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
@@ -455,8 +474,8 @@ onBeforeUnmount(stopGroupHealthRefresh)
             type="button"
             class="flex h-9 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium shadow-sm transition"
             :class="hidePrivateInfo
-              ? 'border-[#bfdbfe] bg-[#eff6ff] text-[#2563eb]'
-              : 'border-[#edf0f5] bg-white text-[#64748b] hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#111827]'"
+              ? 'border-primary-tint-line bg-primary-tint text-primary-fg'
+              : 'border-line-2 bg-surface text-ink-3 hover:border-line-strong hover:bg-hover hover:text-ink'"
             :title="hidePrivateInfo ? '当前已隐藏连接配置与 Codex 账户信息' : '显示连接配置与 Codex 账户信息'"
             @click="togglePrivateInfo"
           >
@@ -466,7 +485,7 @@ onBeforeUnmount(stopGroupHealthRefresh)
           </button>
 
           <button
-            class="ui-control-h flex w-8 items-center justify-center ui-control border-[#e6ebf2] bg-white text-[#475569] shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#111827] disabled:cursor-not-allowed disabled:opacity-70"
+            class="ui-control-h flex w-8 items-center justify-center ui-control border-line-2 bg-surface text-ink-2 shadow-card transition hover:border-line-strong hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-70"
             :aria-label="loadingModels || loadingGroups ? '刷新中' : '刷新列表'"
             :title="loadingModels || loadingGroups ? '刷新中...' : '刷新列表'"
             :disabled="loadingModels || loadingGroups"
@@ -500,9 +519,9 @@ onBeforeUnmount(stopGroupHealthRefresh)
         </div>
       </header>
 
-      <div class="inline-flex h-8 w-fit items-center rounded-md border border-[#dfe5ec] bg-[#f8fafc] p-0.5 shadow-sm">
-        <button class="h-7 rounded px-4 text-[12px] font-medium transition" :class="activeView === 'models' ? 'bg-white text-[#1677ff] shadow-sm ring-1 ring-[#dbeafe]' : 'text-[#64748b] hover:bg-white/70 hover:text-[#334155]'" @click="activeView = 'models'">模型</button>
-        <button class="h-7 rounded px-4 text-[12px] font-medium transition" :class="activeView === 'groups' ? 'bg-white text-[#1677ff] shadow-sm ring-1 ring-[#dbeafe]' : 'text-[#64748b] hover:bg-white/70 hover:text-[#334155]'" @click="activeView = 'groups'">分组</button>
+      <div class="inline-flex h-8 w-fit items-center rounded-md border border-line bg-surface-2 p-0.5 shadow-sm">
+        <button class="h-7 rounded px-4 text-[12px] font-medium transition" :aria-pressed="activeView === 'models'" :class="activeView === 'models' ? 'bg-surface text-primary-fg shadow-sm ring-1 ring-primary-ring' : 'text-ink-3 hover:bg-surface/70 hover:text-ink-2'" @click="activeView = 'models'">模型</button>
+        <button class="h-7 rounded px-4 text-[12px] font-medium transition" :aria-pressed="activeView === 'groups'" :class="activeView === 'groups' ? 'bg-surface text-primary-fg shadow-sm ring-1 ring-primary-ring' : 'text-ink-3 hover:bg-surface/70 hover:text-ink-2'" @click="activeView = 'groups'">分组</button>
       </div>
 
       <section v-if="activeView === 'models'" class="ui-card grid grid-cols-2 overflow-hidden sm:grid-cols-3 lg:grid-cols-5">
@@ -510,7 +529,7 @@ onBeforeUnmount(stopGroupHealthRefresh)
           v-for="(item, index) in summaryItems"
           :key="item.label"
           class="flex h-[72px] items-center gap-4 px-5"
-          :class="index > 0 ? 'border-l border-[#edf0f5]' : ''"
+          :class="index > 0 ? 'border-l border-line-2' : ''"
         >
           <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border" :class="item.tone">
             <svg v-if="item.icon === 'cube'" class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -539,23 +558,23 @@ onBeforeUnmount(stopGroupHealthRefresh)
             </svg>
           </div>
           <div>
-            <div class="text-[11px] leading-4 text-[#64748b]">{{ item.label }}</div>
+            <div class="text-[11px] leading-4 text-ink-3">{{ item.label }}</div>
             <div class="mt-1 flex items-baseline gap-1">
-              <span class="text-[22px] font-semibold leading-6 tabular-nums text-[#111827]">{{ item.value }}</span>
-              <span v-if="item.dot" class="h-[5px] w-[5px] rounded-full bg-[#10b981]"></span>
-              <span v-if="item.suffix" class="text-[12px] font-medium text-[#111827]">{{ item.suffix }}</span>
+              <span class="text-[22px] font-semibold leading-6 tabular-nums text-ink">{{ item.value }}</span>
+              <span v-if="item.dot" class="h-[5px] w-[5px] rounded-full bg-brand"></span>
+              <span v-if="item.suffix" class="text-[12px] font-medium text-ink">{{ item.suffix }}</span>
             </div>
           </div>
         </div>
       </section>
 
-      <div v-if="errorMessage" class="rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">
+      <div v-if="errorMessage" class="rounded-lg border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger">
         {{ errorMessage }}
       </div>
 
       <section v-if="activeView === 'models' && models.length > 0" class="overflow-hidden ui-card">
         <div class="overflow-x-auto">
-          <div class="grid min-w-[1153px] grid-cols-[48px_205px_400px_225px_133px_142px] border-b border-[#edf0f5] bg-[#f8fafc] text-[13px] font-medium leading-5 text-[#64748b]">
+          <div class="grid min-w-[1153px] grid-cols-[48px_205px_400px_225px_133px_142px] border-b border-line-2 bg-surface-2 text-[13px] font-medium leading-5 text-ink-3">
             <div class="px-3 py-2.5 text-center"> </div>
             <div class="px-3 py-2.5">模型信息</div>
             <div class="px-3 py-2.5">连接配置</div>
@@ -582,22 +601,23 @@ onBeforeUnmount(stopGroupHealthRefresh)
             @refresh-codex="handleRefreshCodex(m)"
           />
 
-          <div v-if="filteredModels.length === 0" class="flex min-w-[1153px] flex-col items-center justify-center py-16 text-[#64748b]">
+          <div v-if="filteredModels.length === 0" class="motion-appear flex min-w-[1153px] flex-col items-center justify-center py-16 text-ink-3">
             <IconModels class="mb-3 h-8 w-8" />
-            <p class="text-sm font-medium text-[#475569]">没有匹配当前筛选条件的模型</p>
+            <p class="text-sm font-medium text-ink-2">没有匹配当前筛选条件的模型</p>
             <p class="mt-1 text-xs">可以清空搜索或切换筛选条件后重试</p>
           </div>
         </div>
       </section>
 
-      <section v-else-if="activeView === 'models'" class="flex flex-col items-center justify-center border border-dashed border-[#cbd5e1] bg-white py-20 text-[#64748b] shadow-sm">
+      <section v-else-if="activeView === 'models'" class="motion-appear flex flex-col items-center justify-center border border-dashed border-line-strong bg-surface py-20 text-ink-3 shadow-sm">
         <IconModels class="mb-3 h-9 w-9" />
-        <p class="text-sm font-medium text-[#475569]">暂无模型</p>
+        <p class="text-sm font-medium text-ink-2">暂无模型</p>
         <p class="mt-1 text-xs">点击「新增模型」开始配置 Kiro 可用的上游模型</p>
       </section>
 
       <ModelGroupsPanel
         v-else
+        class="motion-appear"
         :groups="groups"
         :models="models"
         :health="groupHealth"
@@ -618,53 +638,16 @@ onBeforeUnmount(stopGroupHealthRefresh)
       @cancel="showForm = false"
     />
 
-    <Teleport to="body">
-      <Transition name="motion-fade" appear>
-      <div
-        v-if="showDeleteModal"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
-        @click.self="closeDeleteModal"
-      >
-        <div class="motion-pop-panel w-full max-w-[420px] rounded-2xl border border-[#e5e7eb] bg-white p-5 shadow-2xl">
-          <div class="flex items-start gap-3">
-            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#fef2f2] text-[#dc2626]">
-              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10.3 4.2 2.8 17.5A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.5L13.7 4.2a2 2 0 0 0-3.4 0Z" />
-                <path d="M12 9v4" />
-                <path d="M12 17h.01" />
-              </svg>
-            </div>
-            <div class="min-w-0 flex-1">
-              <h3 class="text-[15px] font-semibold text-[#111827]">删除模型</h3>
-              <p class="mt-2 text-[13px] leading-5 text-[#475569]">
-                确定删除模型「<span class="font-medium text-[#111827]">{{ deleteTargetName }}</span>」？此操作无法撤销。
-              </p>
-            </div>
-          </div>
-
-          <div v-if="deleteError" class="mt-4 rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">
-            {{ deleteError }}
-          </div>
-
-          <div class="mt-5 flex justify-end gap-2">
-            <button
-              class="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-[13px] font-medium text-[#374151] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="deletingModel"
-              @click="closeDeleteModal"
-            >
-              取消
-            </button>
-            <button
-              class="rounded-lg bg-[#dc2626] px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-[#b91c1c] disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="deletingModel"
-              @click="confirmDelete"
-            >
-              {{ deletingModel ? '删除中...' : '确认删除' }}
-            </button>
-          </div>
-        </div>
-      </div>
-      </Transition>
-    </Teleport>
+    <ConfirmDialog
+      :visible="showDeleteModal"
+      title="删除模型"
+      :message="deleteConfirmMessage"
+      confirm-text="确认删除"
+      cancel-text="取消"
+      tone="danger"
+      :busy="deletingModel"
+      @confirm="confirmDelete"
+      @cancel="closeDeleteModal"
+    />
   </div>
 </template>

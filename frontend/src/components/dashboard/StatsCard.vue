@@ -10,17 +10,17 @@ const props = defineProps({
 })
 
 const toneMap = {
-  blue: 'bg-[#eff6ff] text-[#2563eb] border-[#bfdbfe]',
-  green: 'bg-[#ecfdf5] text-[#059669] border-[#a7f3d0]',
-  purple: 'bg-[#f5f3ff] text-[#7c3aed] border-[#ddd6fe]',
-  amber: 'bg-[#fff7ed] text-[#d97706] border-[#fed7aa]',
+  blue: 'bg-primary-tint text-primary-fg border-primary-tint-line',
+  green: 'bg-success-tint text-success-fg border-success-tint-line',
+  purple: 'bg-accent-tint text-accent border-accent-tint-line',
+  amber: 'bg-warning-tint text-warning-fg border-warning-tint-line',
 }
 
 const trendStroke = {
-  blue: '#60a5fa',
-  green: '#34d399',
-  purple: '#a78bfa',
-  amber: '#fbbf24',
+  blue: 'var(--ui-chart-blue)',
+  green: 'var(--ui-chart-green)',
+  purple: 'var(--ui-chart-purple)',
+  amber: 'var(--ui-chart-amber)',
 }
 </script>
 
@@ -32,12 +32,12 @@ const trendStroke = {
       </div>
 
       <div class="min-w-0 self-stretch">
-        <div class="truncate text-[11px] font-medium leading-4 text-[#64748b]">{{ label }}</div>
-        <div class="mt-0.5 text-[22px] font-semibold leading-6 tracking-tight text-[#0f172a] tabular-nums">{{ value }}</div>
+        <div class="truncate text-[11px] font-medium leading-4 text-ink-3">{{ label }}</div>
+        <div class="mt-0.5 text-[22px] font-semibold leading-6 tracking-tight text-ink tabular-nums">{{ value }}</div>
         <div
           v-if="sub"
           class="mt-1 truncate text-[11px] leading-3.5"
-          :class="subTone === 'danger' ? 'text-[#dc2626]' : subTone === 'success' ? 'text-[#059669]' : subTone === 'warning' ? 'text-[#d97706]' : 'text-[#64748b]'"
+          :class="subTone === 'danger' ? 'text-danger' : subTone === 'success' ? 'text-success' : subTone === 'warning' ? 'text-warning' : 'text-ink-3'"
         >
           {{ sub }}
         </div>

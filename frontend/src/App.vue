@@ -58,11 +58,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden bg-white">
+  <div class="flex h-screen flex-col overflow-hidden bg-canvas">
     <ToastHost />
     <TitleBar />
 
-    <div v-if="licenseLoaded && !isAuthorized" class="relative flex flex-1 flex-col bg-[#fbfbfc]">
+    <div v-if="licenseLoaded && !isAuthorized" class="relative flex flex-1 flex-col bg-canvas">
       <div class="absolute left-0 right-0 top-6 px-6">
         <div class="mx-auto max-w-[1320px]">
           <AdvertisementList />
@@ -70,12 +70,12 @@ onMounted(() => {
       </div>
       <div class="flex flex-1 items-center justify-center px-6 pb-16">
         <div class="text-center">
-          <h1 class="text-[34px] font-semibold tracking-tight text-[#111827]">{{ appName }}</h1>
-          <p class="mt-3 text-[14px] leading-6 text-[#6b7280]">{{ unauthorizedText }}</p>
+          <h1 class="text-[34px] font-semibold tracking-tight text-ink">{{ appName }}</h1>
+          <p class="mt-3 text-[14px] leading-6 text-ink-3">{{ unauthorizedText }}</p>
         </div>
       </div>
-      <div class="absolute bottom-6 left-0 right-0 text-center text-[12px] text-[#9ca3af]">
-        设备码：<span class="font-mono text-[#64748b]">{{ machineCode }}</span>
+      <div class="absolute bottom-6 left-0 right-0 text-center text-[12px] text-ink-4">
+        设备码：<span class="font-mono text-ink-3">{{ machineCode }}</span>
       </div>
     </div>
 

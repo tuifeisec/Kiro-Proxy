@@ -41,27 +41,27 @@ const highlighted = computed(() => {
 
 <template>
   <div class="flex flex-col h-full">
-    <div class="flex items-center justify-between px-3 py-1.5 bg-[#f9fafb] border-b border-[#e5e7eb] shrink-0">
-      <span class="text-xs text-[#6b7280]">{{ title }}</span>
+    <div class="flex items-center justify-between px-3 py-1.5 bg-surface-2 border-b border-line shrink-0">
+      <span class="text-xs text-ink-3">{{ title }}</span>
       <button
         v-if="content"
-        class="flex items-center gap-1 text-xs text-[#6b7280] hover:text-[#111827] transition-colors"
+        class="flex items-center gap-1 text-xs text-ink-3 hover:text-ink transition-colors"
         @click="copy(content)"
       >
-        <IconCheck v-if="copied" class="w-3 h-3 text-[#10b981]" />
+        <IconCheck v-if="copied" class="w-3 h-3 text-brand" />
         <IconCopy v-else class="w-3 h-3" />
         {{ copied ? '已复制' : '复制' }}
       </button>
     </div>
 
     <div class="flex-1 overflow-auto p-3">
-      <div v-if="!content" class="text-xs text-[#6b7280] italic">（空）</div>
+      <div v-if="!content" class="text-xs text-ink-3 italic">（空）</div>
 
       <template v-else-if="isLargeContent">
         <pre
-          class="text-xs font-mono text-[#111827] leading-relaxed whitespace-pre-wrap break-all"
+          class="text-xs font-mono text-ink leading-relaxed whitespace-pre-wrap break-all"
         >{{ truncatedContent }}</pre>
-        <div class="mt-2 text-xs text-[#6b7280] italic">
+        <div class="mt-2 text-xs text-ink-3 italic">
           内容已截断，仅显示前 {{ CONTENT_PREVIEW_LIMIT.toLocaleString() }} 字符（共 {{ content.length.toLocaleString() }} 字符）
         </div>
       </template>
@@ -74,7 +74,7 @@ const highlighted = computed(() => {
 
       <pre
         v-else
-        class="text-xs font-mono text-[#111827] leading-relaxed whitespace-pre-wrap break-all"
+        class="text-xs font-mono text-ink leading-relaxed whitespace-pre-wrap break-all"
       >{{ content }}</pre>
     </div>
   </div>

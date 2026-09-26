@@ -1,7 +1,12 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ── 语义化设计 token ─────────────────────────────────────── */
 :root {
+  /* 原生控件主题：告知浏览器按浅色渲染原生部件（下拉面板/勾选框/滚动条），.dark 下翻转 */
+  color-scheme: light;
+
   /* 表面 / 背景 */
   --ui-bg: #f8fafc;
   --ui-surface: #ffffff;
@@ -23,6 +28,71 @@
   --ui-success: #059669;
   --ui-warning: #d97706;
   --ui-danger: #dc2626;
+  /* 语义色的文字档（700 系）：浅色 tint 底上保证对比；*-hover 为按钮加深档 */
+  --ui-success-fg: #047857;
+  --ui-warning-fg: #b45309;
+  --ui-danger-fg: #b91c1c;
+  --ui-danger-hover: #b91c1c;
+
+  /* 主色文字/描边用途（暗色下提亮保证可读）；--ui-primary 仅作按钮/激活底色 */
+  --ui-primary-fg: #2563eb;
+
+  /* 品牌色（logo、导航激活），暗色下提亮一档 */
+  --ui-brand: #10b981;
+
+  /* 中性 hover 底（两档） */
+  --ui-hover: #f1f5f9;
+  --ui-hover-strong: #e2e8f0;
+  /* 边框强调档：边框 hover 加深、虚线占位、未选中控件轨道 */
+  --ui-border-strong: #cbd5e1;
+
+  /* 状态浅底/边框阶：亮色为 Tailwind 50/200 系，暗色为半透明同色系 */
+  --ui-primary-tint: #eff6ff;
+  --ui-primary-tint-border: #bfdbfe;
+  --ui-primary-tint-border-strong: #93c5fd;
+  --ui-primary-tint-ring: #dbeafe;
+  --ui-primary-tint-strong: #dbeafe;
+  --ui-danger-tint: #fef2f2;
+  --ui-danger-tint-border: #fecaca;
+  --ui-success-tint: #ecfdf5;
+  --ui-success-tint-border: #a7f3d0;
+  --ui-warning-tint: #fff7ed;
+  --ui-warning-tint-border: #fed7aa;
+  --ui-warning-tint-border-strong: #fdba74;
+
+  /* 辅助强调色（紫），用于布尔值/紫色系标识 */
+  --ui-accent: #7c3aed;
+  --ui-accent-tint: #f5f3ff;
+  --ui-accent-tint-border: #ddd6fe;
+
+  /* 图表系列色（SVG stroke/fill 用） */
+  --ui-chart-blue: #60a5fa;
+  --ui-chart-green: #34d399;
+  --ui-chart-purple: #a78bfa;
+  --ui-chart-amber: #fbbf24;
+  --ui-chart-cyan: #22d3ee;
+
+  /* JSON 语法高亮五色 */
+  --ui-code-key: #2563eb;
+  --ui-code-string: #059669;
+  --ui-code-number: #d97706;
+  --ui-code-bool: #7c3aed;
+  --ui-code-null: #6b7280;
+
+  /* 反色 tooltip */
+  --ui-tooltip: #0f172a;
+  --ui-tooltip-text: #ffffff;
+
+  /* ── z 级联令牌（弹层以上用 token；sticky 表格的 z-[1]/z-10/z-20 为局部堆叠，保持字面值）──
+     下拉 20 < 模态 50 < 模态内二级 60 < 抽屉 90 < tooltip 100 < toast 110 */
+  --z-modal: 50;
+  --z-modal-nested: 60;
+  --z-drawer: 90;
+  --z-tooltip: 100;
+  --z-toast: 110;
+
+  /* 原生 select 自绘箭头（appearance 接管后浏览器默认箭头被移除） */
+  --ui-select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' fill='none' stroke='%2364748b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* 动效令牌：时长三档 + 统一缓动；所有动效只用 transform / opacity（合成器属性，不触发布局重排） */
   --dur-fast: 120ms;         /* 悬停反馈、淡出退出 */
@@ -49,6 +119,16 @@
 
 html, body, #app { width: 100%; height: 100%; overflow: hidden; }
 
+/* 无障碍：偏好减弱动效时令牌时长归零——token 纪律回报，一处覆盖全站所有引用方 */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0.01ms;
+    --dur-base: 0.01ms;
+    --dur-slow: 0.01ms;
+  }
+}
+html { background: var(--ui-bg); }
+
 body {
   margin: 0;
   font-family: -apple-system, "SF Pro Text", "PingFang SC",
@@ -67,7 +147,7 @@ body {
 ::-webkit-scrollbar-thumb {
   background: var(--ui-border);
   border-radius: 3px;
-  transition: background-color var(--dur-fast) ease-out;
+  transition: background-color var(--dur-fast) var(--ease-out-quart);
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--ui-text-tertiary); }
 
@@ -88,6 +168,41 @@ body {
     transition: background-color var(--dur-fast) var(--ease-out-quart);
   }
 
+  /* 按压反馈：只给实体按钮一个克制的缩放；列表行/菜单行不做（保持即时背景填充） */
+  button:not(:disabled):active {
+    transform: scale(0.98);
+  }
+
+  /* 禁用态光标全局基线：可交互预期落空时明确"不可按" */
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  /* 原生 select 接管：移除浏览器默认箭头（平台样式不一致、暗色下突兀），
+     统一为主题自绘箭头。!important 为压过各层 .ui-control 的 background 简写
+     与工具类 px-*（与下方 border-radius 先例同场景：基础层必须赢过工具类） */
+  select {
+    appearance: none;
+    background-image: var(--ui-select-arrow);
+    background-repeat: no-repeat !important;
+    background-position: right 0.5rem center !important;
+    background-size: 12px 12px !important;
+    padding-right: 1.9rem !important;
+  }
+
+  /* 字段 hover 先行半步（border 提前到强调档），focus 再增强为主色——
+     鼠标点击聚焦（:focus 而非 :focus-visible）也有可见反馈 */
+  select:hover,
+  input:not([type='checkbox']):not([type='radio']):hover,
+  textarea:hover {
+    border-color: var(--ui-border-strong);
+  }
+  select:focus,
+  input:not([type='checkbox']):not([type='radio']):focus,
+  textarea:focus {
+    border-color: var(--ui-primary-tint-border-strong);
+  }
+
   button:focus-visible,
   a:focus-visible,
   input:focus-visible,
@@ -95,7 +210,7 @@ body {
   textarea:focus-visible,
   [role='button']:focus-visible {
     /* 用 outline 画环：不与 utilities 层的 shadow-* 工具类竞争 box-shadow 属性 */
-    outline: 2px solid #93c5fd;
+    outline: 2px solid var(--ui-primary-tint-border-strong);
     outline-offset: 2px;
   }
 }
@@ -103,7 +218,34 @@ body {
 /* 主内容滚动容器使用：滚动条出现/消失不再挤压内容宽度 */
 .scroll-stable { scrollbar-gutter: stable; }
 
-/* ── 公共视觉类 ───────────────────────────────────────────── */
+  /* 状态容器（空态/错误/加载占位/视图分区）插入时的轻淡入：
+     仅一次性出现型容器使用；高频刷新的列表主体禁用（会反复闪动） */
+  .motion-appear {
+    animation: ui-appear var(--dur-base) var(--ease-out-quart) both;
+  }
+  @keyframes ui-appear {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .motion-appear { animation: none; }
+  }
+
+  /* 无确定进度指示：滑块循环（呼吸式 pulse 读作"等待"，移动读作"进行中"） */
+  .ui-progress-indeterminate {
+    animation: ui-indeterminate 1.2s ease-in-out infinite;
+  }
+  @keyframes ui-indeterminate {
+    from { transform: translateX(-120%); }
+    to { transform: translateX(420%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ui-progress-indeterminate { animation: none; }
+  }
+
+  /* ── 公共视觉类 ───────────────────────────────────────────── */
 @layer components {
   .ui-page-shell {
   min-height: 100%;
@@ -154,9 +296,9 @@ body {
   }
   .ui-primary-button:hover { background: var(--ui-primary-hover); }
 
-  .ui-status-success { color: var(--ui-success); background: #ecfdf5; }
-  .ui-status-warning { color: var(--ui-warning); background: #fffbeb; }
-  .ui-status-danger  { color: var(--ui-danger);  background: #fef2f2; }
+  .ui-status-success { color: var(--ui-success); background: var(--ui-success-tint); }
+  .ui-status-warning { color: var(--ui-warning); background: var(--ui-warning-tint); }
+  .ui-status-danger  { color: var(--ui-danger);  background: var(--ui-danger-tint); }
 
   /* ── 弹层动效基类（配合 Vue <Transition>，仅 transition transform / opacity） ── */
 
@@ -258,4 +400,142 @@ body {
       transition: none;
     }
   }
+}
+
+/* ── 暗黑主题：仅重定义变量，全站组件经 var 引用自动翻转 ─────────── */
+.dark {
+  color-scheme: dark;
+  --ui-bg: #0f172a;
+  --ui-surface: #1e293b;
+  --ui-surface-subtle: #16203a;
+
+  --ui-border: #334155;
+  --ui-border-subtle: #24334d;
+
+  --ui-text: #f1f5f9;
+  --ui-text-secondary: #cbd5e1;
+  --ui-text-muted: #94a3b8;
+  --ui-text-tertiary: #64748b;
+
+  --ui-primary: #2563eb;
+  --ui-primary-hover: #3b82f6;
+  --ui-primary-fg: #60a5fa;
+  --ui-brand: #34d399;
+  --ui-success: #34d399;
+  --ui-warning: #fbbf24;
+  --ui-danger: #f87171;
+  --ui-success-fg: #34d399;
+  --ui-warning-fg: #fbbf24;
+  --ui-danger-fg: #f87171;
+  --ui-danger-hover: #dc2626;
+
+  --ui-hover: rgb(148 163 184 / 0.12);
+  --ui-hover-strong: rgb(148 163 184 / 0.2);
+  --ui-border-strong: #475569;
+
+  --ui-primary-tint: rgb(59 130 246 / 0.13);
+  --ui-primary-tint-border: rgb(96 165 250 / 0.38);
+  --ui-primary-tint-border-strong: rgb(96 165 250 / 0.6);
+  --ui-primary-tint-ring: rgb(59 130 246 / 0.25);
+  --ui-primary-tint-strong: rgb(59 130 246 / 0.22);
+  --ui-danger-tint: rgb(248 113 113 / 0.12);
+  --ui-danger-tint-border: rgb(248 113 113 / 0.35);
+  --ui-success-tint: rgb(52 211 153 / 0.12);
+  --ui-success-tint-border: rgb(52 211 153 / 0.35);
+  --ui-warning-tint: rgb(251 191 36 / 0.12);
+  --ui-warning-tint-border: rgb(251 191 36 / 0.35);
+  --ui-warning-tint-border-strong: rgb(251 191 36 / 0.5);
+
+  --ui-accent: #a78bfa;
+  --ui-accent-tint: rgb(167 139 250 / 0.13);
+  --ui-accent-tint-border: rgb(167 139 250 / 0.35);
+
+  --ui-chart-blue: #60a5fa;
+  --ui-chart-green: #34d399;
+  --ui-chart-purple: #a78bfa;
+  --ui-chart-amber: #fbbf24;
+  --ui-chart-cyan: #22d3ee;
+
+  --ui-code-key: #93c5fd;
+  --ui-code-string: #6ee7b7;
+  --ui-code-number: #fcd34d;
+  --ui-code-bool: #c4b5fd;
+  --ui-code-null: #94a3b8;
+
+  --ui-tooltip: #e2e8f0;
+  --ui-tooltip-text: #0f172a;
+
+  --ui-select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  --ui-shadow-card: 0 1px 2px rgb(0 0 0 / 0.35);
+  --ui-shadow-popover: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+
+/* ── 语义 token → Tailwind 工具类注册表（inline：工具类直接内联 var 引用）──
+   组件一律使用这些语义类（bg-surface / text-ink / border-line …）而非 hex，
+   主题切换时经 .dark 重定义自动翻转。 */
+@theme inline {
+  --color-canvas: var(--ui-bg);
+  --color-surface: var(--ui-surface);
+  --color-surface-2: var(--ui-surface-subtle);
+  --color-line: var(--ui-border);
+  --color-line-2: var(--ui-border-subtle);
+  --color-line-strong: var(--ui-border-strong);
+  --color-ink: var(--ui-text);
+  --color-ink-2: var(--ui-text-secondary);
+  --color-ink-3: var(--ui-text-muted);
+  --color-ink-4: var(--ui-text-tertiary);
+  --color-primary: var(--ui-primary);
+  --color-primary-hover: var(--ui-primary-hover);
+  --color-primary-fg: var(--ui-primary-fg);
+  --color-brand: var(--ui-brand);
+  --color-success: var(--ui-success);
+  --color-success-fg: var(--ui-success-fg);
+  --color-warning: var(--ui-warning);
+  --color-warning-fg: var(--ui-warning-fg);
+  --color-danger: var(--ui-danger);
+  --color-danger-fg: var(--ui-danger-fg);
+  --color-danger-hover: var(--ui-danger-hover);
+  --color-accent: var(--ui-accent);
+  --color-hover: var(--ui-hover);
+  --color-hover-strong: var(--ui-hover-strong);
+  --color-primary-tint: var(--ui-primary-tint);
+  --color-primary-tint-line: var(--ui-primary-tint-border);
+  --color-primary-tint-line-strong: var(--ui-primary-tint-border-strong);
+  --color-primary-tint-strong: var(--ui-primary-tint-strong);
+  --color-primary-ring: var(--ui-primary-tint-ring);
+  --color-danger-tint: var(--ui-danger-tint);
+  --color-danger-tint-line: var(--ui-danger-tint-border);
+  --color-success-tint: var(--ui-success-tint);
+  --color-success-tint-line: var(--ui-success-tint-border);
+  --color-warning-tint: var(--ui-warning-tint);
+  --color-warning-tint-line: var(--ui-warning-tint-border);
+  --color-warning-tint-line-strong: var(--ui-warning-tint-border-strong);
+  --color-accent-tint: var(--ui-accent-tint);
+  --color-accent-tint-line: var(--ui-accent-tint-border);
+  --color-code-key: var(--ui-code-key);
+  --color-code-string: var(--ui-code-string);
+  --color-code-number: var(--ui-code-number);
+  --color-code-bool: var(--ui-code-bool);
+  --color-code-null: var(--ui-code-null);
+  --color-chart-cyan: var(--ui-chart-cyan);
+  --color-tooltip: var(--ui-tooltip);
+  --color-tooltip-text: var(--ui-tooltip-text);
+  --shadow-card: var(--ui-shadow-card);
+  --shadow-popover: var(--ui-shadow-popover);
+}
+
+/* ── 主题切换过渡：短暂窗口内全站颜色平滑过渡（仅颜色属性，不含布局/transform）──
+   由 useTheme 在切换时加/移除 .theme-switching；prefers-reduced-motion 下由 JS 跳过。 */
+html.theme-switching,
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition:
+    background-color var(--dur-base) var(--ease-out-quart),
+    color var(--dur-base) var(--ease-out-quart),
+    border-color var(--dur-base) var(--ease-out-quart),
+    fill var(--dur-base) var(--ease-out-quart),
+    stroke var(--dur-base) var(--ease-out-quart),
+    box-shadow var(--dur-base) var(--ease-out-quart) !important;
 }

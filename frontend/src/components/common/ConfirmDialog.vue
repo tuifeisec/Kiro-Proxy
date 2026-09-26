@@ -69,7 +69,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
     <Transition name="motion-fade" appear>
       <div
         v-if="visible"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
+        class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
         @click.self="cancel"
       >
         <div
@@ -77,13 +77,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-dialog-title"
-          class="motion-pop-panel w-full max-w-[420px] bg-white p-5"
+          class="motion-pop-panel w-full max-w-[420px] bg-surface p-5"
           :style="{ borderRadius: 'var(--ui-radius-modal)', boxShadow: 'var(--ui-shadow-popover)', border: '1px solid var(--ui-border)' }"
         >
         <div class="flex items-start gap-3">
           <div
             class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
-            :class="tone === 'danger' ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#eff6ff] text-[#2563eb]'"
+            :class="tone === 'danger' ? 'bg-danger-tint text-danger-fg' : 'bg-primary-tint text-primary-fg'"
           >
             <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 9v4" />
@@ -92,15 +92,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
             </svg>
           </div>
           <div class="min-w-0 flex-1">
-            <h3 id="confirm-dialog-title" class="text-[15px] font-semibold text-[#111827]">{{ title }}</h3>
-            <p class="mt-2 whitespace-pre-line text-[13px] leading-5 text-[#475569]">{{ message }}</p>
+            <h3 id="confirm-dialog-title" class="text-[15px] font-semibold text-ink">{{ title }}</h3>
+            <p class="mt-2 whitespace-pre-line text-[13px] leading-5 text-ink-2">{{ message }}</p>
           </div>
         </div>
 
         <div class="mt-5 flex justify-end gap-2">
           <button
             ref="cancelBtnRef"
-            class="ui-control bg-white px-4 py-2 text-[13px] font-medium text-[#374151] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-50"
+            class="ui-control bg-surface px-4 py-2 text-[13px] font-medium text-ink-2 transition hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="busy"
             @click="cancel"
           >
@@ -108,7 +108,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
           </button>
           <button
             class="ui-primary-button px-4 py-2 text-[13px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
-            :class="tone === 'danger' ? '' : ''"
+            :class="tone === 'danger' ? 'hover:opacity-90' : ''"
             :style="tone === 'danger' ? { background: 'var(--ui-danger)' } : {}"
             :disabled="busy"
             @click="confirm"

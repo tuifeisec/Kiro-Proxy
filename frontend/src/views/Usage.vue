@@ -165,10 +165,10 @@ const summaryCards = computed(() => [
 ])
 
 const toneMap = {
-  blue: 'bg-[#eff6ff] text-[#2563eb] border-[#bfdbfe]',
-  green: 'bg-[#ecfdf5] text-[#059669] border-[#a7f3d0]',
-  purple: 'bg-[#f5f3ff] text-[#7c3aed] border-[#ddd6fe]',
-  amber: 'bg-[#fff7ed] text-[#d97706] border-[#fed7aa]',
+  blue: 'bg-primary-tint text-primary-fg border-primary-tint-line',
+  green: 'bg-success-tint text-success-fg border-success-tint-line',
+  purple: 'bg-accent-tint text-accent border-accent-tint-line',
+  amber: 'bg-warning-tint text-warning-fg border-warning-tint-line',
 }
 
 const dailyRows = computed(() => {
@@ -230,10 +230,10 @@ function logTime(entry) {
 }
 
 function logLevelClass(level) {
-  if (level === 'error') return 'bg-[#fef2f2] text-[#dc2626] ring-[#fecaca]'
-  if (level === 'warn') return 'bg-[#fff7ed] text-[#d97706] ring-[#fed7aa]'
-  if (level === 'debug') return 'bg-[#f8fafc] text-[#64748b] ring-[#e2e8f0]'
-  return 'bg-[#eff6ff] text-[#2563eb] ring-[#bfdbfe]'
+  if (level === 'error') return 'bg-danger-tint text-danger-fg ring-danger-tint-line'
+  if (level === 'warn') return 'bg-warning-tint text-warning-fg ring-warning-tint-line'
+  if (level === 'debug') return 'bg-surface-2 text-ink-3 ring-hover-strong'
+  return 'bg-primary-tint text-primary-fg ring-primary-ring'
 }
 
 function logMetaLine(entry) {
@@ -278,25 +278,25 @@ onBeforeUnmount(() => {
     <div class="ui-page-inner space-y-3">
       <header class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 class="text-[22px] font-semibold tracking-tight text-[#0f172a]">用量明细</h1>
-          <p class="mt-0.5 text-[12px] text-[#64748b]">查看每日、模型维度的请求量、Token、缓存命中和 Credits 消耗。</p>
+          <h1 class="text-[22px] font-semibold tracking-tight text-ink">用量明细</h1>
+          <p class="mt-0.5 text-[12px] text-ink-3">查看每日、模型维度的请求量、Token、缓存命中和 Credits 消耗。</p>
         </div>
         <div class="inline-flex items-center gap-1 ui-card p-1">
           <button
             v-for="option in quickRanges"
             :key="option.key"
             class="ui-control-h rounded-md px-2.5 text-[12px] font-medium transition"
-            :class="activeRange === option.key ? 'bg-[#1677ff] text-white shadow-sm' : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#0f172a]'"
+            :class="activeRange === option.key ? 'bg-primary text-white shadow-sm' : 'text-ink-3 hover:bg-hover hover:text-ink'"
             @click="applyQuickRange(option)"
           >
             {{ option.label }}
           </button>
-          <span class="mx-1 h-4 w-px bg-[#e2e8f0]"></span>
-          <input v-model="startDate" type="date" class="ui-control-h ui-control px-2 text-[12px] text-[#475569] outline-none focus:border-[#93c5fd]" @change="activeRange = 'custom'" />
-          <span class="text-[12px] text-[#94a3b8]">至</span>
-          <input v-model="endDate" type="date" class="ui-control-h ui-control px-2 text-[12px] text-[#475569] outline-none focus:border-[#93c5fd]" @change="activeRange = 'custom'" />
+          <span class="mx-1 h-4 w-px bg-hover-strong"></span>
+          <input v-model="startDate" type="date" class="ui-control-h ui-control px-2 text-[12px] text-ink-2 outline-none focus:border-primary-tint-line-strong" @change="activeRange = 'custom'" />
+          <span class="text-[12px] text-ink-4">至</span>
+          <input v-model="endDate" type="date" class="ui-control-h ui-control px-2 text-[12px] text-ink-2 outline-none focus:border-primary-tint-line-strong" @change="activeRange = 'custom'" />
           <button
-            class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc] disabled:opacity-60"
+            class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-ink-2 hover:bg-hover disabled:opacity-60"
             :disabled="loading"
             @click="refresh"
           >
@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <p v-if="validationError || error" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">用量明细加载失败：{{ validationError || error }}</p>
+      <p v-if="validationError || error" class="rounded-xl border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger">用量明细加载失败：{{ validationError || error }}</p>
 
       <section class="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
         <div v-for="card in summaryCards" :key="card.label" class="ui-card px-4 py-3">
@@ -315,32 +315,32 @@ onBeforeUnmount(() => {
               <component :is="card.icon" class="h-4 w-4" />
             </div>
             <div class="min-w-0">
-              <div class="truncate text-[11px] font-medium leading-4 text-[#64748b]">{{ card.label }}</div>
-              <div class="mt-0.5 text-[22px] font-semibold leading-6 tracking-tight text-[#0f172a] tabular-nums">{{ card.value }}</div>
-              <div class="mt-1 truncate text-[11px] leading-3.5 text-[#64748b]">{{ card.sub }}</div>
+              <div class="truncate text-[11px] font-medium leading-4 text-ink-3">{{ card.label }}</div>
+              <div class="mt-0.5 text-[22px] font-semibold leading-6 tracking-tight text-ink tabular-nums">{{ card.value }}</div>
+              <div class="mt-1 truncate text-[11px] leading-3.5 text-ink-3">{{ card.sub }}</div>
             </div>
           </div>
         </div>
       </section>
 
       <section class="relative overflow-hidden ui-card">
-        <div class="flex items-center justify-between border-b border-[#edf0f5] bg-[#fbfdff] px-3 py-2">
+        <div class="flex items-center justify-between border-b border-line-2 bg-surface-2 px-3 py-2">
           <div>
-            <h2 class="text-[14px] font-semibold text-[#0f172a]">每日明细</h2>
-            <p class="mt-0.5 text-[12px] text-[#64748b]">按日期聚合全部模型的使用情况</p>
+            <h2 class="text-[14px] font-semibold text-ink">每日明细</h2>
+            <p class="mt-0.5 text-[12px] text-ink-3">按日期聚合全部模型的使用情况</p>
           </div>
-          <span class="rounded-full bg-white px-2.5 py-1 text-[11px] text-[#94a3b8] ring-1 ring-[#edf0f5]">范围：{{ range.start || startDate }} ~ {{ range.end || endDate }}</span>
+          <span class="rounded-full bg-surface px-2.5 py-1 text-[11px] text-ink-4 ring-1 ring-line-2">范围：{{ range.start || startDate }} ~ {{ range.end || endDate }}</span>
         </div>
 
-        <div v-if="loading" class="absolute inset-x-0 top-[49px] z-10 h-0.5 overflow-hidden bg-[#eff6ff]">
-          <div class="h-full w-1/3 animate-pulse rounded-full bg-[#1677ff]"></div>
+        <div v-if="loading" class="absolute inset-x-0 top-[49px] z-10 h-0.5 overflow-hidden bg-primary-tint">
+          <div class="h-full w-1/3 rounded-full bg-primary ui-progress-indeterminate"></div>
         </div>
-        <div v-if="dailyRows.length === 0 && !loading" class="py-12 text-center text-[13px] text-[#64748b]">该时间段无数据</div>
-        <div v-else class="overflow-x-auto px-3 pb-3 pt-2">
+        <div v-if="dailyRows.length === 0 && !loading" class="motion-appear py-12 text-center text-[13px] text-ink-3">该时间段无数据</div>
+        <div v-else class="overflow-x-auto pb-3 pt-2">
           <table class="w-full min-w-[900px] text-[12px]">
             <thead>
-              <tr class="border-b border-[#edf0f5] bg-[#fbfdff] text-left text-[#64748b]">
-                <th class="sticky left-0 z-[1] bg-[#fbfdff] py-2 pr-3 font-medium">日期</th>
+              <tr class="border-b border-line-2 bg-surface-2 text-left text-ink-3">
+                <th class="sticky left-0 z-[1] bg-surface-2 py-2 pl-3 pr-3 font-medium">日期</th>
                 <th class="py-2 pr-3 text-right font-medium">模型数</th>
                 <th class="py-2 pr-3 text-right font-medium">请求数</th>
                 <th class="py-2 pr-3 text-right font-medium">错误</th>
@@ -348,50 +348,53 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
                 <th class="py-2 pr-3 text-right font-medium">Credits</th>
-                <th class="py-2 text-right font-medium">命中率</th>
+                <th class="py-2 pr-3 text-right font-medium">命中率</th>
               </tr>
             </thead>
             <tbody>
               <tr
                 v-for="row in dailyRows"
                 :key="row.date"
-                class="cursor-pointer border-b border-[#f1f5f9] bg-white last:border-b-0 hover:bg-[#fbfdff]"
-                :class="selectedDate === row.date ? 'bg-[#eff6ff]' : ''"
+                class="cursor-pointer border-b border-line-2 bg-surface outline-none last:border-b-0 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-tint-line-strong"
+                :class="selectedDate === row.date ? 'bg-primary-tint hover:bg-primary-tint-strong' : 'hover:bg-hover'"
+                tabindex="0"
                 @click="selectDate(row.date)"
+                @keydown.enter.prevent="selectDate(row.date)"
+                @keydown.space.prevent="selectDate(row.date)"
               >
-                <td class="sticky left-0 z-[1] bg-inherit py-2 pr-3 font-medium text-[#0f172a]"><span class="rounded-md px-2 py-1 font-mono text-[11px] ring-1" :class="selectedDate === row.date ? 'bg-[#1677ff] text-white ring-[#1677ff]' : 'bg-[#f8fafc] ring-[#e2e8f0]'">{{ row.date }}</span></td>
-                <td class="py-2 pr-3 text-right text-[#334155]"><span class="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[11px]">{{ row.models.size }}</span></td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ row.requests.toLocaleString() }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#f8fafc] text-[#94a3b8]'">{{ row.errors }}</span></td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.input) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.output) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#059669]">{{ formatNum(row.cacheRead) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#d97706]">{{ formatCredits(row.credits) }}</td>
-                <td class="py-2 text-right tabular-nums"><span class="rounded-full bg-[#f0fdf4] px-2 py-0.5 text-[11px] text-[#059669]">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
+                <td class="sticky left-0 z-[1] bg-inherit py-2 pl-3 pr-3 font-medium text-ink"><span class="rounded-md px-2 py-1 font-mono text-[11px] ring-1" :class="selectedDate === row.date ? 'bg-primary text-white ring-primary' : 'bg-surface-2 ring-hover-strong'">{{ row.date }}</span></td>
+                <td class="py-2 pr-3 text-right text-ink-2"><span class="rounded-full bg-hover px-2 py-0.5 text-[11px]">{{ row.models.size }}</span></td>
+                <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ row.requests.toLocaleString() }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-danger-tint text-danger-fg' : 'bg-surface-2 text-ink-4'">{{ row.errors }}</span></td>
+                <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.input) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.output) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-success">{{ formatNum(row.cacheRead) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatCredits(row.credits) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full bg-success-tint px-2 py-0.5 text-[11px] text-success">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
 
-      <section v-if="selectedDate" class="overflow-hidden ui-card border-[#bfdbfe]">
-        <div class="flex items-center justify-between border-b border-[#dbeafe] bg-[#eff6ff] px-3 py-2">
+      <section v-if="selectedDate" class="overflow-hidden ui-card border-primary-tint-line">
+        <div class="flex items-center justify-between border-b border-primary-tint-line bg-primary-tint px-3 py-2">
           <div>
-            <h2 class="text-[14px] font-semibold text-[#1d4ed8]">{{ selectedDate }} 日志详情</h2>
-            <p class="mt-0.5 text-[12px] text-[#64748b]">上方保留按模型统计，下方展示该统计日期对应 JSONL 真实请求日志</p>
+            <h2 class="text-[14px] font-semibold text-primary-fg">{{ selectedDate }} 日志详情</h2>
+            <p class="mt-0.5 text-[12px] text-ink-3">上方保留按模型统计，下方展示该统计日期对应 JSONL 真实请求日志</p>
           </div>
-          <button class="h-7 rounded-lg border border-[#bfdbfe] bg-white px-2.5 text-[12px] font-medium text-[#2563eb] hover:bg-[#f8fafc]" @click="closeSelectedDate">收起</button>
+          <button class="h-7 rounded-lg border border-primary-tint-line bg-surface px-2.5 text-[12px] font-medium text-primary-fg hover:bg-hover" @click="closeSelectedDate">收起</button>
         </div>
         <div class="space-y-3 px-3 pb-3 pt-2">
-          <div class="overflow-x-auto rounded-lg border border-[#dbeafe]">
-            <div class="flex items-center justify-between border-b border-[#dbeafe] bg-[#f8fbff] px-3 py-2">
-              <h3 class="text-[12px] font-semibold text-[#1d4ed8]">模型明细</h3>
-              <span class="text-[11px] text-[#64748b]">{{ selectedDateRows.length }} 个模型</span>
+          <div class="overflow-x-auto rounded-lg border border-primary-tint-line">
+            <div class="flex items-center justify-between border-b border-primary-tint-line bg-surface-2 px-3 py-2">
+              <h3 class="text-[12px] font-semibold text-primary-fg">模型明细</h3>
+              <span class="text-[11px] text-ink-3">{{ selectedDateRows.length }} 个模型</span>
             </div>
             <table class="w-full min-w-[820px] text-[12px]">
               <thead>
-                <tr class="border-b border-[#dbeafe] bg-white text-left text-[#64748b]">
-                  <th class="sticky left-0 z-[1] bg-white py-2 pl-3 pr-3 font-medium">模型</th>
+                <tr class="border-b border-primary-tint-line bg-surface text-left text-ink-3">
+                  <th class="sticky left-0 z-[1] bg-surface py-2 pl-3 pr-3 font-medium">模型</th>
                   <th class="py-2 pr-3 text-right font-medium">请求数</th>
                   <th class="py-2 pr-3 text-right font-medium">错误</th>
                   <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
@@ -402,36 +405,36 @@ onBeforeUnmount(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in selectedDateRows" :key="row.model" class="border-b border-[#f1f5f9] bg-white last:border-b-0 hover:bg-[#fbfdff]">
-                  <td class="sticky left-0 z-[1] max-w-[320px] truncate bg-inherit py-2 pl-3 pr-3 font-medium text-[#0f172a]"><span class="rounded-md bg-white px-2 py-1 font-mono text-[11px] ring-1 ring-[#dbeafe]">{{ row.model }}</span></td>
-                  <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ row.requests.toLocaleString() }}</td>
-                  <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#f8fafc] text-[#94a3b8]'">{{ row.errors }}</span></td>
-                  <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.input) }}</td>
-                  <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.output) }}</td>
-                  <td class="py-2 pr-3 text-right tabular-nums text-[#059669]">{{ formatNum(row.cacheRead) }}</td>
-                  <td class="py-2 pr-3 text-right tabular-nums text-[#d97706]">{{ formatCredits(row.credits) }}</td>
-                  <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full bg-[#f0fdf4] px-2 py-0.5 text-[11px] text-[#059669]">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
+                <tr v-for="row in selectedDateRows" :key="row.model" class="border-b border-line-2 bg-surface last:border-b-0 hover:bg-hover">
+                  <td class="sticky left-0 z-[1] max-w-[320px] truncate bg-inherit py-2 pl-3 pr-3 font-medium text-ink"><span class="rounded-md bg-surface px-2 py-1 font-mono text-[11px] ring-1 ring-primary-ring">{{ row.model }}</span></td>
+                  <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ row.requests.toLocaleString() }}</td>
+                  <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-danger-tint text-danger-fg' : 'bg-surface-2 text-ink-4'">{{ row.errors }}</span></td>
+                  <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.input) }}</td>
+                  <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.output) }}</td>
+                  <td class="py-2 pr-3 text-right tabular-nums text-success">{{ formatNum(row.cacheRead) }}</td>
+                  <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatCredits(row.credits) }}</td>
+                  <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full bg-success-tint px-2 py-0.5 text-[11px] text-success">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <div class="overflow-hidden rounded-lg border border-[#dbeafe]">
-            <div class="flex items-center justify-between border-b border-[#dbeafe] bg-[#f8fbff] px-3 py-2">
+          <div class="overflow-hidden rounded-lg border border-primary-tint-line">
+            <div class="flex items-center justify-between border-b border-primary-tint-line bg-surface-2 px-3 py-2">
               <div>
-                <h3 class="text-[12px] font-semibold text-[#1d4ed8]">请求日志</h3>
-                <p class="mt-0.5 text-[11px] text-[#64748b]">按 JSONL 文件读取，最多显示最近 200 条</p>
+                <h3 class="text-[12px] font-semibold text-primary-fg">请求日志</h3>
+                <p class="mt-0.5 text-[11px] text-ink-3">按 JSONL 文件读取，最多显示最近 200 条</p>
               </div>
-              <span class="rounded-full bg-white px-2 py-0.5 text-[11px] text-[#64748b] ring-1 ring-[#dbeafe]">{{ logsLoading ? '读取中' : `${selectedDateLogs.length} 条` }}</span>
+              <span class="rounded-full bg-surface px-2 py-0.5 text-[11px] text-ink-3 ring-1 ring-primary-ring">{{ logsLoading ? '读取中' : `${selectedDateLogs.length} 条` }}</span>
             </div>
 
-            <div v-if="logsLoading" class="py-8 text-center text-[12px] text-[#64748b]">正在读取日志...</div>
-            <div v-else-if="logsError" class="m-3 rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">日志加载失败：{{ logsError }}</div>
-            <div v-else-if="selectedDateLogs.length === 0" class="py-8 text-center text-[12px] text-[#64748b]">该日期暂无可展示日志</div>
+            <div v-if="logsLoading" class="motion-appear py-8 text-center text-[12px] text-ink-3">正在读取日志...</div>
+            <div v-else-if="logsError" class="motion-appear m-3 rounded-lg border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger">日志加载失败：{{ logsError }}</div>
+            <div v-else-if="selectedDateLogs.length === 0" class="motion-appear py-8 text-center text-[12px] text-ink-3">该日期暂无可展示日志</div>
             <div v-else class="max-h-[360px] overflow-auto">
               <table class="w-full min-w-[980px] text-[12px]">
                 <thead class="sticky top-0 z-10">
-                  <tr class="border-b border-[#dbeafe] bg-white text-left text-[#64748b]">
+                  <tr class="border-b border-primary-tint-line bg-surface text-left text-ink-3">
                     <th class="py-2 pl-3 pr-3 font-medium">时间</th>
                     <th class="py-2 pr-3 font-medium">级别</th>
                     <th class="py-2 pr-3 font-medium">分类</th>
@@ -441,13 +444,13 @@ onBeforeUnmount(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="entry in selectedDateLogs" :key="entry.id" class="border-b border-[#f1f5f9] last:border-b-0 hover:bg-[#fbfdff]">
-                    <td class="whitespace-nowrap py-2 pl-3 pr-3 font-mono text-[11px] text-[#475569]" :title="entry.full_time || entry.time">{{ logTime(entry) }}</td>
+                  <tr v-for="entry in selectedDateLogs" :key="entry.id" class="border-b border-line-2 last:border-b-0 hover:bg-hover">
+                    <td class="whitespace-nowrap py-2 pl-3 pr-3 font-mono text-[11px] text-ink-2" :title="entry.full_time || entry.time">{{ logTime(entry) }}</td>
                     <td class="py-2 pr-3"><span class="rounded-full px-2 py-0.5 text-[11px] font-medium ring-1" :class="logLevelClass(entry.level)">{{ entry.level || 'info' }}</span></td>
-                    <td class="py-2 pr-3"><span class="rounded-md bg-[#f8fafc] px-2 py-1 font-mono text-[11px] text-[#475569] ring-1 ring-[#e2e8f0]">{{ entry.category || '—' }}</span></td>
-                    <td class="max-w-[300px] truncate py-2 pr-3 font-medium text-[#0f172a]">{{ logTextPreview(entry.message, 160) || '—' }}</td>
-                    <td class="max-w-[300px] truncate py-2 pr-3 text-[11px] text-[#64748b]" :title="logMetaLine(entry)">{{ logMetaLine(entry) || '—' }}</td>
-                    <td class="max-w-[280px] truncate py-2 pr-3 text-[11px] text-[#94a3b8]">{{ logTextPreview(entry.detail, 220) || '—' }}</td>
+                    <td class="py-2 pr-3"><span class="rounded-md bg-surface-2 px-2 py-1 font-mono text-[11px] text-ink-2 ring-1 ring-hover-strong">{{ entry.category || '—' }}</span></td>
+                    <td class="max-w-[300px] truncate py-2 pr-3 font-medium text-ink">{{ logTextPreview(entry.message, 160) || '—' }}</td>
+                    <td class="max-w-[300px] truncate py-2 pr-3 text-[11px] text-ink-3" :title="logMetaLine(entry)">{{ logMetaLine(entry) || '—' }}</td>
+                    <td class="max-w-[280px] truncate py-2 pr-3 text-[11px] text-ink-4">{{ logTextPreview(entry.detail, 220) || '—' }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -457,15 +460,15 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="overflow-hidden ui-card">
-        <div class="border-b border-[#edf0f5] bg-[#fbfdff] px-3 py-2">
-          <h2 class="text-[14px] font-semibold text-[#0f172a]">模型汇总</h2>
-          <p class="mt-0.5 text-[12px] text-[#64748b]">按模型聚合当前时间范围内的用量</p>
+        <div class="border-b border-line-2 bg-surface-2 px-3 py-2">
+          <h2 class="text-[14px] font-semibold text-ink">模型汇总</h2>
+          <p class="mt-0.5 text-[12px] text-ink-3">按模型聚合当前时间范围内的用量</p>
         </div>
-        <div class="overflow-x-auto px-3 pb-3 pt-2">
+        <div class="overflow-x-auto pb-3 pt-2">
           <table class="w-full min-w-[900px] text-[12px]">
             <thead>
-              <tr class="border-b border-[#edf0f5] bg-[#fbfdff] text-left text-[#64748b]">
-                <th class="sticky left-0 z-[1] bg-[#fbfdff] py-2 pr-3 font-medium">模型</th>
+              <tr class="border-b border-line-2 bg-surface-2 text-left text-ink-3">
+                <th class="sticky left-0 z-[1] bg-surface-2 py-2 pl-3 pr-3 font-medium">模型</th>
                 <th class="py-2 pr-3 text-right font-medium">天数</th>
                 <th class="py-2 pr-3 text-right font-medium">请求数</th>
                 <th class="py-2 pr-3 text-right font-medium">错误</th>
@@ -473,20 +476,20 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
                 <th class="py-2 pr-3 text-right font-medium">Credits</th>
-                <th class="py-2 text-right font-medium">命中率</th>
+                <th class="py-2 pr-3 text-right font-medium">命中率</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in modelRows" :key="row.model" class="border-b border-[#f1f5f9] bg-white last:border-b-0 hover:bg-[#fbfdff]">
-                <td class="sticky left-0 z-[1] max-w-[280px] truncate bg-inherit py-2 pr-3 font-medium text-[#0f172a]"><span class="rounded-md bg-[#f8fafc] px-2 py-1 font-mono text-[11px] ring-1 ring-[#e2e8f0]">{{ row.model }}</span></td>
-                <td class="py-2 pr-3 text-right text-[#334155]"><span class="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[11px]">{{ row.days.size }}</span></td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ row.requests.toLocaleString() }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-[#fef2f2] text-[#dc2626]' : 'bg-[#f8fafc] text-[#94a3b8]'">{{ row.errors }}</span></td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.input) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#334155]">{{ formatNum(row.output) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#059669]">{{ formatNum(row.cacheRead) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#d97706]">{{ formatCredits(row.credits) }}</td>
-                <td class="py-2 text-right tabular-nums"><span class="rounded-full bg-[#f0fdf4] px-2 py-0.5 text-[11px] text-[#059669]">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
+              <tr v-for="row in modelRows" :key="row.model" class="border-b border-line-2 bg-surface last:border-b-0 hover:bg-hover">
+                <td class="sticky left-0 z-[1] max-w-[280px] truncate bg-inherit py-2 pl-3 pr-3 font-medium text-ink"><span class="rounded-md bg-surface-2 px-2 py-1 font-mono text-[11px] ring-1 ring-hover-strong">{{ row.model }}</span></td>
+                <td class="py-2 pr-3 text-right text-ink-2"><span class="rounded-full bg-hover px-2 py-0.5 text-[11px]">{{ row.days.size }}</span></td>
+                <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ row.requests.toLocaleString() }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full px-2 py-0.5 text-[11px]" :class="row.errors > 0 ? 'bg-danger-tint text-danger-fg' : 'bg-surface-2 text-ink-4'">{{ row.errors }}</span></td>
+                <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.input) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.output) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-success">{{ formatNum(row.cacheRead) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatCredits(row.credits) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full bg-success-tint px-2 py-0.5 text-[11px] text-success">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
               </tr>
             </tbody>
           </table>

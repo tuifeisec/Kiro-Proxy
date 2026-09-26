@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import IconArrowRight from '../icons/IconArrowRight.vue'
 import IconCheck from '../icons/IconCheck.vue'
@@ -146,6 +146,52 @@ function discardEditorChanges() {
   showEditor.value = false
 }
 
+const editorPanelRef = ref(null)
+let editorLastFocused = null
+
+function editorFocusables() {
+  if (!editorPanelRef.value) return []
+  return editorPanelRef.value.querySelectorAll(
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  )
+}
+
+function trapEditorFocus(event) {
+  if (event.key !== 'Tab') return
+  const focusables = editorFocusables()
+  if (!focusables.length) return
+  const first = focusables[0]
+  const last = focusables[focusables.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function onEditorKeydown(event) {
+  // 二级确认（放弃修改 / 删除分组）打开时不处理，避免与 ConfirmDialog 自身的 Esc/焦点陷阱冲突
+  if (discardConfirmVisible.value || Boolean(deleteTarget.value)) return
+  if (event.key === 'Escape') closeEditor()
+  else trapEditorFocus(event)
+}
+
+watch(showEditor, (visible) => {
+  if (visible) {
+    editorLastFocused = document.activeElement
+    nextTick(() => editorFocusables()[0]?.focus())
+    document.addEventListener('keydown', onEditorKeydown)
+  } else {
+    document.removeEventListener('keydown', onEditorKeydown)
+    editorLastFocused?.focus?.()
+    editorLastFocused = null
+  }
+})
+
+onBeforeUnmount(() => document.removeEventListener('keydown', onEditorKeydown))
+
 function cancelDeleteGroup() {
   deleteTarget.value = null
 }
@@ -217,17 +263,17 @@ function saveGroup() {
 }
 
 function healthMeta(model) {
-  if (!model || model.enabled === false) return { label: '已禁用', tone: 'bg-[#f3f4f6] text-[#64748b]', dot: 'bg-[#94a3b8]' }
+  if (!model || model.enabled === false) return { label: '已禁用', tone: 'bg-surface-2 text-ink-3', dot: 'bg-ink-4' }
   const status = healthByModelID.value.get(model.id)
-  if (!status) return { label: '状态未知', tone: 'bg-[#f3f4f6] text-[#64748b]', dot: 'bg-[#94a3b8]' }
-  if (status.state === 'open') return { label: '熔断中', tone: 'bg-[#fef2f2] text-[#dc2626]', dot: 'bg-[#ef4444]' }
-  if (status.upstream_bucket_state === 'open') return { label: '上游回避', tone: 'bg-[#fef2f2] text-[#dc2626]', dot: 'bg-[#ef4444]' }
-  if (status.state === 'half-open') return { label: '恢复试探', tone: 'bg-[#fff7ed] text-[#c2410c]', dot: 'bg-[#f59e0b]' }
-  if (status.upstream_bucket_state === 'half-open-busy') return { label: '上游试探中', tone: 'bg-[#fff7ed] text-[#c2410c]', dot: 'bg-[#f59e0b]' }
-  if (status.upstream_bucket_state === 'half-open') return { label: '上游恢复试探', tone: 'bg-[#fff7ed] text-[#c2410c]', dot: 'bg-[#f59e0b]' }
-  if (status.latency_degraded) return { label: '响应降级', tone: 'bg-[#fff7ed] text-[#c2410c]', dot: 'bg-[#f59e0b]' }
-  if (Number(status.consecutive_failures || 0) > 0) return { label: '异常观察', tone: 'bg-[#fff7ed] text-[#c2410c]', dot: 'bg-[#f59e0b]' }
-  return { label: '正常', tone: 'bg-[#ecfdf5] text-[#059669]', dot: 'bg-[#10b981]' }
+  if (!status) return { label: '状态未知', tone: 'bg-surface-2 text-ink-3', dot: 'bg-ink-4' }
+  if (status.state === 'open') return { label: '熔断中', tone: 'bg-danger-tint text-danger-fg', dot: 'bg-danger' }
+  if (status.upstream_bucket_state === 'open') return { label: '上游回避', tone: 'bg-danger-tint text-danger-fg', dot: 'bg-danger' }
+  if (status.state === 'half-open') return { label: '恢复试探', tone: 'bg-warning-tint text-warning-fg', dot: 'bg-warning' }
+  if (status.upstream_bucket_state === 'half-open-busy') return { label: '上游试探中', tone: 'bg-warning-tint text-warning-fg', dot: 'bg-warning' }
+  if (status.upstream_bucket_state === 'half-open') return { label: '上游恢复试探', tone: 'bg-warning-tint text-warning-fg', dot: 'bg-warning' }
+  if (status.latency_degraded) return { label: '响应降级', tone: 'bg-warning-tint text-warning-fg', dot: 'bg-warning' }
+  if (Number(status.consecutive_failures || 0) > 0) return { label: '异常观察', tone: 'bg-warning-tint text-warning-fg', dot: 'bg-warning' }
+  return { label: '正常', tone: 'bg-success-tint text-success-fg', dot: 'bg-brand' }
 }
 
 function groupSummary(group) {
@@ -368,39 +414,39 @@ const memberRowsByGroupID = computed(() => {
 <template>
   <div class="space-y-2">
     <div class="ui-card flex min-h-[60px] flex-wrap items-center gap-y-2 overflow-hidden px-3 py-2">
-      <div class="grid w-full min-w-0 grid-cols-1 divide-y divide-[#e8edf3] sm:flex-1 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+      <div class="grid w-full min-w-0 grid-cols-1 divide-y divide-line-2 sm:flex-1 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         <div class="flex min-w-[124px] items-center gap-2.5 px-3 first:pl-1">
-          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#dbeafe] bg-[#eff6ff] text-[#2563eb]">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-primary-tint-line bg-primary-tint text-primary-fg">
             <IconModels class="h-4 w-4" />
           </span>
           <span class="min-w-0">
-            <span class="block text-[10px] leading-3.5 text-[#64748b]">分组总数</span>
-            <strong class="mt-0.5 block text-[19px] font-semibold leading-5 tabular-nums text-[#111827]">{{ groups.length }}</strong>
+            <span class="block text-[10px] leading-3.5 text-ink-3">分组总数</span>
+            <strong class="mt-0.5 block text-[19px] font-semibold leading-5 tabular-nums text-ink">{{ groups.length }}</strong>
           </span>
         </div>
         <div class="flex min-w-[124px] items-center gap-2.5 px-3">
-          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#d1fae5] bg-[#ecfdf5] text-[#059669]">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-success-tint-line bg-success-tint text-success">
             <IconCheck class="h-4 w-4" />
           </span>
           <span class="min-w-0">
-            <span class="block text-[10px] leading-3.5 text-[#64748b]">已启用</span>
-            <strong class="mt-0.5 block text-[19px] font-semibold leading-5 tabular-nums text-[#111827]">{{ groups.filter((group) => group.enabled !== false).length }}</strong>
+            <span class="block text-[10px] leading-3.5 text-ink-3">已启用</span>
+            <strong class="mt-0.5 block text-[19px] font-semibold leading-5 tabular-nums text-ink">{{ groups.filter((group) => group.enabled !== false).length }}</strong>
           </span>
         </div>
         <div class="flex min-w-[144px] items-center gap-2.5 px-3">
-          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#ccfbf1] bg-[#f0fdfa] text-[#0f766e]">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-success-tint-line bg-success-tint text-success-fg">
             <IconUsage class="h-4 w-4" />
           </span>
           <span class="min-w-0">
-            <span class="block text-[10px] leading-3.5 text-[#64748b]">已分组模型</span>
-            <strong class="mt-0.5 block text-[19px] font-semibold leading-5 tabular-nums text-[#111827]">{{ groupedModelIDs.size }}</strong>
+            <span class="block text-[10px] leading-3.5 text-ink-3">已分组模型</span>
+            <strong class="mt-0.5 block text-[19px] font-semibold leading-5 tabular-nums text-ink">{{ groupedModelIDs.size }}</strong>
           </span>
         </div>
       </div>
-      <div class="ml-auto flex w-full shrink-0 items-center justify-end gap-2 border-t border-[#e8edf3] pt-2 sm:w-auto sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
+      <div class="ml-auto flex w-full shrink-0 items-center justify-end gap-2 border-t border-line-2 pt-2 sm:w-auto sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
         <button
           v-if="groups.length"
-          class="h-8 ui-control px-3 text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc]"
+          class="h-8 ui-control px-3 text-[12px] font-medium text-ink-2 hover:bg-hover"
           @click="toggleAllGroups"
         >
           {{ allGroupsExpanded ? '全部收起' : '全部展开' }}
@@ -414,9 +460,9 @@ const memberRowsByGroupID = computed(() => {
 
     <div v-if="groups.length" class="space-y-1.5">
       <section v-for="group in groups" :key="group.id" class="overflow-hidden ui-card">
-        <div class="flex items-center gap-2.5 px-3 py-2.5 transition-colors" :class="isExpanded(group.id) ? 'bg-white' : 'bg-[#f8fafc]'">
+        <div class="flex items-center gap-2.5 px-3 py-2.5 transition-colors" :class="isExpanded(group.id) ? 'bg-surface' : 'bg-surface-2'">
           <button
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-[#64748b] transition hover:bg-white hover:text-[#111827]"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-surface hover:text-ink"
             :title="isExpanded(group.id) ? '收起候选模型' : '展开候选模型'"
             :aria-label="isExpanded(group.id) ? '收起候选模型' : '展开候选模型'"
             :aria-expanded="isExpanded(group.id)"
@@ -428,57 +474,57 @@ const memberRowsByGroupID = computed(() => {
           <button class="grid min-w-0 flex-1 gap-2 text-left lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-center" :aria-expanded="isExpanded(group.id)" @click="toggleGroup(group.id)">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="h-2 w-2 shrink-0 rounded-full" :class="group.enabled !== false ? 'bg-[#10b981]' : 'bg-[#94a3b8]'" aria-hidden="true"></span>
-                <h3 class="truncate text-[14px] font-semibold text-[#111827]">{{ group.name }}</h3>
-                <span class="rounded px-1.5 py-0.5 text-[10px] font-medium" :class="group.enabled !== false ? 'bg-[#ecfdf5] text-[#059669]' : 'bg-[#f3f4f6] text-[#64748b]'">
+                <span class="h-2 w-2 shrink-0 rounded-full" :class="group.enabled !== false ? 'bg-brand' : 'bg-ink-4'" aria-hidden="true"></span>
+                <h3 class="truncate text-[14px] font-semibold text-ink">{{ group.name }}</h3>
+                <span class="rounded px-1.5 py-0.5 text-[10px] font-medium" :class="group.enabled !== false ? 'bg-success-tint text-success-fg' : 'bg-surface-2 text-ink-3'">
                   {{ group.enabled !== false ? '运行中' : '已停用' }}
                 </span>
               </div>
-              <p v-if="group.description" class="mt-1 truncate text-[11px] text-[#64748b]" :title="group.description">{{ group.description }}</p>
-              <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-[#64748b]">
-                <span><strong class="font-semibold text-[#334155]">{{ groupSummariesByID.get(group.id).total }}</strong> 个候选</span>
-                <span><strong class="font-semibold text-[#059669]">{{ groupSummariesByID.get(group.id).available }}</strong> 个可调度</span>
-                <span v-if="groupSummariesByID.get(group.id).open"><strong class="font-semibold text-[#dc2626]">{{ groupSummariesByID.get(group.id).open }}</strong> 个熔断</span>
-                <span v-if="groupSummariesByID.get(group.id).avoided"><strong class="font-semibold text-[#c2410c]">{{ groupSummariesByID.get(group.id).avoided }}</strong> 个回避</span>
+              <p v-if="group.description" class="mt-1 truncate text-[11px] text-ink-3" :title="group.description">{{ group.description }}</p>
+              <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-ink-3">
+                <span><strong class="font-semibold text-ink-2">{{ groupSummariesByID.get(group.id).total }}</strong> 个候选</span>
+                <span><strong class="font-semibold text-success">{{ groupSummariesByID.get(group.id).available }}</strong> 个可调度</span>
+                <span v-if="groupSummariesByID.get(group.id).open"><strong class="font-semibold text-danger">{{ groupSummariesByID.get(group.id).open }}</strong> 个熔断</span>
+                <span v-if="groupSummariesByID.get(group.id).avoided"><strong class="font-semibold text-warning">{{ groupSummariesByID.get(group.id).avoided }}</strong> 个回避</span>
               </div>
             </div>
-            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[#64748b] lg:justify-end">
-              <span>模型并发 <strong class="font-semibold tabular-nums text-[#111827]">{{ groupConcurrencyText(groupSummariesByID.get(group.id)) }}</strong></span>
-              <span>会话 <strong class="font-semibold tabular-nums text-[#2563eb]">{{ groupSummariesByID.get(group.id).sessions }}</strong></span>
-              <span title="流式响应按首内容、非流式响应按首字节评估">首响应慢阈值 <strong class="font-semibold tabular-nums text-[#111827]">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</strong></span>
-              <span>最多尝试 <strong class="font-semibold tabular-nums text-[#111827]">{{ group.max_attempts ?? 4 }}</strong> 次</span>
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-ink-3 lg:justify-end">
+              <span>模型并发 <strong class="font-semibold tabular-nums text-ink">{{ groupConcurrencyText(groupSummariesByID.get(group.id)) }}</strong></span>
+              <span>会话 <strong class="font-semibold tabular-nums text-primary-fg">{{ groupSummariesByID.get(group.id).sessions }}</strong></span>
+              <span title="流式响应按首内容、非流式响应按首字节评估">首响应慢阈值 <strong class="font-semibold tabular-nums text-ink">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</strong></span>
+              <span>最多尝试 <strong class="font-semibold tabular-nums text-ink">{{ group.max_attempts ?? 4 }}</strong> 次</span>
             </div>
           </button>
 
           <div class="flex shrink-0 items-center gap-1.5">
-            <button class="flex h-7 w-7 items-center justify-center ui-control text-[#64748b] hover:bg-white hover:text-[#111827]" title="编辑分组" aria-label="编辑分组" @click.stop="openEdit(group)">
+            <button class="flex h-7 w-7 items-center justify-center ui-control text-ink-3 hover:bg-surface hover:text-ink" title="编辑分组" aria-label="编辑分组" @click.stop="openEdit(group)">
               <IconEdit class="h-3.5 w-3.5" />
             </button>
-            <button class="flex h-7 w-7 items-center justify-center ui-control text-[#64748b] hover:border-[#fecaca] hover:bg-[#fef2f2] hover:text-[#dc2626]" title="删除分组" aria-label="删除分组" @click.stop="deleteTarget = group">
+            <button class="flex h-7 w-7 items-center justify-center ui-control text-ink-3 hover:border-danger-tint-line hover:bg-danger-tint hover:text-danger" title="删除分组" aria-label="删除分组" @click.stop="deleteTarget = group">
               <IconTrash class="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
 
-        <div v-if="isExpanded(group.id)" class="border-t border-[#edf0f5]">
-          <div class="grid grid-cols-1 divide-y divide-[#edf0f5] border-b border-[#edf0f5] bg-[#fbfcfe] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <div v-if="isExpanded(group.id)" class="border-t border-line-2">
+          <div class="grid grid-cols-1 divide-y divide-line-2 border-b border-line-2 bg-surface-2 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
             <div class="px-3 py-2">
-              <div class="text-[10px] font-medium uppercase text-[#94a3b8]" title="流式响应按首内容、非流式响应按首字节评估">首响应慢阈值</div>
-              <div class="mt-0.5 text-[12px] font-semibold tabular-nums text-[#111827]">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</div>
+              <div class="text-[10px] font-medium uppercase text-ink-4" title="流式响应按首内容、非流式响应按首字节评估">首响应慢阈值</div>
+              <div class="mt-0.5 text-[12px] font-semibold tabular-nums text-ink">{{ formatLatency(group.first_byte_timeout_ms ?? 10000) }}</div>
             </div>
             <div class="px-3 py-2">
-              <div class="text-[10px] font-medium uppercase text-[#94a3b8]">最多尝试次数</div>
-              <div class="mt-0.5 text-[12px] font-semibold tabular-nums text-[#111827]">{{ group.max_attempts ?? 4 }} 次</div>
+              <div class="text-[10px] font-medium uppercase text-ink-4">最多尝试次数</div>
+              <div class="mt-0.5 text-[12px] font-semibold tabular-nums text-ink">{{ group.max_attempts ?? 4 }} 次</div>
             </div>
             <div class="min-w-0 px-3 py-2">
-              <div class="text-[10px] font-medium uppercase text-[#94a3b8]">候选耗尽回退</div>
-              <div class="mt-0.5 truncate text-[12px] font-semibold text-[#111827]" :title="fallbackGroupName(group)">{{ fallbackGroupName(group) }}</div>
+              <div class="text-[10px] font-medium uppercase text-ink-4">候选耗尽回退</div>
+              <div class="mt-0.5 truncate text-[12px] font-semibold text-ink" :title="fallbackGroupName(group)">{{ fallbackGroupName(group) }}</div>
             </div>
           </div>
 
           <div v-if="group.members?.length" class="overflow-x-auto">
             <div class="min-w-[950px]">
-              <div class="grid grid-cols-[minmax(52px,0.5fr)_minmax(145px,1.5fr)_minmax(120px,1.1fr)_minmax(104px,1fr)_minmax(80px,0.8fr)_minmax(82px,0.85fr)_minmax(82px,0.85fr)_minmax(118px,1.2fr)] items-center gap-2 border-b border-[#edf0f5] bg-white px-3 py-1.5 text-[10px] font-medium text-[#64748b]">
+              <div class="grid grid-cols-[minmax(52px,0.5fr)_minmax(145px,1.5fr)_minmax(120px,1.1fr)_minmax(104px,1fr)_minmax(80px,0.8fr)_minmax(82px,0.85fr)_minmax(82px,0.85fr)_minmax(118px,1.2fr)] items-center gap-2 border-b border-line-2 bg-surface px-3 py-1.5 text-[10px] font-medium text-ink-3">
                 <span>顺位</span>
                 <span>模型身份</span>
                 <span>Provider / 路由</span>
@@ -488,66 +534,72 @@ const memberRowsByGroupID = computed(() => {
                 <span>会话 / 回避</span>
                 <span>恢复 / 解除时间</span>
               </div>
-              <div v-for="row in memberRowsByGroupID.get(group.id)" :key="row.member.model_id" class="grid grid-cols-[minmax(52px,0.5fr)_minmax(145px,1.5fr)_minmax(120px,1.1fr)_minmax(104px,1fr)_minmax(80px,0.8fr)_minmax(82px,0.85fr)_minmax(82px,0.85fr)_minmax(118px,1.2fr)] items-center gap-2 border-b border-[#edf0f5] px-3 py-2 text-[11px] transition-colors last:border-b-0 hover:bg-[#fbfcfe]">
+              <div v-for="row in memberRowsByGroupID.get(group.id)" :key="row.member.model_id" class="grid grid-cols-[minmax(52px,0.5fr)_minmax(145px,1.5fr)_minmax(120px,1.1fr)_minmax(104px,1fr)_minmax(80px,0.8fr)_minmax(82px,0.85fr)_minmax(82px,0.85fr)_minmax(118px,1.2fr)] items-center gap-2 border-b border-line-2 px-3 py-2 text-[11px] transition-colors last:border-b-0 hover:bg-hover">
                 <div class="flex items-center gap-1.5">
-                  <span class="font-mono text-[#64748b]">#{{ Number(row.member.priority || 0) + 1 }}</span>
-                    <span class="rounded px-1 py-0.5 text-[9px] font-medium" :class="row.index === 0 ? 'bg-[#eff6ff] text-[#2563eb]' : 'bg-[#f3f4f6] text-[#64748b]'">{{ memberRole(row.index) }}</span>
+                  <span class="font-mono text-ink-3">#{{ Number(row.member.priority || 0) + 1 }}</span>
+                    <span class="rounded px-1 py-0.5 text-[9px] font-medium" :class="row.index === 0 ? 'bg-primary-tint text-primary-fg' : 'bg-surface-2 text-ink-3'">{{ memberRole(row.index) }}</span>
                 </div>
                 <div class="min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="truncate font-medium text-[#111827]">{{ memberName(row.member) }}</span>
-                    <span v-if="row.model?.enabled === false" class="shrink-0 rounded bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] text-[#64748b]">已禁用</span>
+                    <span class="truncate font-medium text-ink">{{ memberName(row.member) }}</span>
+                    <span v-if="row.model?.enabled === false" class="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-3">已禁用</span>
                   </div>
-                  <div class="mt-0.5 truncate font-mono text-[10px] text-[#94a3b8]" :title="row.model?.model_id || row.member.model_id">{{ row.model?.model_id || row.member.model_id }}</div>
+                  <div class="mt-0.5 truncate font-mono text-[10px] text-ink-4" :title="row.model?.model_id || row.member.model_id">{{ row.model?.model_id || row.member.model_id }}</div>
                 </div>
                 <div class="min-w-0">
-                  <div class="truncate font-medium uppercase text-[#334155]">{{ row.model?.provider || '-' }}</div>
-                  <div class="truncate font-mono text-[9px] text-[#94a3b8]" :title="`${row.model?.base_url || ''}${row.model?.endpoint || ''}`">{{ row.model?.endpoint || '-' }}</div>
+                  <div class="truncate font-medium uppercase text-ink-2">{{ row.model?.provider || '-' }}</div>
+                  <div class="truncate font-mono text-[9px] text-ink-4" :title="`${row.model?.base_url || ''}${row.model?.endpoint || ''}`">{{ row.model?.endpoint || '-' }}</div>
                 </div>
                 <div class="min-w-0">
                   <div class="flex items-center gap-1.5">
-                    <span class="h-1.5 w-1.5 rounded-full" :class="row.performance.failed ? 'bg-[#ef4444]' : row.performance.hasMeasurement ? 'bg-[#10b981]' : 'bg-[#cbd5e1]'" aria-hidden="true"></span>
-                    <span class="font-semibold tabular-nums" :class="row.performance.failed ? 'text-[#dc2626]' : row.performance.hasMeasurement ? 'text-[#111827]' : 'text-[#94a3b8]'">{{ row.performance.firstByte }}</span>
+                    <span class="h-1.5 w-1.5 rounded-full" :class="row.performance.failed ? 'bg-danger' : row.performance.hasMeasurement ? 'bg-brand' : 'bg-line-strong'" aria-hidden="true"></span>
+                    <span class="font-semibold tabular-nums" :class="row.performance.failed ? 'text-danger' : row.performance.hasMeasurement ? 'text-ink' : 'text-ink-4'">{{ row.performance.firstByte }}</span>
                   </div>
-                  <div class="truncate text-[9px] tabular-nums text-[#64748b]" :title="row.performance.detail">{{ row.performance.detail }}</div>
+                  <div class="truncate text-[9px] tabular-nums text-ink-3" :title="row.performance.detail">{{ row.performance.detail }}</div>
                 </div>
                 <div class="min-w-0">
                   <span class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium" :class="row.healthMeta.tone">
                     <span class="h-1.5 w-1.5 rounded-full" :class="row.healthMeta.dot" aria-hidden="true"></span>
                     {{ row.healthMeta.label }}
                   </span>
-                  <div v-if="Number(row.health.consecutive_failures || 0) > 0" class="mt-1 text-[10px] tabular-nums text-[#c2410c]">连续失败 {{ Number(row.health.consecutive_failures || 0) }}</div>
+                  <div v-if="Number(row.health.consecutive_failures || 0) > 0" class="mt-1 text-[10px] tabular-nums text-warning">连续失败 {{ Number(row.health.consecutive_failures || 0) }}</div>
                 </div>
-                <span class="font-medium tabular-nums text-[#475569]">{{ row.concurrencyText }}</span>
-                <span class="tabular-nums text-[#64748b]">
-                  <strong :class="Number(row.health.affinity_sessions || 0) > 0 ? 'font-semibold text-[#2563eb]' : 'font-normal'">{{ Number(row.health.affinity_sessions || 0) }}</strong>
+                <span class="font-medium tabular-nums text-ink-2">{{ row.concurrencyText }}</span>
+                <span class="tabular-nums text-ink-3">
+                  <strong :class="Number(row.health.affinity_sessions || 0) > 0 ? 'font-semibold text-primary-fg' : 'font-normal'">{{ Number(row.health.affinity_sessions || 0) }}</strong>
                   /
-                  <strong :class="Number(row.health.avoided_scopes || 0) > 0 ? 'font-semibold text-[#c2410c]' : 'font-normal'">{{ Number(row.health.avoided_scopes || 0) }}</strong>
+                  <strong :class="Number(row.health.avoided_scopes || 0) > 0 ? 'font-semibold text-warning' : 'font-normal'">{{ Number(row.health.avoided_scopes || 0) }}</strong>
                 </span>
-                <span class="truncate text-[11px] text-[#64748b]" :title="row.openUntil">{{ row.openUntil }}</span>
+                <span class="truncate text-[11px] text-ink-3" :title="row.openUntil">{{ row.openUntil }}</span>
               </div>
             </div>
           </div>
-          <div v-else class="px-4 py-8 text-center text-[12px] text-[#64748b]">暂无候选模型</div>
+          <div v-else class="px-4 py-8 text-center text-[12px] text-ink-3">暂无候选模型</div>
         </div>
       </section>
     </div>
 
-    <section v-else class="flex flex-col items-center justify-center border border-dashed border-[#cbd5e1] bg-white py-16 text-[#64748b]">
+    <section v-else class="flex flex-col items-center justify-center border border-dashed border-line-strong bg-surface py-16 text-ink-3">
       <IconModels class="mb-3 h-8 w-8" />
-      <p class="text-[13px] font-medium text-[#475569]">暂无模型分组</p>
+      <p class="text-[13px] font-medium text-ink-2">暂无模型分组</p>
     </section>
 
     <Teleport to="body">
       <Transition name="motion-fade" appear>
-      <div v-if="showEditor" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" @click.self="closeEditor">
-        <div class="motion-pop-panel flex max-h-[90vh] w-full max-w-[900px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white shadow-2xl">
-          <div class="flex items-center justify-between border-b border-[#edf0f5] px-5 py-4">
+      <div v-if="showEditor" class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" @click.self="closeEditor">
+        <div
+          ref="editorPanelRef"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="editingID ? '编辑分组' : '新建分组'"
+          class="motion-pop-panel flex max-h-[90vh] w-full max-w-[900px] flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-2xl"
+        >
+          <div class="flex items-center justify-between border-b border-line-2 px-5 py-4">
             <div class="min-w-0">
-              <h3 class="text-[16px] font-semibold text-[#111827]">{{ editingID ? '编辑分组' : '新建分组' }}</h3>
-              <p v-if="editingID" class="mt-0.5 truncate text-[11px] text-[#94a3b8]">{{ groupName || '未命名分组' }}</p>
+              <h3 class="text-[16px] font-semibold text-ink">{{ editingID ? '编辑分组' : '新建分组' }}</h3>
+              <p v-if="editingID" class="mt-0.5 truncate text-[11px] text-ink-4">{{ groupName || '未命名分组' }}</p>
             </div>
-            <button class="flex h-8 w-8 items-center justify-center rounded text-[#64748b] transition hover:bg-[#f8fafc] hover:text-[#111827]" title="关闭" aria-label="关闭" @click="closeEditor">
+            <button class="flex h-8 w-8 items-center justify-center rounded text-ink-3 transition hover:bg-hover hover:text-ink" title="关闭" aria-label="关闭" @click="closeEditor">
               <span class="text-[20px] font-light leading-none">×</span>
             </button>
           </div>
@@ -556,27 +608,27 @@ const memberRowsByGroupID = computed(() => {
             <section class="px-5 py-4">
               <div class="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <h4 class="text-[12px] font-semibold text-[#111827]">分组信息</h4>
-                  <p class="mt-0.5 text-[11px] text-[#94a3b8]">名称会作为 Kiro 模型列表中的分组入口显示</p>
+                  <h4 class="text-[12px] font-semibold text-ink">分组信息</h4>
+                  <p class="mt-0.5 text-[11px] text-ink-4">名称会作为 Kiro 模型列表中的分组入口显示</p>
                 </div>
-                <label class="inline-flex cursor-pointer items-center gap-2 text-[12px] font-medium text-[#475569]">
+                <label class="inline-flex cursor-pointer items-center gap-2 text-[12px] font-medium text-ink-2">
                   <input v-model="groupEnabled" type="checkbox" class="peer sr-only" />
-                  <span class="relative h-5 w-9 rounded-full bg-[#cbd5e1] transition peer-checked:bg-[#2563eb] after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:after:translate-x-4"></span>
+                  <span class="relative h-5 w-9 rounded-full bg-line-strong transition peer-checked:bg-primary after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:after:translate-x-4"></span>
                   {{ groupEnabled ? '已启用' : '已停用' }}
                 </label>
               </div>
-              <label class="block text-[11px] font-medium text-[#475569]">
+              <label class="block text-[11px] font-medium text-ink-2">
                 分组名称
-                <input v-model="groupName" class="mt-1.5 h-9 w-full ui-control px-3 text-[13px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" placeholder="例如 Claude 主力组" />
+                <input v-model="groupName" class="mt-1.5 h-9 w-full ui-control px-3 text-[13px] text-ink outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring" placeholder="例如 Claude 主力组" />
               </label>
-              <label class="mt-3 block text-[11px] font-medium text-[#475569]">
+              <label class="mt-3 block text-[11px] font-medium text-ink-2">
                 分组说明
-                <textarea v-model="groupDescription" maxlength="500" rows="2" class="mt-1.5 w-full resize-none ui-control px-3 py-2 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" placeholder="说明该组的用途、模型范围或调度定位"></textarea>
-                <span class="mt-1 block text-right font-normal tabular-nums text-[#94a3b8]">{{ groupDescription.length }} / 500</span>
+                <textarea v-model="groupDescription" maxlength="500" rows="2" class="mt-1.5 w-full resize-none ui-control px-3 py-2 text-[12px] text-ink outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring" placeholder="说明该组的用途、模型范围或调度定位"></textarea>
+                <span class="mt-1 block text-right font-normal tabular-nums text-ink-4">{{ groupDescription.length }} / 500</span>
               </label>
-              <label class="mt-3 block text-[11px] font-medium text-[#475569]">
+              <label class="mt-3 block text-[11px] font-medium text-ink-2">
                 Kiro 分组默认思考强度
-                <select v-model="groupReasoningEffort" class="mt-1.5 h-9 w-full ui-control bg-white px-2 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]">
+                <select v-model="groupReasoningEffort" class="mt-1.5 h-9 w-full ui-control bg-surface px-2 text-[12px] text-ink outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring">
                   <option value="">沿用成员默认（旧组）</option>
                   <option value="none">None</option>
                   <option value="low">Low</option>
@@ -585,104 +637,104 @@ const memberRowsByGroupID = computed(() => {
                   <option value="xhigh">xHigh</option>
                   <option value="max">Max</option>
                 </select>
-                <span class="mt-1 block font-normal text-[#94a3b8]">Kiro 默认选项；所选档位优先于组内模型默认值。不同上游不一定支持全部档位。</span>
+                <span class="mt-1 block font-normal text-ink-4">Kiro 默认选项；所选档位优先于组内模型默认值。不同上游不一定支持全部档位。</span>
               </label>
             </section>
 
-            <section class="border-t border-[#edf0f5] px-5 py-4">
+            <section class="border-t border-line-2 px-5 py-4">
               <div class="mb-3">
-                <h4 class="text-[12px] font-semibold text-[#111827]">调度策略</h4>
-                <p class="mt-0.5 text-[11px] text-[#94a3b8]">该配置对当前分组的所有候选生效</p>
+                <h4 class="text-[12px] font-semibold text-ink">调度策略</h4>
+                <p class="mt-0.5 text-[11px] text-ink-4">该配置对当前分组的所有候选生效</p>
               </div>
               <div class="grid gap-3 sm:grid-cols-3">
-              <label class="block text-[11px] font-medium text-[#475569]">
+              <label class="block text-[11px] font-medium text-ink-2">
                 首字慢阈值（ms）
-                <input v-model.number="firstByteTimeoutMs" type="number" min="10000" max="300000" step="1000" class="mt-1.5 h-9 w-full ui-control bg-white px-3 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" />
-                <span class="mt-1 block font-normal text-[#94a3b8]">软阈值 10,000-300,000；健康候选通常观察约 2 倍，单一图片候选至少 45 秒</span>
+                <input v-model.number="firstByteTimeoutMs" type="number" min="10000" max="300000" step="1000" class="mt-1.5 h-9 w-full ui-control bg-surface px-3 text-[12px] text-ink outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring" />
+                <span class="mt-1 block font-normal text-ink-4">软阈值 10,000-300,000；健康候选通常观察约 2 倍，单一图片候选至少 45 秒</span>
               </label>
-              <label class="block text-[11px] font-medium text-[#475569]">
+              <label class="block text-[11px] font-medium text-ink-2">
                 最多尝试次数
-                <input v-model.number="maxAttempts" type="number" min="1" max="16" class="mt-1.5 h-9 w-full ui-control bg-white px-3 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]" />
-                <span class="mt-1 block font-normal text-[#94a3b8]">每个候选最多一次，实际不超过当前组可用成员数</span>
+                <input v-model.number="maxAttempts" type="number" min="1" max="16" class="mt-1.5 h-9 w-full ui-control bg-surface px-3 text-[12px] text-ink outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring" />
+                <span class="mt-1 block font-normal text-ink-4">每个候选最多一次，实际不超过当前组可用成员数</span>
               </label>
-              <label class="block text-[11px] font-medium text-[#475569]">
+              <label class="block text-[11px] font-medium text-ink-2">
                 候选耗尽回退组
-                <select v-model="fallbackGroupID" class="mt-1.5 h-9 w-full ui-control bg-white px-2 text-[12px] text-[#111827] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#eff6ff]">
+                <select v-model="fallbackGroupID" class="mt-1.5 h-9 w-full ui-control bg-surface px-2 text-[12px] text-ink outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring">
                   <option value="">不使用回退组</option>
                   <option v-for="group in groups.filter((item) => item.id !== editingID)" :key="group.id" :value="group.id" :disabled="group.enabled === false">{{ group.name }}{{ group.enabled === false ? '（已停用）' : '' }}</option>
                 </select>
-                <span class="mt-1 block font-normal text-[#94a3b8]">当前组耗尽后继续调度</span>
+                <span class="mt-1 block font-normal text-ink-4">当前组耗尽后继续调度</span>
               </label>
               </div>
             </section>
 
-            <section class="border-t border-[#edf0f5] px-5 py-4">
+            <section class="border-t border-line-2 px-5 py-4">
               <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
                 <div>
-                  <h4 class="text-[12px] font-semibold text-[#111827]">候选模型与全局并发</h4>
-                  <p class="mt-0.5 text-[11px] text-[#94a3b8]">{{ selectedModels.length }} 个候选，按右侧顺序调度</p>
+                  <h4 class="text-[12px] font-semibold text-ink">候选模型与全局并发</h4>
+                  <p class="mt-0.5 text-[11px] text-ink-4">{{ selectedModels.length }} 个候选，按右侧顺序调度</p>
                 </div>
-                <span class="text-[11px] text-[#64748b]">模型全局并发上限为 0 时不限制</span>
+                <span class="text-[11px] text-ink-3">模型全局并发上限为 0 时不限制</span>
               </div>
             <div class="grid gap-4 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
               <div>
-                <div class="mb-2 text-[11px] font-medium text-[#64748b]">可选模型</div>
-                <div class="max-h-[320px] overflow-y-auto rounded border border-[#e5e7eb]">
-                  <label v-for="model in availableModels" :key="model.id" class="flex cursor-pointer items-center gap-2 border-b border-[#edf0f5] px-3 py-2.5 last:border-b-0 hover:bg-[#f8fafc]">
-                    <input type="checkbox" class="h-4 w-4 accent-[#1677ff]" :checked="selectedModelIDs.includes(model.id)" @change="toggleMember(model.id)" />
+                <div class="mb-2 text-[11px] font-medium text-ink-3">可选模型</div>
+                <div class="max-h-[320px] overflow-y-auto rounded border border-line">
+                  <label v-for="model in availableModels" :key="model.id" class="flex cursor-pointer items-center gap-2 border-b border-line-2 px-3 py-2.5 last:border-b-0 hover:bg-hover">
+                    <input type="checkbox" class="h-4 w-4 accent-primary" :checked="selectedModelIDs.includes(model.id)" @change="toggleMember(model.id)" />
                     <span class="min-w-0">
-                      <span class="block truncate text-[12px] font-medium text-[#111827]">{{ model.name || model.model_id }}</span>
-                      <span class="block truncate text-[10px] text-[#64748b]">{{ model.provider }} · {{ model.model_id }}</span>
+                      <span class="block truncate text-[12px] font-medium text-ink">{{ model.name || model.model_id }}</span>
+                      <span class="block truncate text-[10px] text-ink-3">{{ model.provider }} · {{ model.model_id }}</span>
                     </span>
                   </label>
-                  <div v-if="availableModels.length === 0" class="px-3 py-8 text-center text-[12px] text-[#94a3b8]">没有可加入的模型</div>
+                  <div v-if="availableModels.length === 0" class="px-3 py-8 text-center text-[12px] text-ink-4">没有可加入的模型</div>
                 </div>
               </div>
 
               <div>
-                <div class="mb-2 grid grid-cols-[28px_minmax(0,1fr)_96px_64px] items-center gap-2 text-[11px] font-medium text-[#64748b]">
+                <div class="mb-2 grid grid-cols-[28px_minmax(0,1fr)_96px_64px] items-center gap-2 text-[11px] font-medium text-ink-3">
                   <span>顺位</span>
                   <span>模型身份</span>
                   <span>全局并发上限</span>
                   <span class="text-center">调整</span>
                 </div>
-                <div class="max-h-[320px] overflow-y-auto rounded border border-[#e5e7eb]">
-                  <div v-for="(model, index) in selectedModels" :key="model.id" class="grid grid-cols-[28px_minmax(0,1fr)_96px_64px] items-center gap-2 border-b border-[#edf0f5] px-3 py-2.5 last:border-b-0">
-                    <span class="font-mono text-[11px] text-[#64748b]">#{{ index + 1 }}</span>
+                <div class="max-h-[320px] overflow-y-auto rounded border border-line">
+                  <div v-for="(model, index) in selectedModels" :key="model.id" class="grid grid-cols-[28px_minmax(0,1fr)_96px_64px] items-center gap-2 border-b border-line-2 px-3 py-2.5 last:border-b-0">
+                    <span class="font-mono text-[11px] text-ink-3">#{{ index + 1 }}</span>
                     <span class="min-w-0">
-                      <span class="block truncate text-[12px] font-medium text-[#111827]">{{ model.name || model.model_id }}</span>
-                      <span class="block truncate font-mono text-[10px] text-[#94a3b8]">{{ model.model_id }}</span>
+                      <span class="block truncate text-[12px] font-medium text-ink">{{ model.name || model.model_id }}</span>
+                      <span class="block truncate font-mono text-[10px] text-ink-4">{{ model.model_id }}</span>
                     </span>
                     <input
                       :value="memberConcurrency[model.id] || 0"
                       type="number"
                       min="0"
                       max="1000"
-                      class="h-8 w-full ui-control px-2 text-[11px] tabular-nums text-[#111827] outline-none focus:border-[#93c5fd]"
+                      class="h-8 w-full ui-control px-2 text-[11px] tabular-nums text-ink outline-none focus:border-primary-tint-line-strong"
                       title="模型全局最大并发，0 表示不限"
                       :aria-label="`${model.name || model.model_id} 的全局并发上限`"
                       @input="setMemberConcurrency(model.id, $event.target.value)"
                     />
                     <div class="flex items-center justify-end gap-1">
-                      <button class="flex h-7 w-7 items-center justify-center ui-control text-[#64748b] hover:bg-[#f8fafc] disabled:opacity-30" title="上移" aria-label="上移" :disabled="index === 0" @click="moveMember(index, -1)">
+                      <button class="flex h-7 w-7 items-center justify-center ui-control text-ink-3 hover:bg-hover disabled:opacity-30" title="上移" aria-label="上移" :disabled="index === 0" @click="moveMember(index, -1)">
                         <IconArrowRight class="h-3.5 w-3.5 -rotate-90" />
                       </button>
-                      <button class="flex h-7 w-7 items-center justify-center ui-control text-[#64748b] hover:bg-[#f8fafc] disabled:opacity-30" title="下移" aria-label="下移" :disabled="index === selectedModels.length - 1" @click="moveMember(index, 1)">
+                      <button class="flex h-7 w-7 items-center justify-center ui-control text-ink-3 hover:bg-hover disabled:opacity-30" title="下移" aria-label="下移" :disabled="index === selectedModels.length - 1" @click="moveMember(index, 1)">
                         <IconArrowRight class="h-3.5 w-3.5 rotate-90" />
                       </button>
                     </div>
                   </div>
-                  <div v-if="selectedModels.length === 0" class="px-3 py-8 text-center text-[12px] text-[#94a3b8]">尚未选择模型</div>
+                  <div v-if="selectedModels.length === 0" class="px-3 py-8 text-center text-[12px] text-ink-4">尚未选择模型</div>
                 </div>
               </div>
             </div>
             </section>
 
-            <div v-if="validationError" class="mx-5 mb-4 border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#dc2626]">{{ validationError }}</div>
+            <div v-if="validationError" class="mx-5 mb-4 border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger">{{ validationError }}</div>
           </div>
 
-          <div class="flex justify-end gap-2 border-t border-[#edf0f5] px-5 py-3">
-            <button class="h-9 ui-control px-4 text-[13px] text-[#475569]" :disabled="saving" @click="closeEditor">取消</button>
+          <div class="flex justify-end gap-2 border-t border-line-2 px-5 py-3">
+            <button class="h-9 ui-control px-4 text-[13px] text-ink-2" :disabled="saving" @click="closeEditor">取消</button>
             <button class="h-9 ui-primary-button px-4 text-[13px] font-medium disabled:opacity-60" :disabled="saving" @click="saveGroup">{{ saving ? '保存中...' : '保存分组' }}</button>
           </div>
         </div>

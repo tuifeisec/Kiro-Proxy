@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { getModels } from '../../api/models.js'
 import { getSettings, updateSettings } from '../../api/settings.js'
 import { useToast } from '../../composables/useToast.js'
@@ -11,6 +11,7 @@ const classifierModelId = ref('')
 const saving = ref(false)
 const saved = ref(false)
 const { showToast } = useToast()
+let savedTimer = null
 
 async function load() {
   try {
@@ -28,7 +29,8 @@ async function save() {
   try {
     await updateSettings({ classifier_model_id: classifierModelId.value })
     saved.value = true
-    setTimeout(() => { saved.value = false }, 2000)
+    clearTimeout(savedTimer)
+    savedTimer = setTimeout(() => { saved.value = false }, 2000)
   } catch (e) {
     console.error('保存高级设置失败', e)
     showToast(e?.message || '保存高级设置失败', { tone: 'error' })
@@ -38,24 +40,25 @@ async function save() {
 }
 
 onMounted(load)
+onUnmounted(() => clearTimeout(savedTimer))
 </script>
 
 <template>
   <div class="ui-card p-3">
     <div class="mb-3 flex items-center justify-between">
-      <h3 class="text-[14px] font-semibold text-[#0f172a]">高级设置</h3>
-      <span v-if="saved" class="inline-flex items-center gap-1.5 rounded-full bg-[#ecfdf5] px-2 py-0.5 text-[12px] font-medium text-[#059669]">✓ 已保存</span>
+      <h3 class="text-[14px] font-semibold text-ink">高级设置</h3>
+      <span v-if="saved" class="inline-flex items-center gap-1.5 rounded-full bg-success-tint px-2 py-0.5 text-[12px] font-medium text-success">✓ 已保存</span>
     </div>
 
     <div class="space-y-2.5">
       <div>
-        <div class="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-[#475569]">
+        <div class="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
           Classifier 模型
-          <span class="text-[#94a3b8]" title="用于判断用户意图">ⓘ</span>
+          <span class="text-ink-4" title="用于判断用户意图">ⓘ</span>
         </div>
         <select
           v-model="classifierModelId"
-          class="ui-control-h ui-control w-full px-3 text-[12px] text-[#0f172a] outline-none transition focus:border-[#93c5fd] focus:ring-2 focus:ring-[#dbeafe]"
+          class="ui-control-h ui-control w-full px-3 text-[12px] text-ink outline-none transition focus:border-primary-tint-line-strong focus:ring-2 focus:ring-primary-ring"
         >
           <option value="">跟随主模型</option>
           <option :value="CLASSIFIER_DISABLED_VALUE">不使用 Classifier</option>
@@ -65,17 +68,17 @@ onMounted(load)
         </select>
       </div>
 
-      <p class="text-[12px] leading-4 text-[#94a3b8]">Classifier 用于判断用户意图，可使用轻量小模型节省费用。</p>
+      <p class="text-[12px] leading-4 text-ink-4">Classifier 用于判断用户意图，可使用轻量小模型节省费用。</p>
 
       <div class="flex items-center gap-3 pt-1">
         <button
-          class="h-8 rounded-lg bg-[#1677ff] px-3 text-[12px] font-semibold text-white shadow-sm hover:bg-[#0958d9] disabled:cursor-not-allowed disabled:opacity-60"
+          class="h-8 rounded-lg bg-primary px-3 text-[12px] font-semibold text-white shadow-sm hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="saving"
           @click="save"
         >
           {{ saving ? '保存中...' : '保存设置' }}
         </button>
-        <span v-if="saved" class="text-[12px] text-[#059669]">✓ 设置已同步</span>
+        <span v-if="saved" class="text-[12px] text-success">✓ 设置已同步</span>
       </div>
     </div>
   </div>

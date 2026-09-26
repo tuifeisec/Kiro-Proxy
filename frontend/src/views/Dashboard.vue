@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdvertisementList from '../components/common/AdvertisementList.vue'
 import { useStats } from '../composables/useStats.js'
 import { useSmoothNumber } from '../composables/useSmoothNumber.js'
@@ -30,6 +30,8 @@ const showRangeMenu = ref(false)
 const showMoreMenu = ref(false)
 const rangeMenuRef = ref(null)
 const moreMenuRef = ref(null)
+const rangeMenuPanelRef = ref(null)
+const moreMenuPanelRef = ref(null)
 const selectedRangeLabel = ref('今天')
 const selectedRangeDays = ref(0)
 const rangeSummary = ref({
@@ -198,11 +200,47 @@ function handleUsageRangeChange(value) {
 function toggleRangeMenu() {
   showRangeMenu.value = !showRangeMenu.value
   showMoreMenu.value = false
+  if (showRangeMenu.value) focusFirstMenuItem('rangeMenuPanelRef')
 }
 
 function toggleMoreMenu() {
   showMoreMenu.value = !showMoreMenu.value
   showRangeMenu.value = false
+  if (showMoreMenu.value) focusFirstMenuItem('moreMenuPanelRef')
+}
+
+// 菜单打开后焦点落到第一项（WAI-ARIA menu 模式：方向键在项间循环，Home/End 跳端）
+function focusFirstMenuItem(panelRefName) {
+  nextTick(() => {
+    const items = menuItemsOf(panelRefName)
+    items[0]?.focus()
+  })
+}
+
+function menuItemsOf(panelRefName) {
+  const panel = panelRefs[panelRefName]?.value
+  return panel ? Array.from(panel.querySelectorAll('button')) : []
+}
+
+const panelRefs = { rangeMenuPanelRef, moreMenuPanelRef }
+
+function onMenuKeydown(event) {
+  const items = Array.from(event.currentTarget.querySelectorAll('button'))
+  if (!items.length) return
+  const index = items.indexOf(document.activeElement)
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    items[(index + 1 + items.length) % items.length]?.focus()
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    items[(index - 1 + items.length) % items.length]?.focus()
+  } else if (event.key === 'Home') {
+    event.preventDefault()
+    items[0]?.focus()
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    items[items.length - 1]?.focus()
+  }
 }
 
 function handleDocumentPointerDown(event) {
@@ -252,24 +290,24 @@ async function confirmClearStats() {
     <div class="ui-page-inner space-y-3">
       <header class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-2.5">
-          <h1 class="text-[22px] font-semibold tracking-tight text-[#0f172a]">仪表盘</h1>
-          <span class="text-[12px] text-[#64748b]">Kiro Proxy 运行状态总览</span>
+          <h1 class="text-[22px] font-semibold tracking-tight text-ink">仪表盘</h1>
+          <span class="text-[12px] text-ink-3">Kiro Proxy 运行状态总览</span>
           <button
             type="button"
-            class="inline-flex items-center gap-1.5 rounded-full border bg-white px-2.5 py-0.5 text-[12px] text-[#475569] shadow-sm transition hover:border-[#bfdbfe] hover:bg-[#eff6ff] hover:text-[#2563eb] disabled:cursor-not-allowed disabled:opacity-60"
-            :class="proxyAccess.mode === 'lan' ? 'border-[#fed7aa] text-[#d97706] hover:border-[#fdba74] hover:bg-[#fffbeb] hover:text-[#d97706]' : 'border-[#e2e8f0]'"
+            class="inline-flex items-center gap-1.5 rounded-full border bg-surface px-2.5 py-0.5 text-[12px] text-ink-2 shadow-sm transition hover:border-primary-tint-line hover:bg-primary-tint hover:text-primary-fg disabled:cursor-not-allowed disabled:opacity-60"
+            :class="proxyAccess.mode === 'lan' ? 'border-warning-tint-line text-warning hover:border-warning-tint-line-strong hover:bg-warning-tint hover:text-warning' : 'border-line'"
             :disabled="proxyAccessLoading"
             :title="proxyAccess.mode === 'lan' ? '点击切回本地代理' : '点击切换为局域网代理'"
             @click="toggleProxyAccess"
           >
-            <span class="h-1.5 w-1.5 rounded-full" :class="proxyAccess.mode === 'lan' ? 'bg-[#f59e0b]' : 'bg-[#22c55e]'"></span>
+            <span class="h-1.5 w-1.5 rounded-full" :class="proxyAccess.mode === 'lan' ? 'bg-warning' : 'bg-brand'"></span>
             {{ proxyAccess.mode === 'lan' ? '局域网代理' : '本地代理' }} · {{ proxyAccess.host || '127.0.0.1' }}
           </button>
         </div>
 
         <div class="flex items-center gap-2">
           <button
-            class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-[#475569] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98] disabled:opacity-60"
+            class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-ink-2 shadow-sm transition hover:bg-hover active:scale-[0.98] disabled:opacity-60"
             :disabled="loading"
             @click="handleRefresh"
           >
@@ -284,14 +322,14 @@ async function confirmClearStats() {
 
           <div ref="rangeMenuRef" class="relative">
             <button
-              class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-[#475569] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98]"
+              class="inline-flex ui-control-h ui-control items-center gap-1.5 px-2.5 text-[12px] font-medium text-ink-2 shadow-sm transition hover:bg-hover active:scale-[0.98]"
               :aria-expanded="showRangeMenu"
               aria-haspopup="menu"
               @click="toggleRangeMenu"
             >
               {{ selectedRangeLabel }}
               <svg
-                class="h-3.5 w-3.5 text-[#94a3b8] transition-transform duration-150"
+                class="h-3.5 w-3.5 text-ink-4 transition-transform duration-[var(--dur-fast)]"
                 :class="showRangeMenu ? 'rotate-180' : ''"
                 viewBox="0 0 20 20"
                 fill="none"
@@ -300,12 +338,13 @@ async function confirmClearStats() {
                 <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
-            <div v-if="showRangeMenu" class="absolute right-0 top-9 z-20 w-28 overflow-hidden rounded-lg border border-[#e2e8f0] bg-white py-1 text-[12px] shadow-lg">
+            <div v-if="showRangeMenu" ref="rangeMenuPanelRef" role="menu" class="absolute right-0 top-9 z-20 w-28 overflow-hidden rounded-lg border border-line bg-surface py-1 text-[12px] shadow-lg" @keydown="onMenuKeydown">
               <button
                 v-for="option in rangeOptions"
                 :key="option.label"
-                class="block w-full px-3 py-1.5 text-left text-[#475569] hover:bg-[#f8fafc]"
-                :class="option.label === selectedRangeLabel ? 'font-semibold text-[#1677ff]' : ''"
+                role="menuitem"
+                class="block w-full px-3 py-1.5 text-left focus:bg-hover focus:outline-none"
+                :class="option.label === selectedRangeLabel ? 'bg-primary-tint font-semibold text-primary-fg hover:bg-primary-tint-strong' : 'text-ink-2 hover:bg-hover'"
                 @click="selectRange(option)"
               >
                 {{ option.label }}
@@ -314,16 +353,16 @@ async function confirmClearStats() {
           </div>
 
           <span
-            class="inline-flex ui-control-h ui-control items-center gap-1.5 bg-white px-2.5 text-[12px] font-medium shadow-sm"
-            :class="error ? 'border-[#fecaca] text-[#dc2626]' : loading ? 'border-[#bfdbfe] text-[#2563eb]' : 'border-[#dcfce7] text-[#059669]'"
+            class="inline-flex ui-control-h ui-control items-center gap-1.5 bg-surface px-2.5 text-[12px] font-medium shadow-sm"
+            :class="error ? 'border-danger-tint-line text-danger-fg' : loading ? 'border-primary-tint-line text-primary-fg' : 'border-success-tint-line text-success-fg'"
           >
-            <span class="h-1.5 w-1.5 rounded-full" :class="error ? 'bg-[#ef4444]' : loading ? 'animate-pulse bg-[#3b82f6]' : 'bg-[#22c55e]'"></span>
+            <span class="h-1.5 w-1.5 rounded-full" :class="error ? 'bg-danger' : loading ? 'animate-pulse bg-primary' : 'bg-brand'"></span>
             {{ error ? '状态异常' : loading ? '检查中' : '运行中' }}
           </span>
 
           <div ref="moreMenuRef" class="relative">
             <button
-              class="flex h-8 w-8 items-center justify-center ui-control bg-white text-[#64748b] shadow-sm transition hover:bg-[#f8fafc] active:scale-[0.98]"
+              class="flex h-8 w-8 items-center justify-center ui-control bg-surface text-ink-3 shadow-sm transition hover:bg-hover active:scale-[0.98]"
               aria-label="更多操作"
               :aria-expanded="showMoreMenu"
               aria-haspopup="menu"
@@ -331,9 +370,9 @@ async function confirmClearStats() {
             >
               <IconMore class="h-4 w-4" />
             </button>
-            <div v-if="showMoreMenu" class="absolute right-0 top-9 z-20 w-28 overflow-hidden ui-control bg-white py-1 text-[12px] shadow-lg">
-              <button class="block w-full px-3 py-1.5 text-left text-[#475569] hover:bg-[#f8fafc]" @click="handleRefresh">刷新数据</button>
-              <button class="block w-full px-3 py-1.5 text-left text-[#dc2626] hover:bg-[#fef2f2]" @click="handleClearStats">清空统计</button>
+            <div v-if="showMoreMenu" ref="moreMenuPanelRef" role="menu" class="absolute right-0 top-9 z-20 w-28 overflow-hidden ui-control bg-surface py-1 text-[12px] shadow-lg" @keydown="onMenuKeydown">
+              <button role="menuitem" class="block w-full px-3 py-1.5 text-left text-ink-2 hover:bg-hover focus:bg-hover focus:outline-none" @click="handleRefresh">刷新数据</button>
+              <button role="menuitem" class="block w-full px-3 py-1.5 text-left text-danger-fg hover:bg-danger-tint focus:bg-danger-tint focus:outline-none" @click="handleClearStats">清空统计</button>
             </div>
           </div>
         </div>
@@ -343,8 +382,8 @@ async function confirmClearStats() {
         <AdvertisementList />
       </section>
 
-      <p v-if="error" class="ui-status-danger rounded-lg border border-[#fecaca] px-3 py-2 text-[12px]">统计加载失败：{{ error }}</p>
-      <p v-if="proxyAccessError" class="ui-status-danger rounded-lg border border-[#fecaca] px-3 py-2 text-[12px]">代理模式切换失败：{{ proxyAccessError }}</p>
+      <p v-if="error" class="ui-status-danger rounded-lg border border-danger-tint-line px-3 py-2 text-[12px]">统计加载失败：{{ error }}</p>
+      <p v-if="proxyAccessError" class="ui-status-danger rounded-lg border border-danger-tint-line px-3 py-2 text-[12px]">代理模式切换失败：{{ proxyAccessError }}</p>
 
       <section class="dashboard-stats-grid grid gap-2.5">
         <StatsCard v-for="card in cards" :key="card.label" v-bind="card" />
@@ -368,16 +407,16 @@ async function confirmClearStats() {
         <aside class="min-w-0 space-y-3">
           <AdvancedSettings />
 
-          <div class="ui-card bg-[#fffafa] p-3">
-            <div class="mb-2.5 flex items-center gap-2 text-[#dc2626]">
+          <div class="ui-card bg-danger-tint/40 p-3">
+            <div class="mb-2.5 flex items-center gap-2 text-danger">
               <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none">
                 <path d="M10 6v4.5m0 3h.01M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
               <h3 class="text-[14px] font-semibold">危险操作</h3>
             </div>
-            <p class="mb-3 text-[12px] leading-4 text-[#7f1d1d]">此操作不可逆，请谨慎操作。</p>
+            <p class="mb-3 text-[12px] leading-4 text-danger">此操作不可逆，请谨慎操作。</p>
             <button
-              class="inline-flex ui-control-h ui-control w-full items-center justify-center gap-2 border-[#fecaca] bg-white text-[12px] font-semibold text-[#dc2626] transition hover:bg-[#fef2f2] disabled:cursor-not-allowed disabled:opacity-60"
+              class="inline-flex ui-control-h ui-control w-full items-center justify-center gap-2 border-danger-tint-line bg-surface text-[12px] font-semibold text-danger-fg transition hover:bg-danger-tint disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="loading || clearStatsBusy"
               @click="handleClearStats"
             >
@@ -398,42 +437,42 @@ async function confirmClearStats() {
     <Transition name="motion-fade" appear>
     <div
       v-if="showClearStatsModal"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
+      class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm"
       @click.self="closeClearStatsModal"
     >
-      <div class="motion-pop-panel w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5">
-        <div class="flex items-start gap-3 border-b border-[#fee2e2] bg-gradient-to-br from-[#fff7ed] to-white p-4">
-          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fee2e2] text-[#dc2626]">
+      <div class="motion-pop-panel w-full max-w-md overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/5">
+        <div class="flex items-start gap-3 border-b border-danger-tint-line bg-gradient-to-br from-warning-tint to-surface p-4">
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger-tint text-danger">
             <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <path d="M10 6v4.5m0 3h.01M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </div>
           <div class="min-w-0">
-            <h2 class="text-base font-semibold text-[#111827]">确认清空统计？</h2>
-            <p class="mt-1 text-xs leading-5 text-[#6b7280]">此操作会清空请求、Token、Credits 和用量明细。清空后历史统计无法恢复。</p>
+            <h2 class="text-base font-semibold text-ink">确认清空统计？</h2>
+            <p class="mt-1 text-xs leading-5 text-ink-3">此操作会清空请求、Token、Credits 和用量明细。清空后历史统计无法恢复。</p>
           </div>
-          <button class="ml-auto text-[#94a3b8] hover:text-[#475569]" aria-label="关闭确认窗口" :disabled="clearStatsBusy" @click="closeClearStatsModal">×</button>
+          <button class="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-4 transition hover:bg-hover hover:text-ink-2" aria-label="关闭确认窗口" :disabled="clearStatsBusy" @click="closeClearStatsModal">×</button>
         </div>
 
         <div class="space-y-2 p-4">
-          <div class="rounded-xl border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-xs leading-5 text-[#92400e]">
+          <div class="rounded-xl border border-warning-tint-line bg-warning-tint px-3 py-2 text-xs leading-5 text-warning-fg">
             代理服务不会停止，只会重置仪表盘统计数据。
           </div>
-          <p v-if="clearStatsError" class="rounded-xl border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-xs text-[#dc2626]">
+          <p v-if="clearStatsError" class="rounded-xl border border-danger-tint-line bg-danger-tint px-3 py-2 text-xs text-danger-fg">
             {{ clearStatsError }}
           </p>
         </div>
 
-        <div class="flex justify-end gap-2 border-t border-[#f3f4f6] bg-[#fafafa] px-4 py-3">
+        <div class="flex justify-end gap-2 border-t border-line-2 bg-surface-2 px-4 py-3">
           <button
-            class="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-xs font-medium text-[#374151] transition-colors hover:bg-[#f9fafb] disabled:opacity-50"
+            class="rounded-lg border border-line bg-surface px-4 py-2 text-xs font-medium text-ink-2 transition-colors hover:bg-hover disabled:opacity-50"
             :disabled="clearStatsBusy"
             @click="closeClearStatsModal"
           >
             取消
           </button>
           <button
-            class="rounded-lg bg-[#dc2626] px-4 py-2 text-xs font-medium text-white shadow-sm transition-colors hover:bg-[#b91c1c] disabled:cursor-not-allowed disabled:opacity-60"
+            class="rounded-lg bg-danger px-4 py-2 text-xs font-medium text-white shadow-sm transition-colors hover:bg-danger-hover disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="clearStatsBusy"
             @click="confirmClearStats"
           >

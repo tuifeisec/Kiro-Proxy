@@ -23,7 +23,7 @@ let activeIntervalMs = 0
 let fetching = false
 
 async function fetchStats() {
-  if (fetching) return
+  if (document.hidden || fetching) return
   fetching = true
   loading.value = true
   try {

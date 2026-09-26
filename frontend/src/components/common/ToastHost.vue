@@ -5,27 +5,27 @@ import IconClose from '../icons/IconClose.vue'
 const { toasts, dismissToast } = useToast()
 
 const toneClasses = {
-  success: 'border-[#bbf7d0] bg-white text-[#166534]',
-  error: 'border-[#fecaca] bg-white text-[#b91c1c]',
-  warning: 'border-[#fed7aa] bg-white text-[#b45309]',
-  info: 'border-[#bfdbfe] bg-white text-[#1d4ed8]',
+  success: 'border-success-tint-line bg-surface text-success-fg',
+  error: 'border-danger-tint-line bg-surface text-danger-fg',
+  warning: 'border-warning-tint-line bg-surface text-warning-fg',
+  info: 'border-primary-tint-line bg-surface text-primary-fg',
 }
 
 const dotClasses = {
-  success: 'bg-[#22c55e]',
-  error: 'bg-[#ef4444]',
-  warning: 'bg-[#f59e0b]',
-  info: 'bg-[#3b82f6]',
+  success: 'bg-brand',
+  error: 'bg-danger',
+  warning: 'bg-warning',
+  info: 'bg-primary',
 }
 </script>
 
 <template>
-  <div class="pointer-events-none fixed right-4 top-12 z-[100] w-[min(360px,calc(100vw-32px))]" aria-live="polite" aria-atomic="true">
+  <div class="pointer-events-none fixed right-4 top-12 z-[var(--z-toast)] w-[min(360px,calc(100vw-32px))]" aria-live="polite" aria-atomic="true">
     <TransitionGroup name="toast" tag="div" class="space-y-2">
       <div
         v-for="toast in toasts"
         :key="toast.id"
-        class="pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3 py-2.5 shadow-[0_8px_24px_rgba(15,23,42,0.12)]"
+        class="pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3 py-2.5 shadow-popover"
         :class="toneClasses[toast.tone] || toneClasses.info"
         role="status"
       >
@@ -33,7 +33,7 @@ const dotClasses = {
         <span class="min-w-0 flex-1 text-[12px] leading-5">{{ toast.message }}</span>
         <button
           type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-current opacity-60 transition hover:bg-black/5 hover:opacity-100"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-current opacity-60 transition hover:bg-black/5 hover:opacity-100"
           aria-label="关闭提示"
           @click="dismissToast(toast.id)"
         >
@@ -47,13 +47,17 @@ const dotClasses = {
 <style scoped>
 /* toast 进出场：进入从右侧轻微位移 + 淡入，退出反向；
    时长/缓动引用 style.css 全局动效令牌。
-   未定义 .toast-move，多条堆叠时只有新条目动，已有条目不参与动画。 */
+   .toast-move 处理列表重排：多条堆叠时其余条目平滑让位。 */
 .toast-enter-active {
   transition: opacity var(--dur-base) var(--ease-out-quart), transform var(--dur-base) var(--ease-out-quart);
 }
 
 .toast-leave-active {
   transition: opacity var(--dur-fast) var(--ease-in-quart), transform var(--dur-fast) var(--ease-in-quart);
+}
+
+.toast-move {
+  transition: transform var(--dur-base) var(--ease-out-quart);
 }
 
 .toast-enter-from,

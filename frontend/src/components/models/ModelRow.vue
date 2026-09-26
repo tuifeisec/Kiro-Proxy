@@ -31,26 +31,27 @@ const providerMeta = computed(() => {
     openai: {
       label: 'OpenAI',
       image: openaiIcon,
-      icon: 'bg-white border-[#d9dde5]',
-      badge: 'bg-[#eef6ff] text-[#2563eb]'
+      imgClass: 'dark:invert',
+      icon: 'bg-surface border-line',
+      badge: 'bg-primary-tint text-primary-fg'
     },
     anthropic: {
       label: 'Anthropic',
       image: claudeIcon,
-      icon: 'bg-white border-[#ead7c8]',
-      badge: 'bg-[#fff1e7] text-[#b45309]'
+      icon: 'bg-surface border-warning-tint-line',
+      badge: 'bg-warning-tint text-warning-fg'
     },
     gemini: {
       label: 'Gemini',
       image: geminiIcon,
-      icon: 'bg-white border-[#dbe5ff]',
-      badge: 'bg-[#f1f5ff] text-[#4f46e5]'
+      icon: 'bg-surface border-primary-tint-line',
+      badge: 'bg-primary-tint text-accent'
     },
     codex: {
       label: 'Codex',
       mark: 'CODEX',
       icon: 'bg-[#050505] text-white border-[#050505]',
-      badge: 'bg-[#ecfdf5] text-[#059669]'
+      badge: 'bg-success-tint text-success-fg'
     }
   }
   return map[provider.value] || map.openai
@@ -80,29 +81,29 @@ const codexAccountIdLabel = computed(() => privateLabel.value || props.model.cod
 
 const statusMeta = computed(() => {
   if (!isEnabled.value) {
-    return { label: '已禁用', sub: '未参与路由', badge: 'bg-[#f3f4f6] text-[#6b7280]', dot: 'bg-[#9ca3af]' }
+    return { label: '已禁用', sub: '未参与路由', badge: 'bg-hover text-ink-3', dot: 'bg-ink-4' }
   }
   if (props.testing) {
-    return { label: '测试中...', sub: '正在发送请求...', badge: 'bg-[#eff6ff] text-[#2563eb]', dot: 'bg-[#3b82f6] animate-pulse' }
+    return { label: '测试中...', sub: '正在发送请求...', badge: 'bg-primary-tint text-primary-fg', dot: 'bg-primary animate-pulse' }
   }
   if (!props.testResult) {
-    return { label: '未测试', sub: '等待测试', badge: 'bg-[#f8fafc] text-[#64748b]', dot: 'bg-[#94a3b8]' }
+    return { label: '未测试', sub: '等待测试', badge: 'bg-surface-2 text-ink-3', dot: 'bg-ink-4' }
   }
   if (props.testResult.ok) {
     return {
       label: '可用',
       sub: `${Number(props.testResult.tokens_per_sec || 0).toFixed(1)} t/s  |  ${Math.round(Number(props.testResult.ttfb_ms || 0))}ms`,
-      badge: 'bg-[#ecfdf5] text-[#059669]',
-      dot: 'bg-[#10b981]'
+      badge: 'bg-success-tint text-success-fg',
+      dot: 'bg-brand'
     }
   }
-  return { label: '连接失败', sub: props.testResult.error || '测试失败', badge: 'bg-[#fef2f2] text-[#dc2626]', dot: 'bg-[#ef4444]' }
+  return { label: '连接失败', sub: props.testResult.error || '测试失败', badge: 'bg-danger-tint text-danger-fg', dot: 'bg-danger' }
 })
 
 const lastTestStatus = computed(() => {
-  if (!props.testResult) return { label: '未知', text: 'text-[#94a3b8]', dot: 'bg-[#94a3b8]', title: '从未测试' }
-  if (props.testResult.ok) return { label: '成功', text: 'text-[#059669]', dot: 'bg-[#10b981]', title: '最近一次连接测试成功' }
-  return { label: '失败', text: 'text-[#dc2626]', dot: 'bg-[#ef4444]', title: props.testResult.error || '最近一次连接测试失败' }
+  if (!props.testResult) return { label: '未知', text: 'text-ink-4', dot: 'bg-ink-4', title: '从未测试' }
+  if (props.testResult.ok) return { label: '成功', text: 'text-success', dot: 'bg-brand', title: '最近一次连接测试成功' }
+  return { label: '失败', text: 'text-danger', dot: 'bg-danger', title: props.testResult.error || '最近一次连接测试失败' }
 })
 
 const codexUsage = computed(() => {
@@ -132,7 +133,7 @@ const codexRemaining = computed(() => {
 
 const codexRingStyle = computed(() => {
   const value = codexRemaining.value ?? 0
-  return { background: `conic-gradient(#34d399 ${value * 3.6}deg, #e5e7eb 0deg)` }
+  return { background: `conic-gradient(var(--ui-chart-green) ${value * 3.6}deg, var(--ui-border) 0deg)` }
 })
 
 const updatedAtLabel = computed(() => {
@@ -184,21 +185,21 @@ function usedText(row) {
 </script>
 
 <template>
-  <div class="model-row bg-white border-b border-[#edf0f5] last:border-b-0 hover:bg-[#fcfdff] transition-colors">
+  <div class="model-row bg-surface border-b border-line-2 last:border-b-0 hover:bg-hover transition-colors">
     <div class="grid min-w-[1153px] grid-cols-[48px_205px_400px_225px_133px_142px] min-h-[76px] items-center">
       <div class="flex justify-center px-3">
         <button
           type="button"
-          class="flex h-[28px] w-[28px] items-center justify-center rounded-full border transition-all disabled:cursor-not-allowed disabled:opacity-70"
+          class="flex h-[28px] w-[28px] items-center justify-center rounded-full border transition-[color,background-color,border-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-70"
           :class="isEnabled
-            ? 'border-[#bfdbfe] bg-[#eff6ff] text-[#1677ff] shadow-[0_1px_2px_rgba(22,119,255,0.16)] hover:border-[#93c5fd] hover:bg-[#dbeafe]'
-            : 'border-[#e5e7eb] bg-white text-[#94a3b8] hover:border-[#cbd5e1] hover:bg-[#f8fafc] hover:text-[#64748b]'"
+            ? 'border-primary-tint-line bg-primary-tint text-primary-fg shadow-card hover:border-primary-tint-line-strong hover:bg-primary-tint-strong'
+            : 'border-line bg-surface text-ink-4 hover:border-line-strong hover:bg-hover hover:text-ink-3'"
           :aria-label="togglingEnabled ? '切换中' : (isEnabled ? '禁用模型' : '启用模型')"
           :title="togglingEnabled ? '切换中...' : (isEnabled ? '点击禁用模型' : '点击启用模型')"
           :disabled="togglingEnabled"
           @click="emit('toggle-enabled')"
         >
-          <span v-if="togglingEnabled" class="h-[13px] w-[13px] animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+          <span v-if="togglingEnabled" class="h-[15px] w-[15px] animate-spin rounded-full border-2 border-current border-t-transparent"></span>
           <svg v-else class="h-[15px] w-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 3v8" />
             <path d="M7.05 5.85a8 8 0 1 0 9.9 0" />
@@ -208,18 +209,18 @@ function usedText(row) {
 
       <div class="flex min-w-0 items-center gap-2.5 px-3">
         <div
-          class="flex h-[40px] w-[40px] shrink-0 items-center justify-center overflow-hidden rounded-[9px] border text-[11px] font-bold shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+          class="flex h-[40px] w-[40px] shrink-0 items-center justify-center overflow-hidden rounded-[9px] border text-[11px] font-bold shadow-card"
           :class="providerMeta.icon"
         >
-          <img v-if="providerMeta.image" :src="providerMeta.image" :alt="providerMeta.label" class="h-[25px] w-[25px] object-contain" />
+          <img v-if="providerMeta.image" :src="providerMeta.image" :alt="providerMeta.label" class="h-[25px] w-[25px] object-contain" :class="providerMeta.imgClass" />
           <span v-else class="scale-[0.72]">{{ providerMeta.mark }}</span>
         </div>
         <div class="min-w-0">
           <div class="flex min-w-0 items-center gap-1.5">
-            <div class="truncate text-[14px] font-semibold leading-5 text-[#111827]">{{ displayName }}</div>
-            <span v-if="primary" class="shrink-0 rounded-[4px] bg-[#eef6ff] px-1.5 py-[1px] text-[11px] font-medium text-[#2563eb]">主力</span>
+            <div class="truncate text-[14px] font-semibold leading-5 text-ink">{{ displayName }}</div>
+            <span v-if="primary" class="shrink-0 rounded-[4px] bg-primary-tint px-1.5 py-[1px] text-[11px] font-medium text-primary-fg">主力</span>
           </div>
-          <div class="mt-[2px] truncate font-mono text-[11px] leading-4 text-[#64748b]">{{ model.model_id || '-' }}</div>
+          <div class="mt-[2px] truncate font-mono text-[11px] leading-4 text-ink-3">{{ model.model_id || '-' }}</div>
           <div class="mt-[4px] flex min-w-0 items-center gap-1.5">
             <span class="shrink-0 inline-flex rounded-[4px] px-1.5 py-[1px] text-[11px] leading-4" :class="providerMeta.badge">{{ providerMeta.label }}</span>
           </div>
@@ -227,42 +228,42 @@ function usedText(row) {
       </div>
 
       <div class="grid grid-cols-[50px_minmax(165px,1fr)_54px_95px] gap-x-2 gap-y-[7px] px-2 text-[12px] leading-5">
-        <span class="font-medium text-[#64748b]">HOST</span>
-        <span class="truncate text-[#111827]" :title="baseUrl">{{ baseUrl }}</span>
-        <span class="font-medium text-[#64748b]">API Key</span>
-        <span class="truncate font-mono text-[#111827]" :title="maskedCredential">{{ maskedCredential }}</span>
-        <span class="font-medium text-[#64748b]">Endpoint</span>
-        <span class="truncate font-mono text-[#111827]" :title="endpointLabel">{{ endpointLabel }}</span>
-        <span class="font-medium text-[#64748b]">代理</span>
-        <span class="truncate font-medium" :class="!hidePrivateInfo && model.proxy_url ? 'text-[#2563eb]' : 'text-[#059669]'" :title="proxyLabel">{{ proxyLabel }}</span>
+        <span class="font-medium text-ink-3">HOST</span>
+        <span class="truncate text-ink" :title="baseUrl">{{ baseUrl }}</span>
+        <span class="font-medium text-ink-3">API Key</span>
+        <span class="truncate font-mono text-ink" :title="maskedCredential">{{ maskedCredential }}</span>
+        <span class="font-medium text-ink-3">Endpoint</span>
+        <span class="truncate font-mono text-ink" :title="endpointLabel">{{ endpointLabel }}</span>
+        <span class="font-medium text-ink-3">代理</span>
+        <span class="truncate font-medium" :class="!hidePrivateInfo && model.proxy_url ? 'text-primary-fg' : 'text-success'" :title="proxyLabel">{{ proxyLabel }}</span>
       </div>
 
       <div class="grid grid-cols-5 gap-0.5 px-1.5 text-center text-[12px] leading-5">
         <div>
-          <div class="text-[#64748b]">输入</div>
-          <div class="mt-1 font-medium tabular-nums text-[#111827]">{{ formatPrice(model.input_price) }}</div>
+          <div class="text-ink-3">输入</div>
+          <div class="mt-1 font-medium tabular-nums text-ink">{{ formatPrice(model.input_price) }}</div>
         </div>
         <div>
-          <div class="text-[#64748b]">输出</div>
-          <div class="mt-1 font-medium tabular-nums text-[#111827]">{{ formatPrice(model.output_price) }}</div>
+          <div class="text-ink-3">输出</div>
+          <div class="mt-1 font-medium tabular-nums text-ink">{{ formatPrice(model.output_price) }}</div>
         </div>
         <div>
-          <div class="text-[#64748b]">缓存读</div>
-          <div class="mt-1 font-medium tabular-nums text-[#111827]">{{ formatPrice(model.cache_input_price) }}</div>
+          <div class="text-ink-3">缓存读</div>
+          <div class="mt-1 font-medium tabular-nums text-ink">{{ formatPrice(model.cache_input_price) }}</div>
         </div>
         <div>
-          <div class="text-[#64748b]">缓存写</div>
-          <div class="mt-1 font-medium tabular-nums text-[#111827]">{{ formatPrice(model.cache_output_price) }}</div>
+          <div class="text-ink-3">缓存写</div>
+          <div class="mt-1 font-medium tabular-nums text-ink">{{ formatPrice(model.cache_output_price) }}</div>
         </div>
         <div>
-          <div class="text-[#64748b]">倍率</div>
-          <div class="mt-1 font-medium tabular-nums text-[#111827]">{{ formatMultiplier(model.rate_multiplier) }}</div>
+          <div class="text-ink-3">倍率</div>
+          <div class="mt-1 font-medium tabular-nums text-ink">{{ formatMultiplier(model.rate_multiplier) }}</div>
         </div>
       </div>
 
       <div class="px-3">
         <div class="inline-flex rounded-[5px] px-2 py-[3px] text-[12px] font-semibold leading-4" :class="statusMeta.badge">{{ statusMeta.label }}</div>
-        <div class="mt-[5px] flex items-center gap-1.5 text-[12px] leading-5 text-[#64748b]">
+        <div class="mt-[5px] flex items-center gap-1.5 text-[12px] leading-5 text-ink-3">
           <span class="h-[6px] w-[6px] rounded-full" :class="statusMeta.dot"></span>
           <span class="truncate" :title="statusMeta.sub">{{ statusMeta.sub }}</span>
         </div>
@@ -270,69 +271,69 @@ function usedText(row) {
 
       <div class="flex items-center justify-start gap-1.5 px-1 whitespace-nowrap">
         <button
-          class="inline-flex h-[30px] min-w-[62px] shrink-0 items-center justify-center gap-1 ui-control bg-white px-2 text-[12px] font-medium leading-none text-[#374151] hover:border-[#bfdbfe] hover:bg-[#eff6ff] hover:text-[#2563eb] disabled:opacity-50"
+          class="inline-flex h-[30px] w-[70px] shrink-0 items-center justify-center gap-1 ui-control bg-surface px-1 text-[12px] font-medium leading-none text-ink-2 hover:border-primary-tint-line hover:bg-primary-tint hover:text-primary-fg disabled:opacity-50"
           :disabled="testing || !isEnabled"
           @click="emit('test')"
         >
           <IconPlay class="h-3 w-3 shrink-0" />
           <span>{{ testing ? '测试中' : '测试' }}</span>
         </button>
-        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center ui-control bg-white text-[#64748b] hover:bg-[#f8fafc] hover:text-[#111827]" title="编辑" aria-label="编辑" @click="emit('edit')">
+        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center ui-control bg-surface text-ink-3 hover:bg-hover hover:text-ink" title="编辑" aria-label="编辑" @click="emit('edit')">
           <IconEdit class="h-3.5 w-3.5" />
         </button>
-        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center ui-control bg-white text-[#64748b] hover:border-[#fecaca] hover:bg-[#fef2f2] hover:text-[#ef4444]" title="删除" aria-label="删除" @click="emit('delete')">
+        <button class="flex h-[30px] w-[30px] shrink-0 items-center justify-center ui-control bg-surface text-ink-3 hover:border-danger-tint-line hover:bg-danger-tint hover:text-danger" title="删除" aria-label="删除" @click="emit('delete')">
           <IconTrash class="h-3.5 w-3.5" />
         </button>
       </div>
     </div>
 
     <div v-if="provider === 'codex'" class="min-w-[1153px] px-4 pb-4">
-      <div class="ml-[48px] grid grid-cols-[245px_1fr_170px_165px] overflow-hidden ui-card bg-white">
-        <div class="border-r border-[#edf0f5] px-4 py-4 text-[12px]">
-          <div class="mb-3 font-semibold text-[#111827]">账户信息</div>
+      <div class="ml-[48px] grid grid-cols-[245px_1fr_170px_165px] overflow-hidden ui-card bg-surface">
+        <div class="border-r border-line-2 px-4 py-4 text-[12px]">
+          <div class="mb-3 font-semibold text-ink">账户信息</div>
           <div class="grid grid-cols-[70px_minmax(0,1fr)] gap-y-2 leading-4">
-            <span class="text-[#64748b]">邮箱</span><span class="truncate text-[#111827]">{{ codexEmailLabel }}</span>
-            <span class="text-[#64748b]">计划</span><span class="truncate text-[#111827]">{{ codexPlanLabel }}</span>
-            <span class="text-[#64748b]">账户 ID</span><span class="truncate font-mono text-[#111827]">{{ codexAccountIdLabel }}</span>
-            <span class="text-[#64748b]">Access Token</span><span class="truncate text-[#f59e0b]">将于 {{ expiresAtLabel }} 过期</span>
+            <span class="text-ink-3">邮箱</span><span class="truncate text-ink">{{ codexEmailLabel }}</span>
+            <span class="text-ink-3">计划</span><span class="truncate text-ink">{{ codexPlanLabel }}</span>
+            <span class="text-ink-3">账户 ID</span><span class="truncate font-mono text-ink">{{ codexAccountIdLabel }}</span>
+            <span class="text-ink-3">Access Token</span><span class="truncate text-warning">将于 {{ expiresAtLabel }} 过期</span>
           </div>
         </div>
 
-        <div class="border-r border-[#edf0f5] px-4 py-4 text-[12px]">
-          <div class="mb-3 font-semibold text-[#111827]">使用限制</div>
+        <div class="border-r border-line-2 px-4 py-4 text-[12px]">
+          <div class="mb-3 font-semibold text-ink">使用限制</div>
           <div v-if="codexWindows.length" class="space-y-3">
             <div v-for="item in codexWindows" :key="item.label">
               <div class="mb-1.5 flex items-center justify-between">
-                <span class="font-medium text-[#374151]">{{ item.label }}</span>
-                <span class="tabular-nums text-[#64748b]">{{ remainingPercent(item.window) }}%，{{ usedText(item.window) }}</span>
+                <span class="font-medium text-ink-2">{{ item.label }}</span>
+                <span class="tabular-nums text-ink-3">{{ remainingPercent(item.window) }}%，{{ usedText(item.window) }}</span>
               </div>
-              <div class="h-[7px] overflow-hidden rounded-full bg-[#e5e7eb]">
-                <div class="h-full rounded-full bg-[#2dd4bf]" :style="{ width: `${remainingPercent(item.window)}%` }"></div>
+              <div class="h-[7px] overflow-hidden rounded-full bg-hover-strong">
+                <div class="h-full rounded-full bg-brand" :style="{ width: `${remainingPercent(item.window)}%` }"></div>
               </div>
-              <div class="mt-1 text-[11px] text-[#94a3b8]">重置时间：{{ resetText(item.window.reset_after_seconds) }}</div>
+              <div class="mt-1 text-[11px] text-ink-4">重置时间：{{ resetText(item.window.reset_after_seconds) }}</div>
             </div>
           </div>
-          <div v-else class="rounded-lg border border-dashed border-[#cbd5e1] px-3 py-3 text-[#64748b]">暂无用量信息，点击刷新信息获取。</div>
+          <div v-else class="rounded-lg border border-dashed border-line px-3 py-3 text-ink-3">暂无用量信息，点击刷新信息获取。</div>
         </div>
 
-        <div class="flex flex-col items-center justify-center border-r border-[#edf0f5] px-4 py-4 text-[12px]">
-          <div class="mb-3 font-semibold text-[#111827] self-start">剩余额度</div>
+        <div class="flex flex-col items-center justify-center border-r border-line-2 px-4 py-4 text-[12px]">
+          <div class="mb-3 font-semibold text-ink self-start">剩余额度</div>
           <div v-if="codexRemaining !== null" class="rounded-full p-[7px]" :style="codexRingStyle">
-            <div class="flex h-[74px] w-[74px] flex-col items-center justify-center rounded-full bg-white shadow-inner">
-              <span class="text-lg font-bold tabular-nums text-[#10b981]">{{ codexRemaining }}%</span>
+            <div class="flex h-[74px] w-[74px] flex-col items-center justify-center rounded-full bg-surface shadow-inner">
+              <span class="text-lg font-bold tabular-nums text-brand">{{ codexRemaining }}%</span>
             </div>
           </div>
-          <div v-else class="flex h-[88px] w-[88px] items-center justify-center rounded-full bg-[#f3f4f6] text-[#94a3b8]">无数据</div>
-          <div class="mt-2 text-[11px] text-[#64748b]">{{ codexRemaining !== null ? '基于当前 5 小时窗口' : '等待刷新用量' }}</div>
+          <div v-else class="flex h-[88px] w-[88px] items-center justify-center rounded-full bg-hover text-ink-4">无数据</div>
+          <div class="mt-2 text-[11px] text-ink-3">{{ codexRemaining !== null ? '基于当前 5 小时窗口' : '等待刷新用量' }}</div>
         </div>
 
         <div class="px-4 py-4 text-[12px]">
-          <div class="mb-3 font-semibold text-[#111827]">最近刷新</div>
-          <div class="mb-4 text-[#64748b]">{{ updatedAtLabel }}</div>
-          <div class="mb-2 font-semibold text-[#111827]">最新状态</div>
+          <div class="mb-3 font-semibold text-ink">最近刷新</div>
+          <div class="mb-4 text-ink-3">{{ updatedAtLabel }}</div>
+          <div class="mb-2 font-semibold text-ink">最新状态</div>
           <div class="mb-4 flex items-center gap-1.5" :class="lastTestStatus.text" :title="lastTestStatus.title"><span class="h-[7px] w-[7px] rounded-full" :class="lastTestStatus.dot"></span>{{ lastTestStatus.label }}</div>
           <button
-            class="inline-flex h-[30px] items-center gap-1 ui-control px-3 text-[12px] font-medium text-[#2563eb] hover:bg-[#eff6ff] disabled:opacity-50"
+            class="inline-flex h-[30px] items-center gap-1 ui-control px-3 text-[12px] font-medium text-primary-fg hover:bg-primary-tint disabled:opacity-50"
             :disabled="refreshingCodex"
             @click="emit('refresh-codex')"
           >

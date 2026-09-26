@@ -1,0 +1,3 @@
+<template>
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.75"/><line x1="8" y1="1.25" x2="8" y2="3.25"/><line x1="8" y1="12.75" x2="8" y2="14.75"/><line x1="1.25" y1="8" x2="3.25" y2="8"/><line x1="12.75" y1="8" x2="14.75" y2="8"/><line x1="3.23" y1="3.23" x2="4.64" y2="4.64"/><line x1="12.77" y1="3.23" x2="11.36" y2="4.64"/><line x1="3.23" y1="12.77" x2="4.64" y2="11.36"/><line x1="12.77" y1="12.77" x2="11.36" y2="11.36"/></svg>
+</template>

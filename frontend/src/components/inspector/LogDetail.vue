@@ -340,36 +340,36 @@ const parsedFieldCount = computed(() => parsedFieldGroups.value.reduce((total, g
 <template>
   <div class="flex h-full flex-col overflow-hidden">
     <template v-if="entry">
-      <div class="shrink-0 border-b border-[#e5e7eb] bg-white px-4 py-3">
+      <div class="shrink-0 border-b border-line bg-surface px-4 py-3">
         <div class="mb-2 flex items-center justify-between gap-3">
-          <h2 class="text-sm font-semibold text-[#111827]">日志详情</h2>
+          <h2 class="text-sm font-semibold text-ink">日志详情</h2>
           <div class="flex items-center gap-2">
-            <button @click="copyDetail" class="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#6b7280] hover:text-[#111827] disabled:opacity-50" :disabled="!entry.detail">
-              <IconCheck v-if="copiedDetail" class="h-3.5 w-3.5 text-[#10b981]" />
+            <button @click="copyDetail" class="inline-flex h-7 items-center gap-1 rounded-md border border-line bg-surface px-2.5 text-[11px] text-ink-3 hover:text-ink disabled:opacity-50" :disabled="!entry.detail">
+              <IconCheck v-if="copiedDetail" class="h-3.5 w-3.5 text-brand" />
               <IconCopy v-else class="h-3.5 w-3.5" />
               {{ copiedDetail ? '已复制' : copyFailed === 'detail' ? '复制失败' : '复制详情' }}
             </button>
-            <button @click="exportDetail" class="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#6b7280] hover:text-[#111827] disabled:opacity-50" :disabled="!entry.detail">
+            <button @click="exportDetail" class="inline-flex h-7 items-center gap-1 rounded-md border border-line bg-surface px-2.5 text-[11px] text-ink-3 hover:text-ink disabled:opacity-50" :disabled="!entry.detail">
               <IconExport class="h-3.5 w-3.5" />
               导出详情
             </button>
-            <button @click="copyAll" class="inline-flex h-7 items-center gap-1 rounded-md border border-[#e5e7eb] bg-white px-2.5 text-[11px] text-[#6b7280] hover:text-[#111827]">
-              <IconCheck v-if="copiedAll" class="h-3.5 w-3.5 text-[#10b981]" />
+            <button @click="copyAll" class="inline-flex h-7 items-center gap-1 rounded-md border border-line bg-surface px-2.5 text-[11px] text-ink-3 hover:text-ink">
+              <IconCheck v-if="copiedAll" class="h-3.5 w-3.5 text-brand" />
               <IconCopy v-else class="h-3.5 w-3.5" />
               {{ copiedAll ? '已复制' : copyFailed === 'all' ? '复制失败' : '复制全部' }}
             </button>
           </div>
         </div>
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[#6b7280]">
-          <span>时间：<b class="font-mono font-normal text-[#374151]">{{ entry.time }}</b></span>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-3">
+          <span>时间：<b class="font-mono font-normal text-ink-2">{{ entry.time }}</b></span>
           <span>级别：<b class="font-normal" :class="{
-              'text-[#ef4444]': entry.level === 'error',
-              'text-[#d97706]': entry.level === 'warn',
-              'text-[#2563eb]': entry.level === 'info',
-              'text-[#6b7280]': entry.level === 'debug',
+              'text-danger': entry.level === 'error',
+              'text-warning': entry.level === 'warn',
+              'text-primary-fg': entry.level === 'info',
+              'text-ink-3': entry.level === 'debug',
             }">{{ entry.level }}</b></span>
-          <span>分类：<b class="font-normal text-[#374151]">{{ entry.category }}</b></span>
-          <span class="min-w-0 flex-1 truncate">消息：<b class="font-normal text-[#374151]">{{ entry.message }}</b></span>
+          <span>分类：<b class="font-normal text-ink-2">{{ entry.category }}</b></span>
+          <span class="min-w-0 flex-1 truncate">消息：<b class="font-normal text-ink-2">{{ entry.message }}</b></span>
         </div>
       </div>
 
@@ -387,42 +387,42 @@ const parsedFieldCount = computed(() => parsedFieldGroups.value.reduce((total, g
               class="h-[calc(100%-33px)] overflow-auto p-3 text-[11px] font-mono leading-5 whitespace-pre-wrap break-all text-[#d1d5db]">{{ rawDetail }}</pre>
           </div>
 
-          <div class="min-w-0 overflow-hidden rounded-lg border border-[#e5e7eb] bg-white">
-            <div class="flex items-center justify-between border-b border-[#e5e7eb] px-3 py-2">
-              <span class="text-xs font-semibold text-[#111827]">关键字段摘要</span>
-              <span class="rounded bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] text-[#6b7280]">{{ parsedFieldCount }} 项</span>
+          <div class="min-w-0 overflow-hidden rounded-lg border border-line bg-surface">
+            <div class="flex items-center justify-between border-b border-line px-3 py-2">
+              <span class="text-xs font-semibold text-ink">关键字段摘要</span>
+              <span class="rounded bg-hover px-1.5 py-0.5 text-[10px] text-ink-3">{{ parsedFieldCount }} 项</span>
             </div>
 
             <div v-if="parsedFieldGroups.length" class="h-[calc(100%-37px)] space-y-2 overflow-y-auto p-2">
               <section
                 v-for="group in parsedFieldGroups"
                 :key="group.id"
-                class="overflow-hidden rounded-md border border-[#eef2f7] bg-[#fbfdff]"
+                class="overflow-hidden rounded-md border border-line-2 bg-surface-2"
               >
-                <div class="flex items-center justify-between border-b border-[#eef2f7] bg-[#f8fafc] px-2.5 py-1.5">
-                  <span class="text-[11px] font-semibold text-[#111827]">{{ group.title }}</span>
-                  <span class="text-[10px] text-[#9ca3af]">{{ group.fields.length }} 项</span>
+                <div class="flex items-center justify-between border-b border-line-2 bg-surface-2 px-2.5 py-1.5">
+                  <span class="text-[11px] font-semibold text-ink">{{ group.title }}</span>
+                  <span class="text-[10px] text-ink-4">{{ group.fields.length }} 项</span>
                 </div>
-                <div class="divide-y divide-[#f3f4f6]">
+                <div class="divide-y divide-line-2">
                   <div v-for="item in group.fields" :key="`${group.id}:${item.key}`" class="px-2.5 py-1.5">
                     <div class="flex min-w-0 items-center justify-between gap-2">
-                      <span class="truncate font-mono text-[10px] text-[#2563eb]" :title="item.key">{{ item.key }}</span>
-                      <span class="max-w-[148px] truncate font-mono text-[11px] text-[#111827]" :title="item.value">{{ item.value }}</span>
+                      <span class="truncate font-mono text-[10px] text-primary-fg" :title="item.key">{{ item.key }}</span>
+                      <span class="max-w-[148px] truncate font-mono text-[11px] text-ink" :title="item.value">{{ item.value }}</span>
                     </div>
-                    <div class="mt-0.5 truncate text-[10px] text-[#6b7280]" :title="item.label">{{ item.label }}</div>
+                    <div class="mt-0.5 truncate text-[10px] text-ink-3" :title="item.label">{{ item.label }}</div>
                   </div>
                 </div>
               </section>
             </div>
-            <div v-else class="p-3 text-xs text-[#6b7280]">当前日志无可解析字段</div>
+            <div v-else class="p-3 text-xs text-ink-3">当前日志无可解析字段</div>
           </div>
         </div>
 
-        <div v-else class="flex h-full items-center justify-center rounded-lg border border-dashed border-[#e5e7eb] text-xs text-[#6b7280]">无详细数据</div>
+        <div v-else class="flex h-full items-center justify-center rounded-lg border border-dashed border-line text-xs text-ink-3">无详细数据</div>
       </div>
     </template>
 
-    <div v-else class="flex flex-1 items-center justify-center text-sm text-[#6b7280]">
+    <div v-else class="flex flex-1 items-center justify-center text-sm text-ink-3">
       点击左侧日志查看详情
     </div>
   </div>

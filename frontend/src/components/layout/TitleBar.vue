@@ -1,4 +1,10 @@
 <script setup>
+import IconSun from '../icons/IconSun.vue'
+import IconMoon from '../icons/IconMoon.vue'
+import { useTheme } from '../../composables/useTheme.js'
+
+const { isDark, toggleTheme } = useTheme()
+
 function callDesktop(name) {
   const fn = window?.[name]
   if (typeof fn === 'function') {
@@ -14,15 +20,26 @@ function startDrag(event) {
 </script>
 
 <template>
-  <div class="titlebar h-9 shrink-0 flex items-center justify-between bg-white/90 border-b border-[#e5e7eb] select-none" @mousedown="startDrag">
+  <div class="titlebar h-9 shrink-0 flex items-center justify-between bg-surface/90 border-b border-line select-none" @mousedown="startDrag">
     <div class="titlebar-drag flex-1 h-full flex items-center gap-2 px-3">
-      <div class="w-4 h-4 rounded bg-[#10b981] text-white text-[10px] leading-4 text-center font-bold">K</div>
-      <span class="text-xs font-medium text-[#374151]">Kiro Proxy</span>
-      <span class="text-[10px] text-[#9ca3af]">后台代理运行中</span>
+      <div class="w-4 h-4 rounded bg-brand text-white text-[10px] leading-4 text-center font-bold">K</div>
+      <span class="text-xs font-medium text-ink-2">Kiro Proxy</span>
+      <span class="text-[10px] text-ink-4">后台代理运行中</span>
     </div>
     <div class="titlebar-controls h-full flex items-center pr-1 gap-1">
       <button
-        class="w-8 h-8 flex items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#111827] transition-colors"
+        class="relative w-8 h-8 flex items-center justify-center rounded-md text-ink-3 hover:bg-hover hover:text-ink transition-colors"
+        :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'"
+        :title="isDark ? '切换到浅色模式' : '切换到深色模式'"
+        @click="toggleTheme"
+      >
+        <IconSun class="absolute w-4 h-4 transition-[opacity,transform] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)]"
+                 :class="isDark ? 'opacity-0 -rotate-90 scale-75' : 'opacity-100 rotate-0 scale-100'" />
+        <IconMoon class="absolute w-4 h-4 transition-[opacity,transform] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)]"
+                  :class="isDark ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 rotate-90 scale-75'" />
+      </button>
+      <button
+        class="w-8 h-8 flex items-center justify-center rounded-md text-ink-3 hover:bg-hover hover:text-ink transition-colors"
         aria-label="隐藏到后台"
         title="隐藏到后台"
         @click="callDesktop('desktopWindowMinimize')"
@@ -32,7 +49,7 @@ function startDrag(event) {
         </svg>
       </button>
       <button
-        class="w-8 h-8 flex items-center justify-center rounded-md text-[#6b7280] hover:bg-[#fee2e2] hover:text-[#dc2626] transition-colors"
+        class="w-8 h-8 flex items-center justify-center rounded-md text-ink-3 hover:bg-danger-tint hover:text-danger transition-colors"
         aria-label="关闭到后台"
         title="关闭到后台"
         @click="callDesktop('desktopWindowClose')"

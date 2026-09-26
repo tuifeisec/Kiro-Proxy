@@ -57,16 +57,47 @@ const displayItems = computed(() => [...items.value].sort((left, right) => {
   return timeDiff || Number(right.id || 0) - Number(left.id || 0)
 }))
 
+// 数据明细 tooltip：700ms dwell 后显示——鼠标扫过一行不闪现，停住阅读才出现。
+// 坐标始终记录最新值，延迟期间移动鼠标后显示位置仍正确。
+const TOOLTIP_DELAY_MS = 700
+let tooltipShowTimer = 0
+
 function showTooltip(type, item, event) {
-  tooltip.value = { type, item, x: event.clientX, y: event.clientY }
+  tooltipNextX = event.clientX
+  tooltipNextY = event.clientY
+  clearTimeout(tooltipShowTimer)
+  tooltipShowTimer = setTimeout(() => {
+    tooltip.value = { type, item, x: tooltipNextX, y: tooltipNextY }
+  }, TOOLTIP_DELAY_MS)
 }
 
+// mousemove 高频触发：rAF 合帧，mousemove 只记录最新坐标并排队，每帧最多写一次
+// tooltip ref（触发一次响应式更新）；组件卸载 / tooltip 隐藏时取消未执行的帧。
+let tooltipRafId = 0
+let tooltipNextX = 0
+let tooltipNextY = 0
+
 function moveTooltip(event) {
-  if (!tooltip.value) return
-  tooltip.value = { ...tooltip.value, x: event.clientX, y: event.clientY }
+  tooltipNextX = event.clientX
+  tooltipNextY = event.clientY
+  if (!tooltip.value || tooltipRafId) return
+  tooltipRafId = requestAnimationFrame(() => {
+    tooltipRafId = 0
+    if (!tooltip.value) return
+    tooltip.value = { ...tooltip.value, x: tooltipNextX, y: tooltipNextY }
+  })
+}
+
+function cancelTooltipRaf() {
+  if (tooltipRafId) {
+    cancelAnimationFrame(tooltipRafId)
+    tooltipRafId = 0
+  }
 }
 
 function hideTooltip() {
+  clearTimeout(tooltipShowTimer)
+  cancelTooltipRaf()
   tooltip.value = null
 }
 
@@ -292,6 +323,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true
+  cancelTooltipRaf()
   if (refreshTimer) clearInterval(refreshTimer)
   refreshTimer = null
   document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -304,13 +336,13 @@ onBeforeUnmount(() => {
     <div class="ui-page-inner space-y-3">
       <header class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 class="text-[22px] font-semibold tracking-tight text-[#0f172a]">请求统计</h1>
-          <p class="mt-0.5 text-[12px] text-[#64748b]">逐条记录上游请求指标，不保存请求内容和返回内容。</p>
+          <h1 class="text-[22px] font-semibold tracking-tight text-ink">请求统计</h1>
+          <p class="mt-0.5 text-[12px] text-ink-3">逐条记录上游请求指标，不保存请求内容和返回内容。</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 ui-card p-1.5">
-          <span class="px-1 text-[11px] font-medium text-[#64748b]">时间范围</span>
+          <span class="px-1 text-[11px] font-medium text-ink-3">时间范围</span>
           <input v-model="startDate" type="date" aria-label="开始日期" class="ui-control-h ui-control px-2 text-[12px]" />
-          <span class="text-[12px] text-[#94a3b8]">至</span>
+          <span class="text-[12px] text-ink-4">至</span>
           <input v-model="endDate" type="date" aria-label="结束日期" class="ui-control-h ui-control px-2 text-[12px]" />
           <button class="ui-control-h ui-primary-button px-3 text-[12px] font-medium disabled:opacity-60" :disabled="loading" @click="load(true)">
             <IconSearch class="mr-1 inline-block h-3.5 w-3.5 align-[-2px]" />
@@ -320,29 +352,29 @@ onBeforeUnmount(() => {
       </header>
 
       <div class="flex flex-wrap items-center gap-2 ui-card p-2">
-        <div class="flex shrink-0 items-center gap-1.5 px-1 text-[12px] font-semibold text-[#334155]">
-          <IconSearch class="h-3.5 w-3.5 text-[#64748b]" />
+        <div class="flex shrink-0 items-center gap-1.5 px-1 text-[12px] font-semibold text-ink-2">
+          <IconSearch class="h-3.5 w-3.5 text-ink-3" />
           <span>筛选</span>
-          <span class="rounded-full bg-[#f1f5f9] px-1.5 py-0.5 text-[10px] font-medium text-[#64748b]">{{ activeFilterCount }}</span>
+          <span class="rounded-full bg-hover px-1.5 py-0.5 text-[10px] font-medium text-ink-3">{{ activeFilterCount }}</span>
         </div>
         <label class="relative min-w-[220px] flex-1">
           <span class="sr-only">关键词</span>
-          <IconSearch class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#94a3b8]" />
-          <input v-model="keyword" aria-label="关键词" class="ui-control-h ui-control w-full pl-8 pr-2 text-[12px] text-[#0f172a]" placeholder="模型、端点、路径或错误信息" @keyup.enter="load(true)" />
+          <IconSearch class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-4" />
+          <input v-model="keyword" aria-label="关键词" class="ui-control-h ui-control w-full pl-8 pr-2 text-[12px] text-ink" placeholder="模型、端点、路径或错误信息" @keyup.enter="load(true)" />
         </label>
         <label class="w-[160px]">
           <span class="sr-only">提供商</span>
-          <input v-model="provider" aria-label="提供商" class="ui-control-h ui-control w-full px-2 text-[12px] text-[#0f172a]" placeholder="提供商" @keyup.enter="load(true)" />
+          <input v-model="provider" aria-label="提供商" class="ui-control-h ui-control w-full px-2 text-[12px] text-ink" placeholder="提供商" @keyup.enter="load(true)" />
         </label>
         <label class="w-[120px]">
           <span class="sr-only">状态</span>
-          <select v-model="status" aria-label="状态" class="ui-control-h ui-control w-full px-2 text-[12px] text-[#0f172a]" @change="load(true)">
+          <select v-model="status" aria-label="状态" class="ui-control-h ui-control w-full px-2 text-[12px] text-ink" @change="load(true)">
             <option value="">全部</option>
             <option value="success">成功</option>
             <option value="error">异常</option>
           </select>
         </label>
-        <button class="inline-flex ui-control-h ui-control shrink-0 items-center gap-1.5 px-2.5 text-[11px] text-[#64748b] hover:bg-[#f8fafc]" :disabled="loading || activeFilterCount === 0" @click="clearFilters">
+        <button class="inline-flex ui-control-h ui-control shrink-0 items-center gap-1.5 px-2.5 text-[11px] text-ink-3 hover:bg-hover disabled:opacity-40" :disabled="loading || activeFilterCount === 0" @click="clearFilters">
           <IconClose class="h-3 w-3" />
           清空
         </button>
@@ -352,33 +384,33 @@ onBeforeUnmount(() => {
 
       <section class="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
         <div v-for="card in cards" :key="card.label" class="ui-card border-t-2 px-4 py-3" :class="{
-          'border-t-[#2563eb]': card.tone === 'blue',
-          'border-t-[#06b6d4]': card.tone === 'cyan',
-          'border-t-[#8b5cf6]': card.tone === 'violet',
-          'border-t-[#f59e0b]': card.tone === 'amber',
+          'border-t-primary': card.tone === 'blue',
+          'border-t-chart-cyan': card.tone === 'cyan',
+          'border-t-accent': card.tone === 'violet',
+          'border-t-warning': card.tone === 'amber',
         }">
-          <div class="text-[11px] font-medium text-[#64748b]">{{ card.label }}</div>
-          <div class="mt-1 text-[22px] font-semibold tabular-nums text-[#0f172a]">{{ card.value }}</div>
-          <div class="mt-1 text-[11px] text-[#64748b]">{{ card.sub }}</div>
+          <div class="text-[11px] font-medium text-ink-3">{{ card.label }}</div>
+          <div class="mt-1 text-[22px] font-semibold tabular-nums text-ink">{{ card.value }}</div>
+          <div class="mt-1 text-[11px] text-ink-3">{{ card.sub }}</div>
         </div>
       </section>
 
       <section class="overflow-hidden ui-card">
-        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[#edf0f5] bg-[#fbfdff] px-3 py-2.5">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line-2 bg-surface-2 px-3 py-2.5">
           <div>
-            <h2 class="text-[14px] font-semibold text-[#0f172a]">请求记录</h2>
-            <p class="mt-0.5 text-[11px] text-[#64748b]">按创建时间倒序显示，筛选结果共 {{ formatNum(total) }} 条</p>
+            <h2 class="text-[14px] font-semibold text-ink">请求记录</h2>
+            <p class="mt-0.5 text-[11px] text-ink-3">按创建时间倒序显示，筛选结果共 {{ formatNum(total) }} 条</p>
           </div>
-          <span class="rounded-full bg-white px-2 py-0.5 text-[11px] text-[#64748b] ring-1 ring-[#e2e8f0]">{{ items.length }} 条</span>
+          <span class="rounded-full bg-surface px-2 py-0.5 text-[11px] text-ink-3 ring-1 ring-hover-strong">{{ items.length }} 条</span>
         </div>
-        <div v-if="!loading && displayItems.length === 0" class="py-12 text-center text-[12px] text-[#64748b]">暂无请求统计</div>
+        <div v-if="!loading && displayItems.length === 0" class="motion-appear py-12 text-center text-[12px] text-ink-3">暂无请求统计</div>
         <div v-else ref="tableScrollRef" class="relative max-h-[calc(100vh-260px)] overflow-auto">
-          <div v-if="loading" class="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden bg-[#dbeafe]" aria-hidden="true">
-            <div class="h-full w-1/3 animate-pulse bg-[#2563eb]"></div>
+          <div v-if="loading" class="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden bg-primary-ring" aria-hidden="true">
+            <div class="h-full w-1/3 bg-primary ui-progress-indeterminate"></div>
           </div>
           <table class="w-full min-w-[1160px] text-[12px]">
-            <thead class="sticky top-0 z-10 bg-white">
-              <tr class="border-b border-[#edf0f5] text-left text-[#64748b]">
+            <thead class="sticky top-0 z-10 bg-surface">
+              <tr class="border-b border-line-2 text-left text-ink-3">
                 <th class="py-2 pl-3 pr-3 font-medium">时间</th>
                 <th class="py-2 pr-3 font-medium">模型 / 提供商</th>
                 <th class="py-2 pr-3 font-medium">端点</th>
@@ -396,36 +428,36 @@ onBeforeUnmount(() => {
               <tr
                 v-for="item in displayItems"
                 :key="item.id"
-                class="cursor-pointer border-b border-[#f1f5f9] outline-none last:border-0 hover:bg-[#f8fbff] focus-visible:bg-[#eff6ff]"
+                class="cursor-pointer border-b border-line-2 outline-none last:border-0 hover:bg-hover focus-visible:bg-primary-tint"
                 tabindex="0"
                 :aria-label="`查看 ${item.model_id || 'unknown'} 请求详情`"
                 @click="openDetail(item)"
                 @keydown.enter.prevent="openDetail(item)"
                 @keydown.space.prevent="openDetail(item)"
               >
-                <td class="whitespace-nowrap py-2 pl-3 pr-3 font-mono text-[11px] text-[#475569]">{{ formatTime(item.created_at) }}</td>
+                <td class="whitespace-nowrap py-2 pl-3 pr-3 font-mono text-[11px] text-ink-2">{{ formatTime(item.created_at) }}</td>
                 <td class="max-w-[220px] py-2 pr-3">
-                  <div class="truncate font-medium text-[#0f172a]">{{ item.model_id || 'unknown' }}</div>
-                  <div class="mt-0.5 truncate text-[10px] text-[#94a3b8]">{{ item.provider || '—' }}</div>
+                  <div class="truncate font-medium text-ink">{{ item.model_id || 'unknown' }}</div>
+                  <div class="mt-0.5 truncate text-[10px] text-ink-4">{{ item.provider || '—' }}</div>
                 </td>
-                <td class="max-w-[220px] truncate py-2 pr-3 font-mono text-[10px] text-[#64748b]">{{ item.endpoint || item.request_path || '—' }}</td>
-                <td class="py-2 pr-3"><span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="item.success ? 'bg-[#ecfdf5] text-[#059669]' : 'bg-[#fef2f2] text-[#dc2626]'" :aria-label="item.success ? '请求成功' : '请求异常'"><span class="h-1.5 w-1.5 rounded-full" :class="item.success ? 'bg-[#10b981]' : 'bg-[#ef4444]'" aria-hidden="true"></span>{{ item.status_code || 'ERR' }}</span></td>
+                <td class="max-w-[220px] truncate py-2 pr-3 font-mono text-[10px] text-ink-3">{{ item.endpoint || item.request_path || '—' }}</td>
+                <td class="py-2 pr-3"><span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="item.success ? 'bg-success-tint text-success-fg' : 'bg-danger-tint text-danger-fg'" :aria-label="item.success ? '请求成功' : '请求异常'"><span class="h-1.5 w-1.5 rounded-full" :class="item.success ? 'bg-brand' : 'bg-danger'" aria-hidden="true"></span>{{ item.status_code || 'ERR' }}</span></td>
                 <td class="py-2 pr-3 text-right tabular-nums">
-                  <span class="inline-flex cursor-help items-center gap-1 whitespace-nowrap" @mouseenter="showTooltip('tokens', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip"><span class="text-[#2563eb]">↓{{ formatNum(regularInputTokens(item)) }}</span><span class="text-[#7c3aed]">↑{{ formatNum(item.output_tokens) }}</span><span class="text-[#059669]">缓存{{ formatNum(cacheTokens(item)) }}</span></span>
+                  <span class="inline-flex cursor-help items-center gap-1 whitespace-nowrap" @mouseenter="showTooltip('tokens', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip"><span class="text-primary-fg">↓{{ formatNum(regularInputTokens(item)) }}</span><span class="text-accent">↑{{ formatNum(item.output_tokens) }}</span><span class="text-success">缓存{{ formatNum(cacheTokens(item)) }}</span></span>
                 </td>
-                <td class="py-2 pr-3 text-right tabular-nums text-[#d97706]">
+                <td class="py-2 pr-3 text-right tabular-nums text-warning">
                   <span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('cost', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatCredits(item.credits) }}</span>
                 </td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('timing', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.first_byte_ms) }}</span></td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('total', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.duration_ms) }}</span></td>
                 <td class="py-2 pr-3">{{ item.reasoning_effort || 'Default' }}</td>
                 <td class="py-2 pr-3">{{ item.service_tier || 'Standard' }}</td>
-                <td class="max-w-[220px] truncate py-2 pr-3 text-[11px] text-[#dc2626]" :title="item.error_message">{{ item.error_message || '—' }}</td>
+                <td class="max-w-[220px] truncate py-2 pr-3 text-[11px] text-danger" :title="item.error_message">{{ item.error_message || '—' }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div class="flex flex-wrap items-center justify-between gap-2 border-t border-[#edf0f5] px-3 py-2 text-[12px] text-[#64748b]">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-t border-line-2 px-3 py-2 text-[12px] text-ink-3">
           <span v-if="!totalPages">共 {{ formatNum(total) }} 条</span>
           <span v-else>第 {{ currentPage }} / {{ totalPages }} 页</span>
           <div class="flex items-center gap-2">
@@ -448,8 +480,8 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <Transition name="req-tip">
-        <div v-if="tooltip" class="pointer-events-none fixed left-0 top-0 z-[100]" :style="tooltipStyle">
-          <div class="req-tip-body ui-popover border border-[#334155] bg-[#0f172a] p-3 text-left text-[12px] text-white">
+        <div v-if="tooltip" class="pointer-events-none fixed left-0 top-0 z-[var(--z-tooltip)]" :style="tooltipStyle">
+          <div class="req-tip-body ui-popover border border-[#334155] bg-[#0f172a] dark:bg-surface p-3 text-left text-[12px] text-white">
         <template v-if="tooltip.type === 'tokens'">
           <div class="mb-2 text-[14px] font-semibold">Token 明细</div>
           <div class="space-y-1.5 text-[#cbd5e1]">
@@ -496,86 +528,86 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <Transition name="motion-drawer" appear>
-      <div v-if="selectedItem" class="fixed inset-0 z-[90] bg-black/15" @click.self="closeDetail">
-        <aside ref="detailRef" class="motion-drawer-panel ml-auto flex h-full w-full max-w-[440px] flex-col border-l border-[#e2e8f0] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.12)]" role="dialog" aria-modal="true" aria-labelledby="request-detail-title">
-          <header class="flex shrink-0 items-start justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3.5">
+      <div v-if="selectedItem" class="fixed inset-0 z-[var(--z-drawer)] bg-black/15" @click.self="closeDetail">
+        <aside ref="detailRef" class="motion-drawer-panel ml-auto flex h-full w-full max-w-[440px] flex-col border-l border-line bg-surface shadow-[-12px_0_32px_rgba(15,23,42,0.12)]" role="dialog" aria-modal="true" aria-labelledby="request-detail-title">
+          <header class="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3.5">
             <div class="min-w-0">
-              <h2 id="request-detail-title" class="text-[16px] font-semibold text-[#0f172a]">请求详情</h2>
-              <p class="mt-1 truncate font-mono text-[11px] text-[#64748b]">#{{ selectedItem.id || '—' }} · {{ formatTime(selectedItem.created_at) }}</p>
+              <h2 id="request-detail-title" class="text-[16px] font-semibold text-ink">请求详情</h2>
+              <p class="mt-1 truncate font-mono text-[11px] text-ink-3">#{{ selectedItem.id || '—' }} · {{ formatTime(selectedItem.created_at) }}</p>
             </div>
-            <button ref="detailCloseRef" type="button" class="flex h-8 w-8 shrink-0 items-center justify-center ui-control text-[#64748b] hover:bg-[#f8fafc]" aria-label="关闭请求详情" @click="closeDetail">
+            <button ref="detailCloseRef" type="button" class="flex h-8 w-8 shrink-0 items-center justify-center ui-control text-ink-3 hover:bg-hover" aria-label="关闭请求详情" @click="closeDetail">
               <IconClose class="h-4 w-4" />
             </button>
           </header>
 
           <div class="min-h-0 flex-1 overflow-y-auto">
-            <section class="border-b border-[#edf0f5] px-4 py-4">
+            <section class="border-b border-line-2 px-4 py-4">
               <div class="mb-3 flex items-center justify-between gap-3">
                 <div class="min-w-0">
-                  <div class="truncate text-[14px] font-semibold text-[#0f172a]">{{ selectedItem.model_id || 'unknown' }}</div>
-                  <div class="mt-1 text-[11px] text-[#64748b]">{{ selectedItem.provider || '—' }} · {{ selectedItem.endpoint || selectedItem.request_path || '—' }}</div>
+                  <div class="truncate text-[14px] font-semibold text-ink">{{ selectedItem.model_id || 'unknown' }}</div>
+                  <div class="mt-1 text-[11px] text-ink-3">{{ selectedItem.provider || '—' }} · {{ selectedItem.endpoint || selectedItem.request_path || '—' }}</div>
                 </div>
-                <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium" :class="selectedItem.success ? 'bg-[#ecfdf5] text-[#059669]' : 'bg-[#fef2f2] text-[#dc2626]'">
-                  <span class="h-1.5 w-1.5 rounded-full" :class="selectedItem.success ? 'bg-[#10b981]' : 'bg-[#ef4444]'"></span>
+                <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium" :class="selectedItem.success ? 'bg-success-tint text-success-fg' : 'bg-danger-tint text-danger-fg'">
+                  <span class="h-1.5 w-1.5 rounded-full" :class="selectedItem.success ? 'bg-brand' : 'bg-danger'"></span>
                   {{ selectedItem.status_code || 'ERR' }}
                 </span>
               </div>
               <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
-                <div><dt class="text-[#94a3b8]">推理程度</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.reasoning_effort || 'Default' }}</dd></div>
-                <div><dt class="text-[#94a3b8]">服务档位</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.service_tier || 'Standard' }}</dd></div>
-                <div><dt class="text-[#94a3b8]">连接复用</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.reused_connection ? '是' : '否' }}</dd></div>
-                <div><dt class="text-[#94a3b8]">同候选重试</dt><dd class="mt-0.5 font-medium" :class="selectedItem.retry_count ? 'text-[#d97706]' : 'text-[#334155]'">{{ selectedItem.retry_count || 0 }}</dd></div>
-                <div><dt class="text-[#94a3b8]">请求入口</dt><dd class="mt-0.5 truncate font-medium text-[#334155]" :title="selectedItem.requested_model || '-'">{{ selectedItem.requested_model || '-' }}</dd></div>
-                <div><dt class="text-[#94a3b8]">候选切换</dt><dd class="mt-0.5 font-medium" :class="selectedItem.failover_count ? 'text-[#d97706]' : 'text-[#334155]'">{{ selectedItem.failover_count || 0 }}</dd></div>
-                <div><dt class="text-[#94a3b8]">调度选择</dt><dd class="mt-0.5 font-medium text-[#334155]">{{ selectedItem.dispatch_reason || 'direct' }}</dd></div>
-                <div><dt class="text-[#94a3b8]">最后切换原因</dt><dd class="mt-0.5 font-medium" :class="selectedItem.failover_reason ? 'text-[#d97706]' : 'text-[#334155]'">{{ selectedItem.failover_reason || '-' }}</dd></div>
-                <div v-if="selectedItem.route_group_id"><dt class="text-[#94a3b8]">路由分组 ID</dt><dd class="mt-0.5 truncate font-mono text-[11px] text-[#334155]" :title="selectedItem.route_group_id">{{ selectedItem.route_group_id }}</dd></div>
-                <div v-if="selectedItem.selected_model_config_id"><dt class="text-[#94a3b8]">最终模型配置 ID</dt><dd class="mt-0.5 truncate font-mono text-[11px] text-[#334155]" :title="selectedItem.selected_model_config_id">{{ selectedItem.selected_model_config_id }}</dd></div>
+                <div><dt class="text-ink-4">推理程度</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.reasoning_effort || 'Default' }}</dd></div>
+                <div><dt class="text-ink-4">服务档位</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.service_tier || 'Standard' }}</dd></div>
+                <div><dt class="text-ink-4">连接复用</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.reused_connection ? '是' : '否' }}</dd></div>
+                <div><dt class="text-ink-4">同候选重试</dt><dd class="mt-0.5 font-medium" :class="selectedItem.retry_count ? 'text-warning' : 'text-ink-2'">{{ selectedItem.retry_count || 0 }}</dd></div>
+                <div><dt class="text-ink-4">请求入口</dt><dd class="mt-0.5 truncate font-medium text-ink-2" :title="selectedItem.requested_model || '-'">{{ selectedItem.requested_model || '-' }}</dd></div>
+                <div><dt class="text-ink-4">候选切换</dt><dd class="mt-0.5 font-medium" :class="selectedItem.failover_count ? 'text-warning' : 'text-ink-2'">{{ selectedItem.failover_count || 0 }}</dd></div>
+                <div><dt class="text-ink-4">调度选择</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.dispatch_reason || 'direct' }}</dd></div>
+                <div><dt class="text-ink-4">最后切换原因</dt><dd class="mt-0.5 font-medium" :class="selectedItem.failover_reason ? 'text-warning' : 'text-ink-2'">{{ selectedItem.failover_reason || '-' }}</dd></div>
+                <div v-if="selectedItem.route_group_id"><dt class="text-ink-4">路由分组 ID</dt><dd class="mt-0.5 truncate font-mono text-[11px] text-ink-2" :title="selectedItem.route_group_id">{{ selectedItem.route_group_id }}</dd></div>
+                <div v-if="selectedItem.selected_model_config_id"><dt class="text-ink-4">最终模型配置 ID</dt><dd class="mt-0.5 truncate font-mono text-[11px] text-ink-2" :title="selectedItem.selected_model_config_id">{{ selectedItem.selected_model_config_id }}</dd></div>
               </dl>
             </section>
 
-            <section class="border-b border-[#edf0f5] px-4 py-4">
-              <h3 class="mb-3 text-[13px] font-semibold text-[#0f172a]">Token 与成本</h3>
+            <section class="border-b border-line-2 px-4 py-4">
+              <h3 class="mb-3 text-[13px] font-semibold text-ink">Token 与成本</h3>
               <dl class="grid grid-cols-2 gap-x-5 gap-y-2.5 text-[12px]">
-                <div><dt class="text-[#94a3b8]">普通输入</dt><dd class="mt-0.5 font-medium tabular-nums text-[#2563eb]">{{ formatNum(regularInputTokens(selectedItem)) }}</dd></div>
-                <div><dt class="text-[#94a3b8]">输出</dt><dd class="mt-0.5 font-medium tabular-nums text-[#7c3aed]">{{ formatNum(selectedItem.output_tokens) }}</dd></div>
-                <div><dt class="text-[#94a3b8]">缓存读取</dt><dd class="mt-0.5 font-medium tabular-nums text-[#059669]">{{ formatNum(selectedItem.cache_read_tokens) }}</dd></div>
-                <div><dt class="text-[#94a3b8]">缓存写入</dt><dd class="mt-0.5 font-medium tabular-nums text-[#059669]">{{ formatNum(selectedItem.cache_write_tokens) }}</dd></div>
-                <div><dt class="text-[#94a3b8]">总 Token</dt><dd class="mt-0.5 font-semibold tabular-nums text-[#0f172a]">{{ formatNum(totalTokens(selectedItem)) }}</dd></div>
-                <div><dt class="text-[#94a3b8]">总成本</dt><dd class="mt-0.5 font-semibold tabular-nums text-[#d97706]">{{ formatCredits(selectedItem.credits) }}</dd></div>
+                <div><dt class="text-ink-4">普通输入</dt><dd class="mt-0.5 font-medium tabular-nums text-primary-fg">{{ formatNum(regularInputTokens(selectedItem)) }}</dd></div>
+                <div><dt class="text-ink-4">输出</dt><dd class="mt-0.5 font-medium tabular-nums text-accent">{{ formatNum(selectedItem.output_tokens) }}</dd></div>
+                <div><dt class="text-ink-4">缓存读取</dt><dd class="mt-0.5 font-medium tabular-nums text-success">{{ formatNum(selectedItem.cache_read_tokens) }}</dd></div>
+                <div><dt class="text-ink-4">缓存写入</dt><dd class="mt-0.5 font-medium tabular-nums text-success">{{ formatNum(selectedItem.cache_write_tokens) }}</dd></div>
+                <div><dt class="text-ink-4">总 Token</dt><dd class="mt-0.5 font-semibold tabular-nums text-ink">{{ formatNum(totalTokens(selectedItem)) }}</dd></div>
+                <div><dt class="text-ink-4">总成本</dt><dd class="mt-0.5 font-semibold tabular-nums text-warning">{{ formatCredits(selectedItem.credits) }}</dd></div>
               </dl>
             </section>
 
-            <section class="border-b border-[#edf0f5] px-4 py-4">
-              <h3 class="mb-3 text-[13px] font-semibold text-[#0f172a]">耗时分解</h3>
+            <section class="border-b border-line-2 px-4 py-4">
+              <h3 class="mb-3 text-[13px] font-semibold text-ink">耗时分解</h3>
               <dl class="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-[12px]">
-                <dt class="text-[#64748b]">请求转换</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.conversion_ms) }}</dd>
-                <dt class="text-[#64748b]">前缀审计</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.audit_ms) }}</dd>
-                <dt class="text-[#64748b]">会话状态</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.session_read_ms) }}</dd>
-                <dt class="text-[#64748b]">DNS</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.dns_ms) }}</dd>
-                <dt class="text-[#64748b]">连接上游</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.connect_ms) }}</dd>
-                <dt class="text-[#64748b]">TLS 握手</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.tls_ms) }}</dd>
-                <dt class="text-[#64748b]">上游等待响应</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.upstream_wait_ms) }}</dd>
-                <dt class="text-[#64748b]">亲和容量等待</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.capacity_wait_ms) }}</dd>
-                <dt class="text-[#64748b]">首字耗时</dt><dd class="font-medium tabular-nums text-[#2563eb]">{{ formatDuration(selectedItem.first_byte_ms) }}</dd>
-                <dt class="text-[#64748b]">首事件耗时</dt><dd class="tabular-nums text-[#334155]">{{ formatDuration(selectedItem.first_event_ms) }}</dd>
-                <dt class="text-[#64748b]">首内容耗时</dt><dd class="tabular-nums text-[#334155]">{{ formatMeasuredDuration(selectedItem.first_content_ms, selectedItem.content_measured) }}</dd>
-                <dt class="text-[#64748b]">内容类型</dt><dd class="text-[#334155]">{{ contentMeasurementStatus(selectedItem) }}</dd>
-                <dt class="text-[#64748b]">最大内容间隔</dt><dd class="tabular-nums text-[#334155]">{{ formatMeasuredDuration(selectedItem.max_content_gap_ms, selectedItem.content_measured) }}</dd>
-                <dt class="text-[#64748b]">底层尝试</dt><dd class="tabular-nums text-[#334155]">{{ selectedItem.wire_attempt_count ? selectedItem.wire_attempt_count : '—' }}<span v-if="selectedItem.transport_fallback_count" class="text-[#d97706]"> · 回退 {{ selectedItem.transport_fallback_count }}</span></dd>
-                <dt class="text-[#64748b]">总耗时</dt><dd class="font-medium tabular-nums text-[#0f172a]">{{ formatDuration(selectedItem.duration_ms) }}</dd>
+                <dt class="text-ink-3">请求转换</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.conversion_ms) }}</dd>
+                <dt class="text-ink-3">前缀审计</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.audit_ms) }}</dd>
+                <dt class="text-ink-3">会话状态</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.session_read_ms) }}</dd>
+                <dt class="text-ink-3">DNS</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.dns_ms) }}</dd>
+                <dt class="text-ink-3">连接上游</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.connect_ms) }}</dd>
+                <dt class="text-ink-3">TLS 握手</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.tls_ms) }}</dd>
+                <dt class="text-ink-3">上游等待响应</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.upstream_wait_ms) }}</dd>
+                <dt class="text-ink-3">亲和容量等待</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.capacity_wait_ms) }}</dd>
+                <dt class="text-ink-3">首字耗时</dt><dd class="font-medium tabular-nums text-primary-fg">{{ formatDuration(selectedItem.first_byte_ms) }}</dd>
+                <dt class="text-ink-3">首事件耗时</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.first_event_ms) }}</dd>
+                <dt class="text-ink-3">首内容耗时</dt><dd class="tabular-nums text-ink-2">{{ formatMeasuredDuration(selectedItem.first_content_ms, selectedItem.content_measured) }}</dd>
+                <dt class="text-ink-3">内容类型</dt><dd class="text-ink-2">{{ contentMeasurementStatus(selectedItem) }}</dd>
+                <dt class="text-ink-3">最大内容间隔</dt><dd class="tabular-nums text-ink-2">{{ formatMeasuredDuration(selectedItem.max_content_gap_ms, selectedItem.content_measured) }}</dd>
+                <dt class="text-ink-3">底层尝试</dt><dd class="tabular-nums text-ink-2">{{ selectedItem.wire_attempt_count ? selectedItem.wire_attempt_count : '—' }}<span v-if="selectedItem.transport_fallback_count" class="text-warning"> · 回退 {{ selectedItem.transport_fallback_count }}</span></dd>
+                <dt class="text-ink-3">总耗时</dt><dd class="font-medium tabular-nums text-ink">{{ formatDuration(selectedItem.duration_ms) }}</dd>
               </dl>
             </section>
 
             <section v-if="selectedItem.error_message" class="px-4 py-4">
               <div class="mb-2 flex items-center justify-between gap-3">
-                <h3 class="text-[13px] font-semibold text-[#b91c1c]">异常信息</h3>
-                <button type="button" class="inline-flex h-7 items-center gap-1 ui-control px-2 text-[11px] text-[#64748b] hover:bg-[#f8fafc]" @click="copyText(selectedItem.error_message, '错误信息已复制')">
+                <h3 class="text-[13px] font-semibold text-danger">异常信息</h3>
+                <button type="button" class="inline-flex h-7 items-center gap-1 ui-control px-2 text-[11px] text-ink-3 hover:bg-hover" @click="copyText(selectedItem.error_message, '错误信息已复制')">
                   <IconCopy class="h-3 w-3" />
                   复制
                 </button>
               </div>
-              <pre class="whitespace-pre-wrap break-words rounded-lg border border-[#fecaca] bg-[#fef2f2] p-3 font-mono text-[11px] leading-5 text-[#b91c1c]">{{ selectedItem.error_message }}</pre>
+              <pre class="whitespace-pre-wrap break-words rounded-lg border border-danger-tint-line bg-danger-tint p-3 font-mono text-[11px] leading-5 text-danger">{{ selectedItem.error_message }}</pre>
             </section>
           </div>
         </aside>
@@ -587,17 +619,18 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* tooltip 出入场：根元素淡入淡出（Transition 据此识别时长），内层负责轻微位移；
-   两者属性均不与内联 transform 定位冲突，且不依赖全局样式令牌。 */
+   两者属性均不与内联 transform 定位冲突，时长与缓动已对齐全局令牌
+   （--dur-fast + --ease-out-quart / --ease-in-quart）。 */
 .req-tip-body {
-  transition: transform 120ms ease-out;
+  transition: transform var(--dur-fast) var(--ease-out-quart);
 }
 
 .req-tip-enter-active {
-  transition: opacity 120ms ease-out;
+  transition: opacity var(--dur-fast) var(--ease-out-quart);
 }
 
 .req-tip-leave-active {
-  transition: opacity 100ms ease-in;
+  transition: opacity var(--dur-fast) var(--ease-in-quart);
 }
 
 .req-tip-enter-from,
