@@ -76,6 +76,12 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 	}
 
 	reasoningEffort := resolveReasoningEffort(pre, m)
+	convertChat := func() ([]byte, error) {
+		if isOpenAIChatUpstream(m, upstreamURL) {
+			return converter.KiroToOpenAIChatUpstream(conv, m.ModelID, reasoningEffort)
+		}
+		return converter.KiroToOpenAI(conv, m.ModelID, reasoningEffort)
+	}
 
 	// Kiro 协议：根据 provider + endpoint 选择转换器
 	var body []byte
@@ -83,7 +89,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 	switch {
 	case forceChat && m.Provider == "openai":
 		upstreamURL = responsesToChatURL(upstreamURL)
-		body, err = converter.KiroToOpenAI(conv, m.ModelID, reasoningEffort)
+		body, err = convertChat()
 	case m.Provider == "anthropic":
 		body, err = converter.KiroToAnthropic(conv, m.ModelID, reasoningEffort)
 	case m.Provider == "gemini":
@@ -119,7 +125,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 			chatEndpoint := strings.Replace(endpoint, "/responses", "/chat/completions", 1)
 			upstreamURL = baseURL + chatEndpoint
 		}
-		body, err = converter.KiroToOpenAI(conv, m.ModelID, reasoningEffort)
+		body, err = convertChat()
 	}
 	return body, upstreamURL, err
 }

@@ -15,6 +15,7 @@ import (
 type openAIChatGatewayError struct {
 	HTTPStatus         int
 	Code               string
+	NestedCode         string
 	ExtErrorStatusCode int
 	ExtErrorType       string
 	ExtErrorCode       string
@@ -65,6 +66,9 @@ func parseOpenAIChatGatewayError(httpStatus int, headers http.Header, body []byt
 		nested := unwrapJSONObject(message)
 		if nested == nil {
 			continue
+		}
+		if parsed.NestedCode == "" {
+			parsed.NestedCode = rawScalarText(rootValue(nested, "code"))
 		}
 		applyGatewayFields(nested, &parsed)
 		if errObject, ok := rawJSONObject(rootValue(nested, "error")); ok {

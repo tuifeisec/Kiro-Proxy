@@ -103,6 +103,20 @@ func CachedOpenAIToolAudit(hash string, raw []json.RawMessage) (string, ToolConv
 	return e.providerHash, e.report
 }
 
+// CachedOpenAIChatToolAudit uses the tool definitions actually emitted by
+// KiroToOpenAI, including its Chat-only schema simplification.
+func CachedOpenAIChatToolAudit(hash string, raw []json.RawMessage) (string, ToolConversionReport) {
+	providerHash, report := CachedOpenAIToolAudit(hash, raw)
+	if len(raw) == 0 {
+		return providerHash, report
+	}
+	tools, _ := globalToolCache.GetOpenAIWithHash(hash, raw)
+	if normalized, changed := normalizeOpenAIChatTools(tools); changed {
+		providerHash = hashOpenAITools(normalized)
+	}
+	return providerHash, report
+}
+
 func (c *ToolCache) GetAnthropic(hash string, raw []json.RawMessage) []AnthropicTool {
 	return c.get("anthropic", hash, raw).anthropic
 }

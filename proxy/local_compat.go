@@ -291,7 +291,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		}
 		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
 		if grouped && resp.Request != nil && isOpenAIChatUpstream(candidate, candidatePrepared.upstreamURL) {
-			observeOpenAIChatResponse(resp, s.logger, candidate, openAIChatTraceID(resp.Request.Context()), openAIChatAttempt(resp.Request.Context()))
+			observeOpenAIChatResponse(resp, s.logger, candidate, openAIChatTraceID(resp.Request.Context()), openAIChatAttempt(resp.Request.Context()), candidatePrepared.upstreamBody)
 		}
 
 		detail := ""

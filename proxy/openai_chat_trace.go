@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -81,6 +82,9 @@ func openAIChatErrorMetadata(info openAIChatGatewayError, traceID string, attemp
 	if info.Code != "" {
 		metadata["outer_code"] = info.Code
 	}
+	if info.NestedCode != "" {
+		metadata["nested_code"] = info.NestedCode
+	}
 	if info.ExtErrorStatusCode != 0 {
 		metadata["inner_http_status"] = info.ExtErrorStatusCode
 	}
@@ -113,7 +117,7 @@ func inspectOpenAIChatRetryError(resp *http.Response) (openAIChatGatewayError, b
 
 // observeOpenAIChatResponse records error details as the existing downstream
 // path consumes the body. It never reads ahead or changes the response bytes.
-func observeOpenAIChatResponse(resp *http.Response, logger *TrafficLogger, model *store.Model, traceID string, attempt int) {
+func observeOpenAIChatResponse(resp *http.Response, logger *TrafficLogger, model *store.Model, traceID string, attempt int, requestBody []byte) {
 	if resp == nil || logger == nil {
 		return
 	}
@@ -127,23 +131,24 @@ func observeOpenAIChatResponse(resp *http.Response, logger *TrafficLogger, model
 	}
 	resp.Body = &openAIChatErrorObserver{
 		ReadCloser: resp.Body, logger: logger, model: model, status: resp.StatusCode,
-		headers: resp.Header, traceID: traceID, attempt: attempt,
+		headers: resp.Header, traceID: traceID, attempt: attempt, requestBody: requestBody,
 	}
 }
 
 type openAIChatErrorObserver struct {
 	io.ReadCloser
-	logger   *TrafficLogger
-	model    *store.Model
-	status   int
-	headers  http.Header
-	traceID  string
-	attempt  int
-	mu       sync.Mutex
-	body     []byte
-	tooLarge bool
-	complete bool
-	once     sync.Once
+	logger      *TrafficLogger
+	model       *store.Model
+	status      int
+	headers     http.Header
+	traceID     string
+	attempt     int
+	requestBody []byte
+	mu          sync.Mutex
+	body        []byte
+	tooLarge    bool
+	complete    bool
+	once        sync.Once
 }
 
 func (o *openAIChatErrorObserver) Read(p []byte) (int, error) {
@@ -190,6 +195,17 @@ func (o *openAIChatErrorObserver) log() {
 		metadata := openAIChatErrorMetadata(info, o.traceID, o.attempt)
 		if incomplete {
 			metadata["inspection_incomplete"] = true
+		}
+		if !incomplete && (info.Code == "11129" || info.NestedCode == "11129") && o.logger.filePath != "" {
+			if summary, err := summarizeOpenAIChatTools(o.requestBody); err == nil && summary.ToolCount > 0 {
+				directory := filepath.Join(filepath.Dir(o.logger.filePath), "captures")
+				path, captureErr := captureOpenAIChatToolParameters(o.requestBody, o.traceID, o.attempt, directory)
+				if captureErr != nil {
+					metadata["tool_capture_error"] = captureErr.Error()
+				} else {
+					metadata["tool_capture_path"] = path
+				}
+			}
 		}
 		o.logger.InfoWithMeta("openai_chat", "OpenAI Chat 上游响应", LogMeta{
 			Model: statsModelID(o.model), Status: o.status, Metadata: metadata,

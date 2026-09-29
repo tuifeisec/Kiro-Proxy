@@ -93,6 +93,17 @@ func TestOpenAIChatNestedBadRequestStopsRetryAndKeepsBody(t *testing.T) {
 	if requestTrace == "" || errorTrace != requestTrace {
 		t.Fatalf("request and error trace IDs differ: request=%q error=%q", requestTrace, errorTrace)
 	}
+	captures, err := filepath.Glob(filepath.Join(filepath.Dir(logPath), "captures", "openai-chat-11129-*.json"))
+	if err != nil || len(captures) != 1 {
+		t.Fatalf("expected one captured tool schema, files=%v error=%v", captures, err)
+	}
+	captured, err := os.ReadFile(captures[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(captured), "PRIVATE_PROMPT") || strings.Contains(string(captured), "PRIVATE_DESCRIPTION") || strings.Contains(string(captured), "secret-key") || !strings.Contains(string(captured), `"name":"lookup"`) {
+		t.Fatalf("capture has missing tool or leaked top-level request content: %s", captured)
+	}
 }
 
 func TestOpenAIChatOrdinary503KeepsExistingRetry(t *testing.T) {
@@ -140,7 +151,7 @@ func TestOpenAIChatFinalAttemptReportsNestedErrorWithoutChangingBody(t *testing.
 		t.Fatal(err)
 	}
 	resp, err := NewForwarder(nil, nil).sendWithRetryBudget(context.Background(), server.URL+"/v1/chat/completions",
-		[]byte(`{"model":"test","messages":[]}`), &store.Model{Provider: "openai", APIKey: "test"}, logger, "session", nil, 10*time.Second)
+		[]byte(`{"model":"test","messages":[],"tools":[{"type":"function","function":{"name":"final_probe","parameters":{"type":"object","properties":{}}}}]}`), &store.Model{Provider: "openai", APIKey: "test"}, logger, "session", nil, 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,6 +181,10 @@ func TestOpenAIChatFinalAttemptReportsNestedErrorWithoutChangingBody(t *testing.
 	if !found {
 		t.Fatal("final attempt did not log the nested request error")
 	}
+	captures, err := filepath.Glob(filepath.Join(filepath.Dir(logPath), "captures", "openai-chat-11129-*-attempt-4-*.json"))
+	if err != nil || len(captures) != 1 {
+		t.Fatalf("final attempt tool capture missing: files=%v error=%v", captures, err)
+	}
 }
 
 func TestOpenAIChatGroupBodyObservationKeepsResponse(t *testing.T) {
@@ -180,7 +195,8 @@ func TestOpenAIChatGroupBodyObservationKeepsResponse(t *testing.T) {
 	}
 	resp := &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header),
 		Body: io.NopCloser(strings.NewReader(nestedOpenAIChatBadRequest))}
-	observeOpenAIChatResponse(resp, logger, &store.Model{Provider: "openai"}, "group-trace", 1)
+	observeOpenAIChatResponse(resp, logger, &store.Model{Provider: "openai"}, "group-trace", 1,
+		[]byte(`{"tools":[{"type":"function","function":{"name":"group_probe","parameters":{"type":"object","properties":{}}}}]}`))
 	if detail := preserveResponseBody(resp); !strings.Contains(detail, "no_healthy_account") {
 		t.Fatalf("group error detail lost: %q", detail)
 	}
@@ -197,6 +213,58 @@ func TestOpenAIChatGroupBodyObservationKeepsResponse(t *testing.T) {
 	if !strings.Contains(string(logData), `"trace_id":"group-trace"`) ||
 		!strings.Contains(string(logData), `"upstream_request_id":"upstream-7722474e"`) {
 		t.Fatalf("group diagnostic missing trace or upstream ID: %s", logData)
+	}
+	captures, err := filepath.Glob(filepath.Join(filepath.Dir(logPath), "captures", "openai-chat-11129-group-trace-attempt-1-*.json"))
+	if err != nil || len(captures) != 1 {
+		t.Fatalf("group tool capture missing: files=%v error=%v", captures, err)
+	}
+}
+
+func TestOpenAIChatIncompleteErrorDoesNotCaptureTools(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "incomplete.jsonl")
+	logger, err := NewTrafficLogger(logPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header),
+		Body: io.NopCloser(strings.NewReader(nestedOpenAIChatBadRequest))}
+	observeOpenAIChatResponse(resp, logger, &store.Model{Provider: "openai"}, "incomplete-trace", 1,
+		[]byte(`{"tools":[{"type":"function","function":{"name":"probe","parameters":{"type":"object"}}}]}`))
+	resp.Body.Close()
+	logger.Close()
+	captures, err := filepath.Glob(filepath.Join(filepath.Dir(logPath), "captures", "*.json"))
+	if err != nil || len(captures) != 0 {
+		t.Fatalf("incomplete response produced tool capture: files=%v error=%v", captures, err)
+	}
+}
+
+func TestOpenAIChatCandidateErrorCapturesTools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, nestedOpenAIChatBadRequest)
+	}))
+	defer server.Close()
+	logPath := filepath.Join(t.TempDir(), "candidate-error.jsonl")
+	logger, err := NewTrafficLogger(logPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := withUpstreamRequestOperation(context.Background(), newUpstreamRequestOperation())
+	requestBody := []byte(`{"model":"test","messages":[],"tools":[{"type":"function","function":{"name":"candidate_probe","parameters":{"type":"object"}}}]}`)
+	resp, err := NewForwarder(nil, nil).sendCandidateRequest(ctx, server.URL+"/v1/chat/completions", requestBody,
+		&store.Model{Provider: "openai", APIKey: "test"}, logger, "session", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	logger.Close()
+	if readErr != nil || string(gotBody) != nestedOpenAIChatBadRequest {
+		t.Fatalf("candidate response changed: body=%q error=%v", gotBody, readErr)
+	}
+	captures, err := filepath.Glob(filepath.Join(filepath.Dir(logPath), "captures", "openai-chat-11129-*-attempt-1-*.json"))
+	if err != nil || len(captures) != 1 {
+		t.Fatalf("candidate tool capture missing: files=%v error=%v", captures, err)
 	}
 }
 

@@ -1085,7 +1085,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 	}
 
 	auditStarted := time.Now()
-	f.logPrefixDrift(logger, pre, model, upstreamBody, contResult)
+	f.logPrefixDrift(logger, pre, model, upstreamURL, upstreamBody, contResult)
 	pre.usage.setAuditDuration(auditStarted)
 	logger.InfoBytes("forwarder", fmt.Sprintf("转发: %s → %s (body=%d bytes)", model.ModelID, upstreamURL, len(upstreamBody)), upstreamBody)
 	sessionID := ""
@@ -1222,7 +1222,7 @@ func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body [
 	logOpenAIChatRequest(logger, model, url, body, openAIChatTraceID(ctx), attempt)
 	resp, err := f.doRequest(withOpenAIChatAttempt(ctx, attempt), url, body, model, sessionID, usage)
 	if err == nil {
-		observeOpenAIChatResponse(resp, logger, model, openAIChatTraceID(ctx), attempt)
+		observeOpenAIChatResponse(resp, logger, model, openAIChatTraceID(ctx), attempt, body)
 	}
 	return resp, err
 }
@@ -1413,6 +1413,7 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 					Model: statsModelID(m), Status: resp.StatusCode, Metadata: metadata,
 				})
 				if definitive {
+					observeOpenAIChatResponse(resp, logger, m, traceID, attemptNumber, body)
 					budgetTimer.Stop()
 					return resp, nil
 				}
@@ -1436,7 +1437,7 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 			continue
 		}
 		if chatRequest {
-			observeOpenAIChatResponse(resp, logger, m, traceID, attemptNumber)
+			observeOpenAIChatResponse(resp, logger, m, traceID, attemptNumber, body)
 		}
 		if shouldProbeSSEPrecommit(resp, body, m, url) {
 			probeErr := probeSSEPrecommit(attemptCtx, resp, m.Provider, url, time.Until(deadline), 0)
@@ -1710,7 +1711,7 @@ func shouldRetryWithoutContinuation(body string) bool {
 	return false
 }
 
-func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, body []byte, contResult *converter.ResponsesContinuationResult) {
+func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *store.Model, upstreamURL string, body []byte, contResult *converter.ResponsesContinuationResult) {
 	if logger == nil || pre == nil || pre.Conv == nil || pre.Conv.IsClassifier || m == nil {
 		return
 	}
@@ -1728,18 +1729,6 @@ func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *sto
 	if useResponsesAPI(pre, m) {
 		api = "responses"
 	}
-	openAICache := m.Provider != "anthropic" && m.Provider != "gemini"
-	providerToolsHash := ""
-	toolReport := converter.ToolConversionReport{}
-	toolResultReport := converter.ToolResultConversionReportForAudit(pre.Conv)
-	if openAICache {
-		providerToolsHash, toolReport = converter.CachedOpenAIToolAudit(pre.Conv.ToolsHash, pre.Conv.RawTools)
-	}
-	actualCacheKey := ""
-	expectedCacheKey := ""
-	providerInputHash := inputHash
-	providerInputItems := inputItems
-	previousResponseID := ""
 	var auditBody struct {
 		PromptCacheKey     string          `json:"prompt_cache_key"`
 		Input              json.RawMessage `json:"input"`
@@ -1748,18 +1737,37 @@ func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *sto
 		Tools              json.RawMessage `json:"tools"`
 		PreviousResponseID string          `json:"previous_response_id"`
 	}
-	providerInputJSON := ""
-	if contResult != nil && contResult.FullInputJSON != "" {
-		providerInputJSON = contResult.FullInputJSON
-	}
-	if json.Unmarshal(body, &auditBody) == nil {
-		actualCacheKey = auditBody.PromptCacheKey
-		previousResponseID = auditBody.PreviousResponseID
+	bodyParsed := json.Unmarshal(body, &auditBody) == nil
+	if bodyParsed {
 		if len(auditBody.Input) > 0 {
 			api = "responses"
 		} else if len(auditBody.Messages) > 0 {
 			api = "chat"
 		}
+	}
+	openAICache := m.Provider != "anthropic" && m.Provider != "gemini"
+	providerToolsHash := ""
+	toolReport := converter.ToolConversionReport{}
+	toolResultReport := converter.ToolResultConversionReportForAudit(pre.Conv)
+	if openAICache {
+		if api == "chat" && isOpenAIChatUpstream(m, upstreamURL) {
+			providerToolsHash, toolReport = converter.CachedOpenAIChatToolAudit(pre.Conv.ToolsHash, pre.Conv.RawTools)
+		} else {
+			providerToolsHash, toolReport = converter.CachedOpenAIToolAudit(pre.Conv.ToolsHash, pre.Conv.RawTools)
+		}
+	}
+	actualCacheKey := ""
+	expectedCacheKey := ""
+	providerInputHash := inputHash
+	providerInputItems := inputItems
+	previousResponseID := ""
+	providerInputJSON := ""
+	if contResult != nil && contResult.FullInputJSON != "" {
+		providerInputJSON = contResult.FullInputJSON
+	}
+	if bodyParsed {
+		actualCacheKey = auditBody.PromptCacheKey
+		previousResponseID = auditBody.PreviousResponseID
 		if providerInputJSON == "" {
 			prefix := auditBody.Input
 			if len(prefix) == 0 {

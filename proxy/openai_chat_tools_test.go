@@ -3,11 +3,52 @@ package proxy
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"strings"
 	"testing"
 
 	json "github.com/goccy/go-json"
 )
+
+func TestCaptureOpenAIChatToolParameters(t *testing.T) {
+	body := []byte(`{"messages":[{"content":"private prompt"}],"api_key":"private key","tools":[{"type":"function","function":{"name":"read_file","description":"private description","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]}`)
+	directory := t.TempDir()
+	path, err := captureOpenAIChatToolParameters(body, "test-trace", 1, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"private prompt", "private description", "private key"} {
+		if strings.Contains(string(stored), forbidden) {
+			t.Errorf("capture leaks %q", forbidden)
+		}
+	}
+	var captured struct {
+		TraceID string `json:"trace_id"`
+		Attempt int    `json:"attempt"`
+		Tools   []struct {
+			Index      int             `json:"index"`
+			Name       string          `json:"name"`
+			Parameters json.RawMessage `json:"parameters"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(stored, &captured); err != nil {
+		t.Fatal(err)
+	}
+	if captured.TraceID != "test-trace" || captured.Attempt != 1 || len(captured.Tools) != 1 || captured.Tools[0].Name != "read_file" || captured.Tools[0].Index != 0 {
+		t.Fatalf("unexpected capture identity: %+v", captured)
+	}
+	if string(captured.Tools[0].Parameters) != `{"type":"object","properties":{"path":{"type":"string"}}}` {
+		t.Fatalf("unexpected schema: %s", captured.Tools[0].Parameters)
+	}
+	secondPath, err := captureOpenAIChatToolParameters(body, "test-trace", 2, directory)
+	if err != nil || secondPath == path {
+		t.Fatalf("second attempt should have a distinct capture, path = %q, error = %v", secondPath, err)
+	}
+}
 
 func TestSummarizeOpenAIChatTools(t *testing.T) {
 	body := []byte(`{"messages":[{"content":"private prompt"}],"tools":[{"type":"function","function":{"name":"read_file","description":"private description","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}},{"type":"function","function":{"name":"without_parameters"}},{"type":"web_search","description":"unknown tool"}]}`)
@@ -143,6 +184,26 @@ func TestSummarizeOpenAIChatToolsLargeCollection(t *testing.T) {
 	}
 	if got.ToolCount != count || len(got.Tools) != count || got.Tools[0].Index != 0 || got.Tools[count-1].Index != count-1 {
 		t.Fatalf("large tool collection summary: count=%d details=%d", got.ToolCount, len(got.Tools))
+	}
+}
+
+func TestSummarizeOpenAIChatToolsRecordsSchemaStructureOnly(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","function":{"name":"example","parameters":{"type":"object","properties":{"secret_field":{"anyOf":[{"not":{}},{"type":"string","description":"SECRET_DESCRIPTION"}]},"nullable":{"type":["string","null"]}},"additionalProperties":false}}}]}`)
+	summary, err := summarizeOpenAIChatTools(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	features := summary.Tools[0].SchemaFeatures
+	if features["anyOf"] != 1 || features["not"] != 1 || features["always_false_schema"] != 1 ||
+		features["type_array"] != 1 || features["additionalProperties"] != 1 {
+		t.Fatalf("schema structure not recorded: %#v", features)
+	}
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "secret_field") || strings.Contains(string(encoded), "SECRET_DESCRIPTION") {
+		t.Fatalf("schema summary leaked contents: %s", encoded)
 	}
 }
 

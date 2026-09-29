@@ -37,6 +37,13 @@ func TestParseOpenAIChatGatewayErrorOrdinary503(t *testing.T) {
 	}
 }
 
+func TestParseOpenAIChatGatewayErrorWrappedCode(t *testing.T) {
+	got := parseOpenAIChatGatewayError(http.StatusServiceUnavailable, nil, []byte(nestedOpenAIChatBadRequest))
+	if got.Code != "no_healthy_account" || got.NestedCode != "11129" || !got.isDefinitiveOpenAIChatRequestError() {
+		t.Fatalf("wrapped error codes not separated: %+v", got)
+	}
+}
+
 func TestParseOpenAIChatGatewayErrorMalformed(t *testing.T) {
 	headers := http.Header{"Request-Id": []string{"header-request"}}
 	got := parseOpenAIChatGatewayError(http.StatusServiceUnavailable, headers, []byte(`{"error":`))

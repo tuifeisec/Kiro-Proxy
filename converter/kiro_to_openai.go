@@ -7,6 +7,16 @@ import (
 
 // KiroToOpenAI 将解析好的会话转换为 OpenAI Chat Completions 请求体
 func KiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+	return kiroToOpenAI(conv, targetModel, reasoningEffort, false)
+}
+
+// KiroToOpenAIChatUpstream applies the Chat-only compatibility normalization.
+// Callers must select it only after resolving the actual upstream URL.
+func KiroToOpenAIChatUpstream(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+	return kiroToOpenAI(conv, targetModel, reasoningEffort, true)
+}
+
+func kiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort string, normalizeSchema bool) ([]byte, error) {
 	model := targetModel
 	if model == "" {
 		model = conv.ModelID
@@ -42,6 +52,13 @@ func KiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort 
 	providerToolsHash := conv.ToolsHash
 	if len(conv.RawTools) > 0 {
 		openaiTools, providerToolsHash = globalToolCache.GetOpenAIWithHash(conv.ToolsHash, conv.RawTools)
+		if normalizeSchema {
+			var schemaChanged bool
+			openaiTools, schemaChanged = normalizeOpenAIChatTools(openaiTools)
+			if schemaChanged {
+				providerToolsHash = hashOpenAITools(openaiTools)
+			}
+		}
 		req.Tools = openaiTools
 	}
 	if !conv.IsClassifier {
