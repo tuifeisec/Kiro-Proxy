@@ -235,6 +235,11 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			)
 			var firstByteDuration time.Duration
 			resp, firstByteDuration, err = requestWithProtocolFallback(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+				if isOpenAIChatUpstream(candidate, candidatePrepared.upstreamURL) {
+					attempt := nextOpenAIChatAttempt(upstreamRequestOperationFromContext(attemptCtx))
+					attemptCtx = withOpenAIChatAttempt(attemptCtx, attempt)
+					logOpenAIChatRequest(s.logger, candidate, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, openAIChatTraceID(attemptCtx), attempt)
+				}
 				return s.forwarder.doRequest(attemptCtx, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, sessionID, usageRecord)
 			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
 				if !clientWantsStream || !isSSEResponse(attemptResp) {
@@ -285,6 +290,9 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			continue
 		}
 		resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
+		if grouped && resp.Request != nil && isOpenAIChatUpstream(candidate, candidatePrepared.upstreamURL) {
+			observeOpenAIChatResponse(resp, s.logger, candidate, openAIChatTraceID(resp.Request.Context()), openAIChatAttempt(resp.Request.Context()))
+		}
 
 		detail := ""
 		capabilityMismatch := false
@@ -327,7 +335,14 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			} else {
 				usageRecord.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
 			}
-			s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容候选切换: group=%s candidate=%d model=%s status=%d detail=%s", route.Group.Name, index, statsModelID(candidate), resp.StatusCode, detail))
+			if resp.Request != nil && isOpenAIChatUpstream(candidate, candidatePrepared.upstreamURL) {
+				s.logger.WarnWithMeta("dispatcher", fmt.Sprintf("本地兼容候选切换: group=%s candidate=%d model=%s status=%d detail=%s", route.Group.Name, index, statsModelID(candidate), resp.StatusCode, detail), LogMeta{
+					Model: statsModelID(candidate), Status: resp.StatusCode,
+					Metadata: map[string]interface{}{"trace_id": openAIChatTraceID(resp.Request.Context()), "attempt": openAIChatAttempt(resp.Request.Context()), "candidate": index},
+				})
+			} else {
+				s.logger.Warn("dispatcher", fmt.Sprintf("本地兼容候选切换: group=%s candidate=%d model=%s status=%d detail=%s", route.Group.Name, index, statsModelID(candidate), resp.StatusCode, detail))
+			}
 			resp = nil
 			continue
 		}

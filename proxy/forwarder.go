@@ -66,6 +66,7 @@ const (
 type upstreamRequestOperation struct {
 	mu                sync.Mutex
 	requestID         string
+	chatAttempt       int
 	lastAttempt       *upstreamAttemptState
 	lastResponsesLike bool
 }
@@ -76,6 +77,16 @@ type upstreamAttemptState struct {
 
 func newUpstreamRequestOperation() *upstreamRequestOperation {
 	return &upstreamRequestOperation{requestID: uuid.NewString()}
+}
+
+func nextOpenAIChatAttempt(operation *upstreamRequestOperation) int {
+	if operation == nil {
+		return 0
+	}
+	operation.mu.Lock()
+	defer operation.mu.Unlock()
+	operation.chatAttempt++
+	return operation.chatAttempt
 }
 
 func (a *upstreamAttemptState) mark(state upstreamSendState) {
@@ -842,15 +853,18 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 						pre.usage.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
 					}
 				}
+				metadata := map[string]interface{}{
+					"stage": stageIndex, "stage_group": stage.GroupName,
+					"failure_class": string(failureClass), "candidate": candidateIndex,
+				}
+				if resp.Request != nil && resp.Request.URL != nil && isOpenAIChatUpstream(model, resp.Request.URL.String()) {
+					metadata["trace_id"] = openAIChatTraceID(resp.Request.Context())
+					metadata["attempt"] = openAIChatAttempt(resp.Request.Context())
+				}
 				logger.WarnWithMeta("dispatcher", fmt.Sprintf("候选返回可切换错误: stage=%d group=%s model=%s status=%d", stageIndex, stage.GroupName, statsModelID(model), resp.StatusCode), LogMeta{
-					Model:  statsModelID(model),
-					Status: resp.StatusCode,
-					Metadata: map[string]interface{}{
-						"stage":         stageIndex,
-						"stage_group":   stage.GroupName,
-						"failure_class": string(failureClass),
-						"candidate":     candidateIndex,
-					},
+					Model:    statsModelID(model),
+					Status:   resp.StatusCode,
+					Metadata: metadata,
 				}, bodyDetail)
 				continue
 			}
@@ -1201,7 +1215,16 @@ func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body [
 	if retryBudget > 0 {
 		return f.sendWithRetryBudget(ctx, url, body, model, logger, sessionID, usage, retryBudget)
 	}
-	return f.doRequest(ctx, url, body, model, sessionID, usage)
+	if !isOpenAIChatUpstream(model, url) {
+		return f.doRequest(ctx, url, body, model, sessionID, usage)
+	}
+	attempt := nextOpenAIChatAttempt(upstreamRequestOperationFromContext(ctx))
+	logOpenAIChatRequest(logger, model, url, body, openAIChatTraceID(ctx), attempt)
+	resp, err := f.doRequest(withOpenAIChatAttempt(ctx, attempt), url, body, model, sessionID, usage)
+	if err == nil {
+		observeOpenAIChatResponse(resp, logger, model, openAIChatTraceID(ctx), attempt)
+	}
+	return resp, err
 }
 
 func (f *Forwarder) finalizeForwardResponse(ctx context.Context, resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult, onStreamOutcome func(converter.StreamOutcome), onFirstContent ...func(time.Time, string)) (*http.Response, error) {
@@ -1298,6 +1321,12 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 	if operation == nil {
 		operation = newUpstreamRequestOperation()
 	}
+	chatRequest := isOpenAIChatUpstream(m, url)
+	traceID := ""
+	if chatRequest {
+		traceID = operationRequestID(operation)
+		ctx = withUpstreamRequestOperation(ctx, operation)
+	}
 	if retryBudget <= 0 {
 		retryBudget = minimumRetryBudget
 	}
@@ -1313,7 +1342,13 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 		}
 		if attempt > 0 {
 			delay := nextRetryDelay
-			logger.Warn("forwarder", fmt.Sprintf("重试 %d/%d，等待 %v", attempt, maxRetries, delay))
+			if chatRequest {
+				logger.WarnWithMeta("openai_chat", fmt.Sprintf("重试 %d/%d，等待 %v", attempt, maxRetries, delay), LogMeta{
+					Model: statsModelID(m), Metadata: map[string]interface{}{"trace_id": traceID, "retry_index": attempt},
+				})
+			} else {
+				logger.Warn("forwarder", fmt.Sprintf("重试 %d/%d，等待 %v", attempt, maxRetries, delay))
+			}
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -1327,6 +1362,12 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
 		budgetTimer := time.AfterFunc(remaining, cancelAttempt)
+		attemptNumber := attempt + 1
+		if chatRequest {
+			attemptNumber = nextOpenAIChatAttempt(operation)
+			attemptCtx = withOpenAIChatAttempt(attemptCtx, attemptNumber)
+			logOpenAIChatRequest(logger, m, url, body, traceID, attemptNumber)
+		}
 		attemptState := &upstreamAttemptState{}
 		operation.recordAttempt(m, body, url, attemptState)
 		resp, err := f.doRequestWithOperation(attemptCtx, url, body, m, sessionID, operation, attemptState, usage)
@@ -1337,7 +1378,13 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			logger.Error("forwarder", fmt.Sprintf("请求失败 (attempt %d): %v", attempt, err))
+			if chatRequest {
+				logger.ErrorWithMeta("openai_chat", fmt.Sprintf("请求失败 (attempt %d): %v", attempt, err), LogMeta{
+					Model: statsModelID(m), Metadata: map[string]interface{}{"trace_id": traceID, "attempt": attemptNumber},
+				})
+			} else {
+				logger.Error("forwarder", fmt.Sprintf("请求失败 (attempt %d): %v", attempt, err))
+			}
 			if !shouldRetryResponsesTransport(m, body, url, attemptState) {
 				return nil, fmt.Errorf("上游请求发送状态不明确，拒绝重放 (%s): %w", requestOperationState(attemptState), lastErr)
 			}
@@ -1355,6 +1402,21 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 		}
 
 		if shouldRetryUpstreamStatusForRequest(resp.StatusCode, m, body, url, attemptState) && attempt < maxRetries {
+			if chatRequest {
+				info, definitive, inspectErr := inspectOpenAIChatRetryError(resp)
+				metadata := openAIChatErrorMetadata(info, traceID, attemptNumber)
+				metadata["retry"] = !definitive
+				if inspectErr != nil {
+					metadata["inspection_error"] = inspectErr.Error()
+				}
+				logger.WarnWithMeta("openai_chat", "OpenAI Chat 上游错误分类", LogMeta{
+					Model: statsModelID(m), Status: resp.StatusCode, Metadata: metadata,
+				})
+				if definitive {
+					budgetTimer.Stop()
+					return resp, nil
+				}
+			}
 			statusRetries++
 			nextRetryDelay = upstreamStatusRetryDelay(statusRetries, resp.Header.Get("Retry-After"))
 			if resp.ContentLength >= 0 && resp.ContentLength <= 32*1024 {
@@ -1363,8 +1425,18 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 			resp.Body.Close()
 			budgetTimer.Stop()
 			lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
-			logger.Warn("forwarder", fmt.Sprintf("上游返回 %d（第 %d/%d 次请求），准备重试", resp.StatusCode, attempt+1, maxRetries+1))
+			if chatRequest {
+				logger.WarnWithMeta("openai_chat", fmt.Sprintf("上游返回 %d（第 %d/%d 次请求），准备重试", resp.StatusCode, attempt+1, maxRetries+1), LogMeta{
+					Model: statsModelID(m), Status: resp.StatusCode,
+					Metadata: map[string]interface{}{"trace_id": traceID, "attempt": attemptNumber},
+				})
+			} else {
+				logger.Warn("forwarder", fmt.Sprintf("上游返回 %d（第 %d/%d 次请求），准备重试", resp.StatusCode, attempt+1, maxRetries+1))
+			}
 			continue
+		}
+		if chatRequest {
+			observeOpenAIChatResponse(resp, logger, m, traceID, attemptNumber)
 		}
 		if shouldProbeSSEPrecommit(resp, body, m, url) {
 			probeErr := probeSSEPrecommit(attemptCtx, resp, m.Provider, url, time.Until(deadline), 0)

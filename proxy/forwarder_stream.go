@@ -22,15 +22,22 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 		if readErr != nil {
 			logger.Warn("forwarder", fmt.Sprintf("读取上游错误响应受限: %v", readErr))
 		}
-		logger.ErrorWithMeta("forwarder", fmt.Sprintf("上游错误 %d", resp.StatusCode), LogMeta{
+		meta := LogMeta{
 			Model:     statsModelID(m),
 			Status:    resp.StatusCode,
 			LatencyMS: time.Since(pre.StartTime).Milliseconds(),
-		}, truncate(string(body), 500))
+		}
+		errorMessage := buildUpstreamErrorMessage(resp.StatusCode, resp.Status, body)
+		if resp.Request != nil && resp.Request.URL != nil && isOpenAIChatUpstream(m, resp.Request.URL.String()) {
+			info := parseOpenAIChatGatewayError(resp.StatusCode, resp.Header, body)
+			meta.Metadata = openAIChatErrorMetadata(info, openAIChatTraceID(resp.Request.Context()), openAIChatAttempt(resp.Request.Context()))
+			errorMessage = openAIChatErrorMessage(resp.StatusCode, resp.Status, body, info)
+		}
+		logger.ErrorWithMeta("forwarder", fmt.Sprintf("上游错误 %d", resp.StatusCode), meta, truncate(string(body), 500))
 		// 4xx/5xx 上游错误也需要计入统计（总请求数 + 错误数）
 		f.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(m), true)
 		pre.usage.finish(resp.StatusCode, localCompatUsage{}, fmt.Sprintf("HTTP %d", resp.StatusCode))
-		return buildKiroTextStreamResponse(reqFromResponse(resp), buildUpstreamErrorMessage(resp.StatusCode, resp.Status, body), kiroModelID(pre, m), true), nil
+		return buildKiroTextStreamResponse(reqFromResponse(resp), errorMessage, kiroModelID(pre, m), true), nil
 	}
 
 	cw := m.ContextWindow
