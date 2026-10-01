@@ -1752,6 +1752,8 @@ func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *sto
 	if openAICache {
 		if api == "chat" && isOpenAIChatUpstream(m, upstreamURL) {
 			providerToolsHash, toolReport = converter.CachedOpenAIChatToolAudit(pre.Conv.ToolsHash, pre.Conv.RawTools)
+		} else if api == "responses" && isOpenAIResponsesUpstream(m, upstreamURL) {
+			providerToolsHash, toolReport = converter.CachedOpenAIResponsesToolAudit(pre.Conv.ToolsHash, pre.Conv.RawTools)
 		} else {
 			providerToolsHash, toolReport = converter.CachedOpenAIToolAudit(pre.Conv.ToolsHash, pre.Conv.RawTools)
 		}

@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"kiro-proxy/codex"
 	"kiro-proxy/converter"
 	"kiro-proxy/store"
@@ -111,13 +113,15 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 			body = codex.NewRequestBodyFromResponses(body, m.ServiceTier)
 		}
 	case useResponsesAPI(pre, m):
-		if m.EnableContinuation {
+		if isOpenAIResponsesUpstream(m, upstreamURL) {
+			body, err = converter.KiroToOpenAIResponsesUpstream(conv, m.ModelID, reasoningEffort, m.EnableContinuation)
+		} else if m.EnableContinuation {
 			body, err = converter.KiroToResponsesForContinuation(conv, m.ModelID, reasoningEffort)
 		} else {
 			body, err = converter.KiroToResponses(conv, m.ModelID, reasoningEffort)
 		}
 		if err == nil {
-			body = setResponsesStore(body, m.EnableContinuation)
+			body = setResponsesStore(body, m.EnableContinuation, isOpenAIResponsesUpstream(m, upstreamURL))
 		}
 	default: // chat/completions，或 classifier 请求
 		if !m.DisableAutoSuffix && strings.Contains(endpoint, "/responses") {
@@ -128,6 +132,14 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 		body, err = convertChat()
 	}
 	return body, upstreamURL, err
+}
+
+func isOpenAIResponsesUpstream(model *store.Model, upstreamURL string) bool {
+	if model == nil || model.Provider != "openai" {
+		return false
+	}
+	parsed, err := url.Parse(upstreamURL)
+	return err == nil && strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/responses")
 }
 
 func responsesToChatURL(upstreamURL string) string {
@@ -158,9 +170,18 @@ func replaceModelInBody(body []byte, newModel string) []byte {
 	return result
 }
 
-func setResponsesStore(body []byte, store bool) []byte {
+func setResponsesStore(body []byte, store, preserveNumbers bool) []byte {
 	var parsed map[string]interface{}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if preserveNumbers {
+		decoder.UseNumber()
+	}
+	if err := decoder.Decode(&parsed); err != nil {
+		return body
+	}
+	// 与原 Unmarshal 一致，只接受一个完整的 JSON 文档。
+	var trailing interface{}
+	if decoder.Decode(&trailing) != io.EOF {
 		return body
 	}
 	parsed["store"] = store

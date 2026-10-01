@@ -82,17 +82,23 @@ type ReqTool struct {
 //   - 保持前缀稳定：[developer(静态system)] + [历史对话] + [动态内容(末尾)]
 //   - 工具定义放在 tools 字段（OpenAI 自动缓存 tools schema）
 func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
-	return kiroToResponses(conv, targetModel, reasoningEffort, false)
+	return kiroToResponses(conv, targetModel, reasoningEffort, false, false)
 }
 
 // KiroToResponsesForContinuation 使用每轮替换的 instructions，避免代理拆出的
 // 动态 developer 尾部滞留在 previous_response_id 的历史输入中。
 // 仅用于明确启用续接的 Kiro 单一 SystemText；普通缓存路径保持原有布局。
 func KiroToResponsesForContinuation(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
-	return kiroToResponses(conv, targetModel, reasoningEffort, true)
+	return kiroToResponses(conv, targetModel, reasoningEffort, true, false)
 }
 
-func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string, continuation bool) ([]byte, error) {
+// KiroToOpenAIResponsesUpstream 仅用于已确认实际出站 URL 为 OpenAI Responses
+// 的请求，在现有转换流程中应用工具 schema 兼容修复。
+func KiroToOpenAIResponsesUpstream(conv *ParsedConversation, targetModel string, reasoningEffort string, continuation bool) ([]byte, error) {
+	return kiroToResponses(conv, targetModel, reasoningEffort, continuation, true)
+}
+
+func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string, continuation, normalizeSchema bool) ([]byte, error) {
 	model := targetModel
 	if model == "" {
 		model = conv.ModelID
@@ -121,7 +127,11 @@ func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 	var openaiTools []OpenAITool
 	providerToolsHash := conv.ToolsHash
 	if len(conv.RawTools) > 0 {
-		openaiTools, providerToolsHash = globalToolCache.GetOpenAIWithHash(conv.ToolsHash, conv.RawTools)
+		if normalizeSchema {
+			openaiTools, providerToolsHash = globalToolCache.GetOpenAIResponsesWithHash(conv.RawTools)
+		} else {
+			openaiTools, providerToolsHash = globalToolCache.GetOpenAIWithHash(conv.ToolsHash, conv.RawTools)
+		}
 		tools := make([]ReqTool, 0, len(openaiTools))
 		for _, t := range openaiTools {
 			tools = append(tools, ReqTool{
@@ -227,8 +237,9 @@ func buildResponsesUserMsg(content string, images []KiroImage) ReqInput {
 // buildResponsesInputCacheOptimized 构建带缓存优化的 input 数组
 //
 // OpenAI Prompt Caching 核心规则：
-//  按上游模型支持的缓存规则复用稳定前缀；本地 JSON 结构一致是诊断信号，
-//  不能据此承诺实际命中率、计费 token 数或首内容延迟。
+//
+//	按上游模型支持的缓存规则复用稳定前缀；本地 JSON 结构一致是诊断信号，
+//	不能据此承诺实际命中率、计费 token 数或首内容延迟。
 //
 // 优化策略：
 //   - system prompt 中的静态部分作为 developer 消息放在最前面（稳定前缀）

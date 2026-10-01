@@ -46,9 +46,10 @@ type ToolCacheStats struct {
 }
 
 const (
-	toolCacheTTL      = 10 * time.Minute
-	maxToolCacheItems = 100
-	maxToolCacheBytes = 32 * 1024 * 1024
+	toolCacheTTL                     = 10 * time.Minute
+	maxToolCacheItems                = 100
+	maxToolCacheBytes                = 32 * 1024 * 1024
+	openAIResponsesToolCacheProvider = "openai-responses"
 )
 
 var globalToolCache = &ToolCache{}
@@ -95,6 +96,12 @@ func (c *ToolCache) GetOpenAIWithHash(hash string, raw []json.RawMessage) ([]Ope
 	return e.openai, e.providerHash
 }
 
+// GetOpenAIResponsesWithHash 使用独立精确身份，防止旧 OpenAI 缓存的数字合并。
+func (c *ToolCache) GetOpenAIResponsesWithHash(raw []json.RawMessage) ([]OpenAITool, string) {
+	e := c.get(openAIResponsesToolCacheProvider, hashOpenAIResponsesRawTools(raw), raw)
+	return e.openai, e.providerHash
+}
+
 func CachedOpenAIToolAudit(hash string, raw []json.RawMessage) (string, ToolConversionReport) {
 	if hash == "" {
 		return ProviderToolsHashForAudit(raw), ToolConversionReportForAudit(raw, true)
@@ -115,6 +122,13 @@ func CachedOpenAIChatToolAudit(hash string, raw []json.RawMessage) (string, Tool
 		providerHash = hashOpenAITools(normalized)
 	}
 	return providerHash, report
+}
+
+// CachedOpenAIResponsesToolAudit 使用 OpenAI Responses 实际出站的工具定义。
+func CachedOpenAIResponsesToolAudit(_ string, raw []json.RawMessage) (string, ToolConversionReport) {
+	// 原 ToolsHash 使用浮点数规范化，不能用来区分精确的 Responses schema。
+	e := globalToolCache.get(openAIResponsesToolCacheProvider, hashOpenAIResponsesRawTools(raw), raw)
+	return e.providerHash, e.report
 }
 
 func (c *ToolCache) GetAnthropic(hash string, raw []json.RawMessage) []AnthropicTool {
@@ -206,9 +220,14 @@ func (c *ToolCache) evictLocked(now time.Time) {
 
 func convertToolCacheEntry(provider string, raw []json.RawMessage) *toolCacheEntry {
 	e := &toolCacheEntry{bytes: int64(unsafe.Sizeof(toolCacheEntry{}))}
-	if provider == "openai" {
+	if provider == "openai" || provider == openAIResponsesToolCacheProvider {
 		e.openai = toOpenAITools(raw)
-		e.providerHash = hashOpenAITools(e.openai)
+		if provider == openAIResponsesToolCacheProvider {
+			e.openai, _ = normalizeOpenAIResponsesTools(e.openai)
+			e.providerHash = hashOpenAIResponsesTools(e.openai)
+		} else {
+			e.providerHash = hashOpenAITools(e.openai)
+		}
 		e.report = ToolConversionReportForAudit(raw, true)
 		e.bytes += int64(len(e.providerHash))
 		e.bytes += int64(cap(e.openai)) * int64(unsafe.Sizeof(OpenAITool{}))
