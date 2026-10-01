@@ -23,15 +23,22 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestHandshakeFallbackReplaysBody(t *testing.T) {
+	wantUserAgent := "OpenAI/Go 3.56.0"
 	primaryCalls := 0
 	fallbackCalls := 0
 	transport := &protocolFallbackTransport{
-		primary: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		primary: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			primaryCalls++
+			if got := req.UserAgent(); got != wantUserAgent {
+				t.Errorf("primary User-Agent = %q, want %q", got, wantUserAgent)
+			}
 			return nil, errors.New("net/http: TLS handshake timeout")
 		}),
 		fallback: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			fallbackCalls++
+			if got := req.UserAgent(); got != wantUserAgent {
+				t.Errorf("fallback User-Agent = %q, want %q", got, wantUserAgent)
+			}
 			body, err := io.ReadAll(req.Body)
 			if err != nil {
 				return nil, err
@@ -47,6 +54,7 @@ func TestHandshakeFallbackReplaysBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.Header.Set("User-Agent", wantUserAgent)
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
@@ -129,15 +137,22 @@ func TestHTTP2BodyFailureUsesHTTP1ForNextRequest(t *testing.T) {
 }
 
 func TestHTTP2RoundTripFailureReplaysOnHTTP1(t *testing.T) {
+	wantUserAgent := "OpenAI/Go 3.56.0"
 	primaryCalls := 0
 	fallbackCalls := 0
 	transport := &protocolFallbackTransport{
-		primary: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		primary: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			primaryCalls++
+			if got := req.UserAgent(); got != wantUserAgent {
+				t.Errorf("primary User-Agent = %q, want %q", got, wantUserAgent)
+			}
 			return nil, errors.New("http2: client connection lost")
 		}),
 		fallback: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			fallbackCalls++
+			if got := req.UserAgent(); got != wantUserAgent {
+				t.Errorf("fallback User-Agent = %q, want %q", got, wantUserAgent)
+			}
 			body, err := io.ReadAll(req.Body)
 			if err != nil || string(body) != "payload" {
 				return nil, errors.New("fallback request body mismatch")
@@ -149,6 +164,7 @@ func TestHTTP2RoundTripFailureReplaysOnHTTP1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.Header.Set("User-Agent", wantUserAgent)
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)

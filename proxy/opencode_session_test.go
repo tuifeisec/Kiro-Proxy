@@ -78,6 +78,7 @@ func TestKiroSessionReachesHTTPUpstreamThroughRouter(t *testing.T) {
 					t.Fatal(err)
 				}
 				req := httptest.NewRequest(http.MethodPost, "http://kiro.invalid/", strings.NewReader(string(body)))
+				req.Header.Set("User-Agent", "Go-http-client/1.1")
 				pre, err := s.parseRequest(req, "kiro", nil)
 				if err != nil {
 					t.Fatal(err)
@@ -309,6 +310,9 @@ func TestKiroClassifierAndRetryKeepRealSession(t *testing.T) {
 	defer f.CloseIdleConnections()
 	f.clients[""] = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		seen = append(seen, r.Header.Get("x-opencode-session"))
+		if got := r.Header.Get("User-Agent"); got != "OpenAI/Go 3.56.0" {
+			t.Errorf("attempt %d: User-Agent = %q, want OpenAI/Go 3.56.0", len(seen), got)
+		}
 		status := http.StatusOK
 		if len(seen) == 1 {
 			status = http.StatusServiceUnavailable

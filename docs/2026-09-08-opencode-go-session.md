@@ -14,7 +14,7 @@
 
 ## 实际修复
 
-- 普通 API 渠道使用对应 Provider 的官方 Go SDK 格式兼容标识，模型连通性测试遵循相同规则；不发送本项目名称作为 User-Agent。移除 Codex 请求中原有的固定项目安装标记，独立探测及空会话转发的请求 ID 改为 UUID。
+- 普通 API 渠道的推理请求、模型连通性测试和上游模型列表同步使用对应 Provider 的官方 Go SDK 格式兼容标识；模型列表的每一页及同主机重定向、推理请求的重试及协议回退均保留该标识，不能使用 Go 默认的 `Go-http-client/1.1`。不发送本项目名称作为 User-Agent。移除 Codex 请求中原有的固定项目安装标记，独立探测及空会话转发的请求 ID 改为 UUID。
 - Kiro 转发使用请求体 `conversationState.conversationId`，仅开启兼容的模型在 `x-opencode-session` 中发送；辅助分类请求也使用实际对话 ID，移除共享的 `kiro-classifier` 常量。
 - 本地兼容接口的单模型与模型组路径均传递实际会话 ID，移除所有会话共用的 `local-compat` 常量。请求重试与协议回退沿用同一值。
 - 同步发送原有 `session_id`、`conversation_id`、`x-session-id`、`session-id` 兼容头，支持 Codex 等客户端的原生 `session_id` 输入。

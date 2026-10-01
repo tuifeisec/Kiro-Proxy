@@ -7,6 +7,7 @@ import (
 	json "github.com/goccy/go-json"
 	"io"
 	"kiro-proxy/store"
+	"kiro-proxy/ua"
 	"kiro-proxy/upstreamproxy"
 	"log"
 	"net/http"
@@ -284,6 +285,7 @@ func requestUpstreamModelsPage(ctx context.Context, client *http.Client, target 
 		return nil, &upstreamModelsFetchError{message: "创建上游模型列表请求失败", err: err}
 	}
 	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("User-Agent", ua.ProviderUserAgent(request.Provider))
 	switch request.Provider {
 	case "anthropic":
 		httpRequest.Header.Set("x-api-key", request.APIKey)
