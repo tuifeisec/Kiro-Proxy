@@ -1370,7 +1370,14 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 		}
 		attemptState := &upstreamAttemptState{}
 		operation.recordAttempt(m, body, url, attemptState)
+		var identity *upstreamUserAgentTrace
+		if logger != nil {
+			attemptCtx, identity = withUpstreamUserAgentTrace(attemptCtx)
+		}
 		resp, err := f.doRequestWithOperation(attemptCtx, url, body, m, sessionID, operation, attemptState, usage)
+		if identity != nil {
+			identity.log(logger, m, url, operationRequestID(operation), attemptNumber, resp, err)
+		}
 		if err != nil {
 			budgetTimer.Stop()
 			cancelAttempt()
