@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	json "github.com/goccy/go-json"
 )
@@ -91,8 +90,7 @@ func (s *Server) handleKiroRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	restartKiro(s.logger)
-	json.NewEncoder(w).Encode(kiroProxyResult{OK: true, Message: "✓ Kiro 正在重启..."})
+	json.NewEncoder(w).Encode(restartKiro(s.logger, fmt.Sprintf("http://%s:%d", s.proxyBindHost(), s.cfg.Proxy.Port)))
 }
 
 func getKiroProxyStatus(targetProxy string) kiroProxyStatus {
@@ -122,17 +120,25 @@ func getKiroProxyStatus(targetProxy string) kiroProxyStatus {
 }
 
 func configureKiroProxy(targetProxy string, logger *TrafficLogger) kiroProxyResult {
-	settingsPath := getKiroSettingsPath()
+	return configureKiroProxyAt(targetProxy, logger, getKiroSettingsPath(), prepareKiroLaunchPlan, launchPreparedKiro)
+}
 
+func configureKiroProxyAt(targetProxy string, logger *TrafficLogger, settingsPath string, prepare kiroLaunchPreparer, launch kiroLaunchRunner) kiroProxyResult {
 	settings, err := readKiroSettings(settingsPath)
 	if err != nil {
 		return kiroProxyResult{OK: false, Message: "读取 Kiro 设置失败: " + err.Error()}
+	}
+	plan, err := prepare(true)
+	if err != nil {
+		return kiroProxyResult{OK: false, Message: "启动 Kiro 预检失败: " + err.Error()}
 	}
 
 	// 备份原始代理值
 	originalProxy, _ := settings["http.proxy"].(string)
 	backupPath := settingsPath + ".proxy-backup"
-	os.WriteFile(backupPath, []byte(originalProxy), 0644)
+	if err := os.WriteFile(backupPath, []byte(originalProxy), 0644); err != nil {
+		return kiroProxyResult{OK: false, Message: "备份原始代理失败: " + err.Error()}
+	}
 
 	// 写入新的代理设置
 	settings["http.proxy"] = targetProxy
@@ -142,16 +148,21 @@ func configureKiroProxy(targetProxy string, logger *TrafficLogger) kiroProxyResu
 		return kiroProxyResult{OK: false, Message: "写入设置失败: " + err.Error()}
 	}
 
-	logger.Info("kiro-config", fmt.Sprintf("代理已配置: %s → %s", originalProxy, targetProxy))
+	logKiroConfig(logger, fmt.Sprintf("代理已配置: %s → %s", originalProxy, targetProxy))
 
 	// 重启 Kiro
-	restartKiro(logger)
+	if err := launch(plan, logger); err != nil {
+		return kiroProxyResult{OK: false, Message: fmt.Sprintf("代理已配置为 %s，但 Kiro 重启失败: %v", targetProxy, err)}
+	}
 
 	return kiroProxyResult{OK: true, Message: fmt.Sprintf("✓ 代理已配置为 %s，Kiro 正在重启...", targetProxy)}
 }
 
 func restoreKiroProxy(logger *TrafficLogger) kiroProxyResult {
-	settingsPath := getKiroSettingsPath()
+	return restoreKiroProxyAt(logger, getKiroSettingsPath(), prepareKiroLaunchPlan, launchPreparedKiro)
+}
+
+func restoreKiroProxyAt(logger *TrafficLogger, settingsPath string, prepare kiroLaunchPreparer, launch kiroLaunchRunner) kiroProxyResult {
 	backupPath := settingsPath + ".proxy-backup"
 
 	// 读取备份的原始值
@@ -164,6 +175,10 @@ func restoreKiroProxy(logger *TrafficLogger) kiroProxyResult {
 	settings, err := readKiroSettings(settingsPath)
 	if err != nil {
 		return kiroProxyResult{OK: false, Message: "读取设置失败: " + err.Error()}
+	}
+	plan, err := prepare(false)
+	if err != nil {
+		return kiroProxyResult{OK: false, Message: "还原前启动 Kiro 预检失败: " + err.Error()}
 	}
 
 	// 还原代理设置
@@ -179,15 +194,47 @@ func restoreKiroProxy(logger *TrafficLogger) kiroProxyResult {
 		return kiroProxyResult{OK: false, Message: "写入设置失败: " + err.Error()}
 	}
 
-	// 删除备份文件
-	os.Remove(backupPath)
-
-	logger.Info("kiro-config", fmt.Sprintf("代理已还原: → %s", originalProxy))
+	logKiroConfig(logger, fmt.Sprintf("代理已还原: → %s", originalProxy))
 
 	// 重启 Kiro
-	restartKiro(logger)
+	if err := launch(plan, logger); err != nil {
+		return kiroProxyResult{OK: false, Message: fmt.Sprintf("代理已还原为「%s」，但 Kiro 重启失败: %v", originalProxy, err)}
+	}
+	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+		return kiroProxyResult{OK: false, Message: "代理已还原且 Kiro 已启动，但删除原始代理备份失败: " + err.Error()}
+	}
 
 	return kiroProxyResult{OK: true, Message: fmt.Sprintf("✓ 代理已还原为「%s」，Kiro 正在重启...", originalProxy)}
+}
+
+func restartKiro(logger *TrafficLogger, targetProxy string) kiroProxyResult {
+	return restartKiroAt(logger, targetProxy, getKiroSettingsPath(), prepareKiroLaunchPlan, launchPreparedKiro)
+}
+
+func restartKiroAt(logger *TrafficLogger, targetProxy, settingsPath string, prepare kiroLaunchPreparer, launch kiroLaunchRunner) kiroProxyResult {
+	settings, err := readKiroSettings(settingsPath)
+	if err != nil {
+		return kiroProxyResult{OK: false, Message: "读取 Kiro 设置失败: " + err.Error()}
+	}
+	currentProxy, _ := settings["http.proxy"].(string)
+	injectCA, err := kiroCAInjectionDecision(currentProxy, targetProxy)
+	if err != nil {
+		return kiroProxyResult{OK: false, Message: "识别 Kiro 代理归属失败: " + err.Error()}
+	}
+	plan, err := prepare(injectCA)
+	if err != nil {
+		return kiroProxyResult{OK: false, Message: "启动 Kiro 预检失败: " + err.Error()}
+	}
+	if err := launch(plan, logger); err != nil {
+		return kiroProxyResult{OK: false, Message: "Kiro 重启失败: " + err.Error()}
+	}
+	return kiroProxyResult{OK: true, Message: "✓ Kiro 启动命令已提交"}
+}
+
+func logKiroConfig(logger *TrafficLogger, message string) {
+	if logger != nil {
+		logger.Info("kiro-config", message)
+	}
 }
 
 func readKiroSettings(path string) (map[string]interface{}, error) {
@@ -214,77 +261,4 @@ func writeKiroSettings(path string, settings map[string]interface{}) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
-}
-
-func restartKiro(logger *TrafficLogger) {
-	logger.Info("kiro-config", "正在重启 Kiro...")
-
-	switch runtime.GOOS {
-	case "windows":
-		restartKiroWindows(logger)
-	case "darwin":
-		restartKiroDarwin(logger)
-	default:
-		logger.Info("kiro-config", "当前系统暂不支持自动重启 Kiro: "+runtime.GOOS)
-	}
-}
-
-func restartKiroWindows(logger *TrafficLogger) {
-	// /T 结束完整进程树，避免只杀掉主进程后残留最新启动的子进程。
-	if err := hiddenCmd("taskkill", "/T", "/IM", "Kiro.exe").Run(); err != nil {
-		logger.Info("kiro-config", "正常关闭 Kiro 进程树失败，尝试强制结束: "+err.Error())
-		_ = hiddenCmd("taskkill", "/F", "/T", "/IM", "Kiro.exe").Run()
-	}
-
-	time.Sleep(2 * time.Second)
-
-	kiroPaths := []string{
-		filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "Kiro", "Kiro.exe"),
-		filepath.Join(os.Getenv("PROGRAMFILES"), "Kiro", "Kiro.exe"),
-	}
-	for _, p := range kiroPaths {
-		if _, err := os.Stat(p); err == nil {
-			if err := hiddenCmd(p).Start(); err != nil {
-				logger.Info("kiro-config", "启动 Kiro 失败: "+err.Error())
-				continue
-			}
-			logger.Info("kiro-config", "Kiro 已启动: "+p)
-			return
-		}
-	}
-
-	cmd := hiddenCmd(
-		"powershell",
-		"-NoProfile",
-		"-NonInteractive",
-		"-WindowStyle",
-		"Hidden",
-		"-Command",
-		"Start-Process -FilePath Kiro -WindowStyle Hidden",
-	)
-	if err := cmd.Start(); err != nil {
-		logger.Info("kiro-config", "通过 PATH 启动 Kiro 失败: "+err.Error())
-		return
-	}
-	logger.Info("kiro-config", "尝试通过 PATH 启动 Kiro")
-}
-
-func restartKiroDarwin(logger *TrafficLogger) {
-	if err := hiddenCmd("osascript", "-e", `tell application "Kiro" to quit`).Run(); err != nil {
-		logger.Info("kiro-config", "正常退出 Kiro 失败，尝试结束所有 Kiro 进程: "+err.Error())
-	}
-	if err := hiddenCmd("pkill", "-x", "Kiro").Run(); err != nil {
-		logger.Info("kiro-config", "结束 Kiro 主进程失败或进程不存在: "+err.Error())
-	}
-	if err := hiddenCmd("pkill", "-f", "/Kiro.app/").Run(); err != nil {
-		logger.Info("kiro-config", "结束 Kiro 进程树失败或进程不存在: "+err.Error())
-	}
-
-	time.Sleep(2 * time.Second)
-
-	if err := hiddenCmd("open", "-a", "Kiro").Start(); err != nil {
-		logger.Info("kiro-config", "启动 Kiro 失败: "+err.Error())
-		return
-	}
-	logger.Info("kiro-config", "Kiro 已启动")
 }

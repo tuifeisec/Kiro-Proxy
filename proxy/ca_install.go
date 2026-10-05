@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -150,67 +149,6 @@ func installFailureMessage(err error) string {
 	default:
 		return "安装失败: " + err.Error()
 	}
-}
-
-func installCAWindows(certPath string) error {
-	// 方案：写一个临时 .ps1 脚本，用 Start-Process -Verb RunAs 提权执行
-	// 比内联字符串拼接更可靠，避免引号转义问题
-	psScript := fmt.Sprintf(`
-$certPath = %s
-$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath)
-$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
-$store.Open('ReadWrite')
-$existing = $store.Certificates | Where-Object { $_.Subject -like '*Kiro Proxy*' }
-foreach ($c in $existing) { $store.Remove($c) }
-$store.Add($cert)
-$store.Close()
-Write-Output "OK"
-`, powerShellString(certPath))
-
-	// 写临时脚本文件
-	tmpScript := filepath.Join(os.TempDir(), "kiro_install_ca.ps1")
-	if err := os.WriteFile(tmpScript, []byte(psScript), 0600); err != nil {
-		return fmt.Errorf("写临时脚本失败: %w", err)
-	}
-	defer os.Remove(tmpScript)
-
-	// 用 Start-Process -Verb RunAs -Wait 触发 UAC 提权执行脚本
-	// -WindowStyle Hidden 避免弹出黑色 PowerShell 窗口
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
-		fmt.Sprintf(
-			`Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s"'`,
-			tmpScript,
-		),
-	)
-	cmd.SysProcAttr = sysProcAttr() // 隐藏 Go 启动的 PowerShell 窗口
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w\n%s", err, string(out))
-	}
-
-	// 设置 NODE_EXTRA_CA_CERTS 用户环境变量（Kiro/Electron 需要）
-	setEnvCmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
-		fmt.Sprintf(`[System.Environment]::SetEnvironmentVariable('NODE_EXTRA_CA_CERTS', '%s', 'User')`, certPath),
-	)
-	setEnvCmd.SysProcAttr = sysProcAttr()
-	setEnvCmd.Run() // 忽略错误，不影响主流程
-	return nil
-}
-
-func installCADarwin(certPath string) error {
-	installCmd := fmt.Sprintf(
-		"security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s",
-		shellQuote(certPath),
-	)
-	cmd := exec.Command("osascript", "-e", fmt.Sprintf("do shell script %s with administrator privileges", strconv.Quote(installCmd)))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w\n%s", err, string(out))
-	}
-
-	// Kiro/Electron 进程可能还会读取 Node 的额外 CA 环境变量；对当前登录会话设置即可。
-	exec.Command("launchctl", "setenv", "NODE_EXTRA_CA_CERTS", certPath).Run()
-	return nil
 }
 
 // isCATrusted 检查证书是否已在系统根证书池中
