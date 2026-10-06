@@ -1,9 +1,12 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { getSettings } from '../../api/settings.js'
-import { AUTO_ROUTING_SETTINGS_KEY, AUTO_STAGE_OPTIONS, parseAutoStageConfig } from '../../utils/autoStageConfig.js'
-
-const STAGE_KEYS = AUTO_STAGE_OPTIONS.map((stage) => stage.key)
+import {
+  AUTO_DUTY_LAYOUTS,
+  AUTO_DUTY_LAYOUT_LABELS,
+  AUTO_ROUTING_SETTINGS_KEY,
+  parseAutoDutyConfig,
+} from '../../utils/autoDutyConfig.js'
 
 const props = defineProps({
   models: { type: Array, default: () => [] },
@@ -18,40 +21,40 @@ const loading = ref(false)
 let readSequence = 0
 
 const modelById = computed(() => new Map(props.models.map((model) => [model.id, model])))
+const duties = computed(() => summary.value ? AUTO_DUTY_LAYOUTS[summary.value.layout] || [] : [])
+const configuredDutyCount = computed(() => duties.value.filter((duty) => summary.value?.duty_models?.[duty.key]?.model_id).length)
 const targetIds = computed(() => {
-  if (legacyConfig.value || !summary.value?.enabled) return []
+  if (!summary.value) return []
   return [...new Set([
     summary.value.default_model_id,
-    ...STAGE_KEYS.map((key) => summary.value.stage_models[key]),
+    ...duties.value.map((duty) => summary.value.duty_models?.[duty.key]?.model_id),
+    ...summary.value.node_overrides.map((item) => item.model_id),
   ].filter(Boolean))]
 })
 const targetRates = computed(() => targetIds.value.map((id) => {
   const model = modelById.value.get(id)
-  if (!model) return `${id}（模型不存在）`
-  const name = model.name || model.model_id || id
-  return `${name}：${formatPrice(model.input_price)} / ${formatPrice(model.output_price)}`
+  if (!model) return `${id}（配置不存在）`
+  return `${model.model_id || id} · ${model.provider || 'openai'}：${formatPrice(model.input_price)} / ${formatPrice(model.output_price)}`
 }))
-const configuredStageCount = computed(() => STAGE_KEYS.filter((key) => summary.value?.stage_models[key]).length)
-const stageTargetSummary = computed(() => STAGE_KEYS.map((key) => `${key}：${targetName(summary.value?.stage_models[key])}`).join('；'))
-const defaultTargetName = computed(() => {
+const dutyTargetSummary = computed(() => duties.value.map((duty) => {
+  const target = summary.value?.duty_models?.[duty.key]
+  if (!target?.model_id) return `${duty.label}：未配置`
+  const model = modelById.value.get(target.model_id)
+  return `${duty.label}：${model ? `${model.model_id || model.id} · ${model.id} · ${model.provider || 'openai'}` : target.model_id} / ${target.reasoning_effort || '上游默认'}`
+}).join('；'))
+const defaultTargetSummary = computed(() => {
   const id = summary.value?.default_model_id
-  if (!id) return '未配置固定目标'
-  return targetName(id)
-})
-const defaultTargetLabel = computed(() => legacyConfig.value ? '待保存固定目标：' : '固定目标：')
-const routingLabel = computed(() => {
-  if (legacyConfig.value) return '五阶段待配置（旧配置待替换）'
-  if (summary.value?.enabled) return '五阶段固定模型（已启用）'
-  return configuredStageCount.value === STAGE_KEYS.length && summary.value?.default_model_id
-    ? '五阶段固定模型（未启用）'
-    : '五阶段固定模型（待配置，未启用）'
-})
-
-function targetName(id) {
-  if (!id) return '未配置'
+  if (!id) return '默认目标：未配置'
   const model = modelById.value.get(id)
-  return model ? (model.name || model.model_id || id) : `${id}（模型不存在）`
-}
+  return `默认目标：${model ? `${model.model_id || id} · ${model.provider || 'openai'} / ${model.reasoning_effort || '上游默认'}` : `${id}（配置不存在）`}`
+})
+const routingLabel = computed(() => {
+  if (legacyConfig.value) return '旧 Auto 配置待迁移'
+  if (readError.value) return 'Auto 配置读取失败'
+  if (!summary.value) return 'Auto 职责路由待配置'
+  const layout = AUTO_DUTY_LAYOUT_LABELS[summary.value.layout] || '未知布局'
+  return `${layout} · ${summary.value.enabled ? '已启用' : '未启用'}`
+})
 
 function formatPrice(value) {
   const num = Number(value || 0)
@@ -68,13 +71,13 @@ async function loadSummary() {
   legacyConfig.value = false
   try {
     const settings = await getSettings()
-    const next = parseAutoStageConfig(settings?.[AUTO_ROUTING_SETTINGS_KEY])
+    const next = parseAutoDutyConfig(settings?.[AUTO_ROUTING_SETTINGS_KEY])
     if (sequence === readSequence) {
       summary.value = next.config
       legacyConfig.value = next.legacy
     }
   } catch (error) {
-    if (sequence === readSequence) readError.value = error?.message || 'Auto 模型配置读取失败。'
+    if (sequence === readSequence) readError.value = error?.message || 'Auto 职责配置读取失败。'
   } finally {
     if (sequence === readSequence) loading.value = false
   }
@@ -94,29 +97,30 @@ watch(() => props.refreshToken, loadSummary, { immediate: true })
         <div class="text-[14px] font-semibold leading-5 text-ink">Auto</div>
         <div class="mt-1 flex items-center gap-1.5 text-[11px] leading-4 text-ink-3">
           <span class="font-mono text-ink-2">auto</span>
-          <span>内置模型路由</span>
+          <span>职责固定路由</span>
         </div>
       </div>
 
       <div class="min-w-0 px-2 text-[12px] leading-5">
-        <div v-if="loading" class="text-ink-4">正在读取路由设置...</div>
+        <div v-if="loading" class="text-ink-4">正在读取职责路由...</div>
         <div v-else-if="readError" class="truncate text-danger" role="alert" :title="readError">{{ readError }}</div>
+        <template v-else-if="legacyConfig">
+          <div class="font-medium text-warning-fg">{{ routingLabel }}</div>
+          <div class="mt-1 truncate text-[11px] text-ink-3">旧值保留，迁移预览待确认</div>
+        </template>
         <template v-else-if="summary">
           <div class="font-medium text-ink-2">{{ routingLabel }}</div>
-          <div class="mt-1 truncate text-[11px] text-ink-3" :title="`${defaultTargetLabel}${defaultTargetName}`">{{ defaultTargetLabel }}{{ defaultTargetName }}</div>
-          <div class="mt-1 truncate text-[11px] text-ink-4" :title="stageTargetSummary">
-            {{ configuredStageCount }}/5 个阶段已配置<span v-if="legacyConfig">（待保存）</span><span v-else-if="!summary.enabled">（未启用）</span>
-          </div>
+          <div class="mt-1 truncate text-[11px] text-ink-3" :title="defaultTargetSummary">{{ defaultTargetSummary }}</div>
+          <div class="mt-1 truncate text-[11px] text-ink-4" :title="dutyTargetSummary">{{ configuredDutyCount }}/{{ duties.length }} 个职责已配置</div>
         </template>
       </div>
 
       <div class="min-w-0 px-2 text-[11px] leading-4">
-        <div class="font-medium text-ink-3">按实际选中模型计价</div>
+        <div class="font-medium text-ink-3">按实际固定模型计价</div>
         <div v-if="loading" class="mt-1 text-ink-4">读取中...</div>
         <div v-else-if="readError" class="mt-1 truncate text-danger" :title="readError">读取失败</div>
-        <div v-else-if="legacyConfig" class="mt-1 text-ink-4">新版 Auto 需先配置五阶段模型</div>
-        <div v-else-if="summary && !summary.enabled" class="mt-1 text-ink-4">由默认路由决定</div>
-        <div v-else-if="targetRates.length" class="mt-1 truncate text-ink-2" :title="targetRates.join('；')">{{ targetRates.join('；') }}</div>
+        <div v-else-if="legacyConfig" class="mt-1 text-ink-4">迁移后显示职责目标</div>
+        <div v-else-if="summary && targetRates.length" class="mt-1 truncate text-ink-2" :title="targetRates.join('；')">{{ targetRates.join('；') }}</div>
         <div v-else class="mt-1 text-ink-4">未配置目标模型</div>
         <div class="mt-0.5 text-[10px] text-ink-4">USD / 1M tokens，输入 / 输出</div>
       </div>
@@ -130,8 +134,8 @@ watch(() => props.refreshToken, loadSummary, { immediate: true })
         <button
           type="button"
           class="inline-flex h-[30px] w-[70px] items-center justify-center ui-control bg-surface px-1 text-[12px] font-medium leading-none text-primary-fg hover:border-primary-tint-line hover:bg-primary-tint"
-          aria-label="配置 Auto"
-          title="配置 Auto"
+          aria-label="配置 Auto 职责路由"
+          title="配置 Auto 职责路由"
           @click="emit('configure')"
         >配置</button>
       </div>
