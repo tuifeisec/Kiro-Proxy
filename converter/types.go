@@ -115,23 +115,29 @@ type KiroReasoningConfig struct {
 
 // ParsedConversation 是一次解析后的结构化会话，后续所有转换都基于此
 type ParsedConversation struct {
-	ModelID              string
-	ConversationID       string
-	ProfileArn           string
-	ChatTriggerType      string
-	AgentTaskType        string
-	AgentMode            string
-	AgentContinuationID  string
-	Origin               string
-	PromptAffinityKey    string
-	ContinuationStateKey string
-	IsClassifier         bool   // intent-classification 请求
-	SystemText           string // 从 history[0] 提取的系统提示
+	ModelID               string
+	ConversationID        string
+	ProfileArn            string
+	ChatTriggerType       string
+	AgentTaskType         string
+	AgentMode             string
+	AgentContinuationID   string
+	WorkflowStage         string
+	WorkflowStageSource   string
+	WorkflowStageProvided bool
+	WorkflowID            string
+	Origin                string
+	PromptAffinityKey     string
+	ContinuationStateKey  string
+	IsClassifier          bool   // intent-classification 请求
+	SystemText            string // 从 history[0] 提取的系统提示
 
 	// 当前消息
-	CurrentContent     string
-	CurrentToolResults []ParsedToolResult
-	CurrentImages      []KiroImage
+	CurrentContent          string
+	CurrentToolResults      []ParsedToolResult
+	CurrentImages           []KiroImage
+	CurrentToolContinuation *bool
+	RawResponsesHasImages   bool
 
 	// 历史消息（已去除系统提示那一轮）
 	History []ParsedHistoryEntry
