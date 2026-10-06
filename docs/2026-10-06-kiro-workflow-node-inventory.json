@@ -1,0 +1,4570 @@
+{
+  "title": "Kiro 工作流节点盘点：本次可核实的定义与运行证据",
+  "capturedAt": "2026-10-06T23:58:05+08:00",
+  "scope": "当前已安装 Kiro 1.1.294 的 7 个内置 recipe、本机 .kiro 保存的 53 份当前工作流定义，以及两份流量日志快照。不是未来动态生成节点的固定全集，也不含已被覆盖的历史定义版本。",
+  "summary": {
+    "knownUniqueNodeIds": 70,
+    "modelStepUniqueIds": 47,
+    "repeatParallelUniqueIds": 22,
+    "watchUniqueIds": 1,
+    "localDefinitions": 53,
+    "localNodeRecords": 127,
+    "localUniqueIds": 49,
+    "builtinRecipes": 7,
+    "builtinNodeRecords": 30,
+    "builtinUniqueIds": 28,
+    "loggedUniqueNodeIds": 7
+  },
+  "nodeTypes": {
+    "step": "调用 Agent 的执行节点",
+    "sequence": "顺序容器；本机状态中另有以 workflowId 标识的隐式根，不加入节点名清单",
+    "repeat": "循环容器",
+    "parallel": "并行容器",
+    "watch": "handler 监视节点；内置 wait 使用 github-pr，不调用模型"
+  },
+  "knownNodes": [
+    {
+      "id": "adaptive-htf-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：code、review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-016"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "aggregate",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "合并两份审查为最终 issues-only 报告。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "semantic-review-multi-model"
+      ]
+    },
+    {
+      "id": "audit-plan",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-planner"
+      ],
+      "purpose": "只读调查并形成具体实施计划。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-006"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "baseline",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "只读核对既有输入与源码，建立前置基线认识。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-012"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "build-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：code、review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-010"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "cleanup",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "审查通过后清理该工作流创建的指定临时协作文件。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-015"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "code",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "直接修改目标源码，按该工作流的约束实施。",
+      "localDefinitionOccurrences": 7,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-003",
+        "name-group-004",
+        "name-group-010",
+        "name-group-011",
+        "name-group-016",
+        "name-group-018",
+        "name-group-020"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "code-aggregate",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-review-aggregator"
+      ],
+      "purpose": "合并两份审查，核对计划完成度并输出 verdict。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "code-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "实现与代码审查循环，最多 3 次。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "code-reviews",
+      "types": [
+        "parallel"
+      ],
+      "agents": [],
+      "purpose": "并行运行两份相互独立的代码审查。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "compact-review-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：implement、review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-015"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "conversion-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：code、review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-004"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "design",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-design",
+        "wf-planner"
+      ],
+      "purpose": "建立或修订技术设计、保真规格；本地定义可由 designer 或 planner 执行。",
+      "localDefinitionOccurrences": 3,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-009",
+        "name-group-012",
+        "name-group-014"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "design-draft",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-design"
+      ],
+      "purpose": "检查代码并编写、修订技术设计。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "design-file-gate",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "只读核验设计文件存在、类型与非空条件。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-012"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "design-fix",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-design"
+      ],
+      "purpose": "修订既有设计。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-007"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "design-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "设计与设计审查循环，最多 3 次。",
+      "localDefinitionOccurrences": 4,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-009",
+        "name-group-012",
+        "name-group-014",
+        "name-group-017"
+      ],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "design-recheck",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-design-reviewer"
+      ],
+      "purpose": "独立复核设计修订。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-007"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "design-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-design-reviewer"
+      ],
+      "purpose": "对需求与设计进行独立审查。",
+      "localDefinitionOccurrences": 4,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-009",
+        "name-group-012",
+        "name-group-014",
+        "name-group-017"
+      ],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "equivalence-review-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：native-code-verify、native-semantic-review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-006"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "experiment",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-auto-researcher"
+      ],
+      "purpose": "提出并应用实验，运行 benchmark，保留更优结果或回滚实验。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "autoresearch"
+      ]
+    },
+    {
+      "id": "experiments",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "重复实验，最多 1000 次，超限暂停。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "autoresearch"
+      ]
+    },
+    {
+      "id": "fidelity-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立审查实现是否满足保真要求。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-009"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "final-audit",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "只读交付稽核，核对产物与验证证据。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-012"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "finalize",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "收尾核对与交付报告；具体可写范围依工作流定义。",
+      "localDefinitionOccurrences": 3,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": true,
+      "localWorkflowNames": [
+        "name-group-002",
+        "name-group-007",
+        "name-group-009"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "fix-review-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：implement、review、code。",
+      "localDefinitionOccurrences": 2,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-002",
+        "name-group-003"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "goal-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "推进目标直到 success，最多 200 次。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "goal"
+      ]
+    },
+    {
+      "id": "hotspot-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：code、review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-018"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "implement",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "实施计划、修改代码及执行该任务要求的验证。",
+      "localDefinitionOccurrences": 6,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": true,
+      "localWorkflowNames": [
+        "name-group-002",
+        "name-group-007",
+        "name-group-009",
+        "name-group-012",
+        "name-group-014",
+        "name-group-015"
+      ],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "implement-review-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：native-implementation、implementation-review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-017"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "implementation-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：implement、independent-review、fidelity-review、logic-review。",
+      "localDefinitionOccurrences": 4,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-007",
+        "name-group-009",
+        "name-group-012",
+        "name-group-014"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "implementation-plan",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-planner"
+      ],
+      "purpose": "编写针对实施的计划。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-017"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "implementation-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立审查实施改动。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-017"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "independent-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "对真实增量执行独立审查。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-007"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "investigate",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-planner"
+      ],
+      "purpose": "只读调查业务源码并写证据报告；自定义调查节点另看其定义。",
+      "localDefinitionOccurrences": 6,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": true,
+      "localWorkflowNames": [
+        "investigate",
+        "name-group-008"
+      ],
+      "builtinRecipes": [
+        "investigate"
+      ]
+    },
+    {
+      "id": "iterate",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "建立或推进 checklist，实施未完成项、测试和提交。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "ralph"
+      ]
+    },
+    {
+      "id": "logic-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立审查实现与原有算法、行为的等价性。",
+      "localDefinitionOccurrences": 2,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-012",
+        "name-group-014"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "memory-code",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "直接排查并修复内存相关故障。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-005"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "memory-fix-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：memory-code、memory-review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-005"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "memory-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立审查内存故障修复。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-005"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "native-code",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "直接实施原生能力优先的源码改动。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-019"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "native-code-verify",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "实施已证明等价的原生 API 替换，并记录验证。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-006"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "native-design",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-design"
+      ],
+      "purpose": "设计原生能力优先的改造。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-017"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "native-implementation",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "实施原生能力优先的改造。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-017"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "native-implementation-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：native-code、native-review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-019"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "native-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立审查原生能力优先的实施。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-019"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "native-semantic-review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立审查原生数据获取与等价替换。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-006"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "pine-fix-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：code、review。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-011"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "plan",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-planner"
+      ],
+      "purpose": "调查、整理约束并形成实施计划。",
+      "localDefinitionOccurrences": 7,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": true,
+      "localWorkflowNames": [
+        "name-group-002",
+        "name-group-007",
+        "name-group-009",
+        "name-group-010",
+        "name-group-012",
+        "name-group-014",
+        "name-group-015"
+      ],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "pr-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "等待并处理 PR 反馈，最多 200 次。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "publish-pr"
+      ]
+    },
+    {
+      "id": "prepare",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "创建产物目录并记录基线等机械准备。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-009"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "protect-baseline",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "机械保护基线，保留已有改动。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-017"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "ralph-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "按 checklist 迭代直到 complete=true，最多 200 次。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "ralph"
+      ]
+    },
+    {
+      "id": "repair",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "实施已经调查的问题修复。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-008"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "repair-review-loop",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "循环调度子节点：repair、review、code。",
+      "localDefinitionOccurrences": 2,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-008",
+        "name-group-020"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "requirements",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-design"
+      ],
+      "purpose": "整理需求与约束。",
+      "localDefinitionOccurrences": 3,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-009",
+        "name-group-014",
+        "name-group-017"
+      ],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "respond",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-pr-responder"
+      ],
+      "purpose": "处理 PR 反馈；PR 合并或关闭后收尾。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "publish-pr"
+      ]
+    },
+    {
+      "id": "restart-and-verify",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "执行已授权的本地服务重启与运行验证，属于运维任务。",
+      "localDefinitionOccurrences": 1,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": true,
+      "localWorkflowNames": [
+        "name-group-001"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "review",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立代码或语义审查。",
+      "localDefinitionOccurrences": 10,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": true,
+      "localWorkflowNames": [
+        "name-group-002",
+        "name-group-003",
+        "name-group-004",
+        "name-group-008",
+        "name-group-010",
+        "name-group-011",
+        "name-group-015",
+        "name-group-016",
+        "name-group-018",
+        "name-group-020"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "review-fable",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立代码审查，不读取另一份报告。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "review-gpt",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立代码审查，不读取另一份报告。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 2,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline",
+        "semantic-review-multi-model"
+      ]
+    },
+    {
+      "id": "review-opus",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "semantic_reviewer"
+      ],
+      "purpose": "独立语义审查，不读取另一审查文件。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "semantic-review-multi-model"
+      ]
+    },
+    {
+      "id": "reviews",
+      "types": [
+        "parallel"
+      ],
+      "agents": [],
+      "purpose": "并行运行两份独立审查。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "semantic-review-multi-model"
+      ]
+    },
+    {
+      "id": "run",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-planner",
+        "wf-coder",
+        "semantic_reviewer"
+      ],
+      "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。",
+      "localDefinitionOccurrences": 29,
+      "builtinDefinitionOccurrences": 0,
+      "seenInParsedLogs": true,
+      "localWorkflowNames": [
+        "agent-wf-planner",
+        "agent-wf-coder",
+        "agent-semantic_reviewer"
+      ],
+      "builtinRecipes": []
+    },
+    {
+      "id": "setup",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "准备本次产物目录与既有输入、基线。",
+      "localDefinitionOccurrences": 2,
+      "builtinDefinitionOccurrences": 2,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [
+        "name-group-007",
+        "name-group-014"
+      ],
+      "builtinRecipes": [
+        "feature-pipeline",
+        "semantic-review-multi-model"
+      ]
+    },
+    {
+      "id": "submit",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-pr-submitter"
+      ],
+      "purpose": "发布或复用 PR 并记录 PR 身份。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "publish-pr"
+      ]
+    },
+    {
+      "id": "validate",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "执行验收检查、端到端检查及 build/test；只报告，不修代码。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "validate-gate",
+      "types": [
+        "repeat"
+      ],
+      "agents": [],
+      "purpose": "最多一次验证；verdict 非 PASS 时中止。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "feature-pipeline"
+      ]
+    },
+    {
+      "id": "wait",
+      "types": [
+        "watch"
+      ],
+      "agents": [],
+      "purpose": "github-pr handler 轮询 PR 状态，不调用模型。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "publish-pr"
+      ]
+    },
+    {
+      "id": "work",
+      "types": [
+        "step"
+      ],
+      "agents": [
+        "wf-coder"
+      ],
+      "purpose": "按任务自主推进，凭具体证据确认目标完成。",
+      "localDefinitionOccurrences": 0,
+      "builtinDefinitionOccurrences": 1,
+      "seenInParsedLogs": false,
+      "localWorkflowNames": [],
+      "builtinRecipes": [
+        "goal"
+      ]
+    }
+  ],
+  "localWorkflows": [
+    {
+      "id": "workflow-sample-001",
+      "name": "investigate",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-001/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "investigate"
+      ],
+      "nodes": [
+        {
+          "id": "investigate",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读调查业务源码并写证据报告；自定义调查节点另看其定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-002",
+      "name": "name-group-001",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-002/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "restart-and-verify"
+      ],
+      "nodes": [
+        {
+          "id": "restart-and-verify",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 8,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "执行已授权的本地服务重启与运行验证，属于运维任务。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-003",
+      "name": "agent-wf-planner",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-003/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-004",
+      "name": "name-group-002",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-004/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "plan",
+        "fix-review-loop",
+        "finalize"
+      ],
+      "nodes": [
+        {
+          "id": "plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "plan",
+            "baseline"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "调查、整理约束并形成实施计划。"
+        },
+        {
+          "id": "fix-review-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 21,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：implement、review。"
+        },
+        {
+          "id": "implement",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[1].steps[0]",
+          "parentNodeId": "fix-review-loop",
+          "line": 25,
+          "artifacts": [
+            "verification",
+            "changes"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "实施计划、修改代码及执行该任务要求的验证。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[1].steps[1]",
+          "parentNodeId": "fix-review-loop",
+          "line": 35,
+          "artifacts": [
+            "review_doc",
+            "review_gate"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立代码或语义审查。"
+        },
+        {
+          "id": "finalize",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[2]",
+          "parentNodeId": null,
+          "line": 56,
+          "artifacts": [
+            "final_report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "收尾核对与交付报告；具体可写范围依工作流定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-005",
+      "name": "investigate",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-005/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "investigate"
+      ],
+      "nodes": [
+        {
+          "id": "investigate",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读调查业务源码并写证据报告；自定义调查节点另看其定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-006",
+      "name": "agent-wf-planner",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-006/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-007",
+      "name": "name-group-003",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-007/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "fix-review-loop"
+      ],
+      "nodes": [
+        {
+          "id": "fix-review-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：code、review。"
+        },
+        {
+          "id": "code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "fix-review-loop",
+          "line": 14,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 2,
+          "purpose": "直接修改目标源码，按该工作流的约束实施。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "fix-review-loop",
+          "line": 21,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 2,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-008",
+      "name": "agent-wf-planner",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-008/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-009",
+      "name": "name-group-004",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-009/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "conversion-loop"
+      ],
+      "nodes": [
+        {
+          "id": "conversion-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：code、review。"
+        },
+        {
+          "id": "code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "conversion-loop",
+          "line": 14,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 2,
+          "purpose": "直接修改目标源码，按该工作流的约束实施。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "conversion-loop",
+          "line": 20,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 2,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-010",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-010/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-011",
+      "name": "name-group-005",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-011/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "memory-fix-loop"
+      ],
+      "nodes": [
+        {
+          "id": "memory-fix-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：memory-code、memory-review。"
+        },
+        {
+          "id": "memory-code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "memory-fix-loop",
+          "line": 14,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "直接排查并修复内存相关故障。"
+        },
+        {
+          "id": "memory-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "memory-fix-loop",
+          "line": 21,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立审查内存故障修复。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-012",
+      "name": "name-group-006",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-012/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "audit-plan",
+        "equivalence-review-loop"
+      ],
+      "nodes": [
+        {
+          "id": "audit-plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 12,
+          "artifacts": [
+            "audit_plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读调查并形成具体实施计划。"
+        },
+        {
+          "id": "equivalence-review-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 21,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：native-code-verify、native-semantic-review。"
+        },
+        {
+          "id": "native-code-verify",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[1].steps[0]",
+          "parentNodeId": "equivalence-review-loop",
+          "line": 25,
+          "artifacts": [
+            "verification"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "实施已证明等价的原生 API 替换，并记录验证。"
+        },
+        {
+          "id": "native-semantic-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[1].steps[1]",
+          "parentNodeId": "equivalence-review-loop",
+          "line": 34,
+          "artifacts": [
+            "native_review_doc",
+            "native_review_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立审查原生数据获取与等价替换。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-013",
+      "name": "name-group-007",
+      "status": "aborted",
+      "file": "snapshot://workflow-sample-013/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "setup",
+        "design-fix",
+        "design-recheck",
+        "plan",
+        "implementation-loop",
+        "finalize"
+      ],
+      "nodes": [
+        {
+          "id": "setup",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "准备本次产物目录与既有输入、基线。"
+        },
+        {
+          "id": "design-fix",
+          "type": "step",
+          "agent": "wf-design",
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 18,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "修订既有设计。"
+        },
+        {
+          "id": "design-recheck",
+          "type": "step",
+          "agent": "wf-design-reviewer",
+          "path": "$.steps[2]",
+          "parentNodeId": null,
+          "line": 24,
+          "artifacts": [
+            "design_recheck",
+            "design_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立复核设计修订。"
+        },
+        {
+          "id": "plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[3]",
+          "parentNodeId": null,
+          "line": 34,
+          "artifacts": [
+            "implementation_plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "调查、整理约束并形成实施计划。"
+        },
+        {
+          "id": "implementation-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[4]",
+          "parentNodeId": null,
+          "line": 43,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：implement、independent-review。"
+        },
+        {
+          "id": "implement",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[4].steps[0]",
+          "parentNodeId": "implementation-loop",
+          "line": 47,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "实施计划、修改代码及执行该任务要求的验证。"
+        },
+        {
+          "id": "independent-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[4].steps[1]",
+          "parentNodeId": "implementation-loop",
+          "line": 53,
+          "artifacts": [
+            "implementation_review",
+            "implementation_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed",
+            "aborted"
+          ],
+          "executedInstances": 3,
+          "purpose": "对真实增量执行独立审查。"
+        },
+        {
+          "id": "finalize",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[5]",
+          "parentNodeId": null,
+          "line": 74,
+          "artifacts": [
+            "delivery"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "收尾核对与交付报告；具体可写范围依工作流定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-014",
+      "name": "agent-wf-planner",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-014/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-015",
+      "name": "name-group-008",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-015/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "investigate",
+        "repair-review-loop"
+      ],
+      "nodes": [
+        {
+          "id": "investigate",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读调查业务源码并写证据报告；自定义调查节点另看其定义。"
+        },
+        {
+          "id": "repair-review-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 20,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：repair、review。"
+        },
+        {
+          "id": "repair",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[1].steps[0]",
+          "parentNodeId": "repair-review-loop",
+          "line": 24,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "实施已经调查的问题修复。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[1].steps[1]",
+          "parentNodeId": "repair-review-loop",
+          "line": 30,
+          "artifacts": [
+            "review_doc",
+            "review_gate"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-016",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-016/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-017",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-017/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-018",
+      "name": "name-group-009",
+      "status": "aborted",
+      "file": "snapshot://workflow-sample-018/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "prepare",
+        "requirements",
+        "design-loop",
+        "plan",
+        "implementation-loop",
+        "finalize"
+      ],
+      "nodes": [
+        {
+          "id": "prepare",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "baseline"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "创建产物目录并记录基线等机械准备。"
+        },
+        {
+          "id": "requirements",
+          "type": "step",
+          "agent": "wf-design",
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 21,
+          "artifacts": [
+            "requirements"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "整理需求与约束。"
+        },
+        {
+          "id": "design-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[2]",
+          "parentNodeId": null,
+          "line": 30,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：design、design-review。"
+        },
+        {
+          "id": "design",
+          "type": "step",
+          "agent": "wf-design",
+          "path": "$.steps[2].steps[0]",
+          "parentNodeId": "design-loop",
+          "line": 34,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "建立或修订技术设计、保真规格；本地定义可由 designer 或 planner 执行。"
+        },
+        {
+          "id": "design-review",
+          "type": "step",
+          "agent": "wf-design-reviewer",
+          "path": "$.steps[2].steps[1]",
+          "parentNodeId": "design-loop",
+          "line": 40,
+          "artifacts": [
+            "design_review_doc",
+            "design_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "对需求与设计进行独立审查。"
+        },
+        {
+          "id": "plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[3]",
+          "parentNodeId": null,
+          "line": 61,
+          "artifacts": [
+            "plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "调查、整理约束并形成实施计划。"
+        },
+        {
+          "id": "implementation-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[4]",
+          "parentNodeId": null,
+          "line": 70,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "循环调度子节点：implement、fidelity-review。"
+        },
+        {
+          "id": "implement",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[4].steps[0]",
+          "parentNodeId": "implementation-loop",
+          "line": 74,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "实施计划、修改代码及执行该任务要求的验证。"
+        },
+        {
+          "id": "fidelity-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[4].steps[1]",
+          "parentNodeId": "implementation-loop",
+          "line": 80,
+          "artifacts": [
+            "review_doc",
+            "review_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "独立审查实现是否满足保真要求。"
+        },
+        {
+          "id": "finalize",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[5]",
+          "parentNodeId": null,
+          "line": 101,
+          "artifacts": [
+            "delivery"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "收尾核对与交付报告；具体可写范围依工作流定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-019",
+      "name": "name-group-010",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-019/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "plan",
+        "build-loop"
+      ],
+      "nodes": [
+        {
+          "id": "plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "调查、整理约束并形成实施计划。"
+        },
+        {
+          "id": "build-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 20,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：code、review。"
+        },
+        {
+          "id": "code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[1].steps[0]",
+          "parentNodeId": "build-loop",
+          "line": 24,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "直接修改目标源码，按该工作流的约束实施。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[1].steps[1]",
+          "parentNodeId": "build-loop",
+          "line": 30,
+          "artifacts": [
+            "reviewDoc",
+            "verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-020",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-020/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-021",
+      "name": "name-group-011",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-021/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "pine-fix-loop"
+      ],
+      "nodes": [
+        {
+          "id": "pine-fix-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：code、review。"
+        },
+        {
+          "id": "code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "pine-fix-loop",
+          "line": 14,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "直接修改目标源码，按该工作流的约束实施。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "pine-fix-loop",
+          "line": 20,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-022",
+      "name": "investigate",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-022/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "investigate"
+      ],
+      "nodes": [
+        {
+          "id": "investigate",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读调查业务源码并写证据报告；自定义调查节点另看其定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-023",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-023/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-024",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-024/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-025",
+      "name": "name-group-012",
+      "status": "failed",
+      "file": "snapshot://workflow-sample-025/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "baseline",
+        "design-loop",
+        "plan",
+        "implementation-loop",
+        "final-audit"
+      ],
+      "nodes": [
+        {
+          "id": "baseline",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 8,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读核对既有输入与源码，建立前置基线认识。"
+        },
+        {
+          "id": "design-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 15,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "failed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：design、design-file-gate、design-review。"
+        },
+        {
+          "id": "design",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[1].steps[0]",
+          "parentNodeId": "design-loop",
+          "line": 19,
+          "artifacts": [
+            "design"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "建立或修订技术设计、保真规格；本地定义可由 designer 或 planner 执行。"
+        },
+        {
+          "id": "design-file-gate",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[1].steps[1]",
+          "parentNodeId": "design-loop",
+          "line": 28,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "failed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读核验设计文件存在、类型与非空条件。"
+        },
+        {
+          "id": "design-review",
+          "type": "step",
+          "agent": "wf-design-reviewer",
+          "path": "$.steps[1].steps[2]",
+          "parentNodeId": "design-loop",
+          "line": 35,
+          "artifacts": [
+            "design_review",
+            "design_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "对需求与设计进行独立审查。"
+        },
+        {
+          "id": "plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[2]",
+          "parentNodeId": null,
+          "line": 56,
+          "artifacts": [
+            "plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "调查、整理约束并形成实施计划。"
+        },
+        {
+          "id": "implementation-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[3]",
+          "parentNodeId": null,
+          "line": 65,
+          "artifacts": [],
+          "maxIterations": 5,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "循环调度子节点：implement、logic-review。"
+        },
+        {
+          "id": "implement",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[3].steps[0]",
+          "parentNodeId": "implementation-loop",
+          "line": 69,
+          "artifacts": [
+            "pine",
+            "parity_test",
+            "parity_results"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "实施计划、修改代码及执行该任务要求的验证。"
+        },
+        {
+          "id": "logic-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[3].steps[1]",
+          "parentNodeId": "implementation-loop",
+          "line": 80,
+          "artifacts": [
+            "logic_review",
+            "logic_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "独立审查实现与原有算法、行为的等价性。"
+        },
+        {
+          "id": "final-audit",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[4]",
+          "parentNodeId": null,
+          "line": 101,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "只读交付稽核，核对产物与验证证据。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-026",
+      "name": "agent-wf-planner",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-026/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-027",
+      "name": "agent-semantic_reviewer",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-027/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-028",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-028/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-029",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-029/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-030",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-030/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-031",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-031/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-032",
+      "name": "agent-wf-planner",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-032/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-033",
+      "name": "agent-semantic_reviewer",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-033/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-034",
+      "name": "name-group-014",
+      "status": "aborted",
+      "file": "snapshot://workflow-sample-034/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "setup",
+        "requirements",
+        "design-loop",
+        "plan",
+        "implementation-loop"
+      ],
+      "nodes": [
+        {
+          "id": "setup",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "准备本次产物目录与既有输入、基线。"
+        },
+        {
+          "id": "requirements",
+          "type": "step",
+          "agent": "wf-design",
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 17,
+          "artifacts": [
+            "requirements"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "整理需求与约束。"
+        },
+        {
+          "id": "design-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[2]",
+          "parentNodeId": null,
+          "line": 26,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：design、design-review。"
+        },
+        {
+          "id": "design",
+          "type": "step",
+          "agent": "wf-design",
+          "path": "$.steps[2].steps[0]",
+          "parentNodeId": "design-loop",
+          "line": 30,
+          "artifacts": [
+            "design"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "建立或修订技术设计、保真规格；本地定义可由 designer 或 planner 执行。"
+        },
+        {
+          "id": "design-review",
+          "type": "step",
+          "agent": "wf-design-reviewer",
+          "path": "$.steps[2].steps[1]",
+          "parentNodeId": "design-loop",
+          "line": 39,
+          "artifacts": [
+            "design_review",
+            "design_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "对需求与设计进行独立审查。"
+        },
+        {
+          "id": "plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[3]",
+          "parentNodeId": null,
+          "line": 60,
+          "artifacts": [
+            "implementation_plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "调查、整理约束并形成实施计划。"
+        },
+        {
+          "id": "implementation-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[4]",
+          "parentNodeId": null,
+          "line": 69,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "循环调度子节点：implement、logic-review。"
+        },
+        {
+          "id": "implement",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[4].steps[0]",
+          "parentNodeId": "implementation-loop",
+          "line": 73,
+          "artifacts": [
+            "pine",
+            "verification"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "实施计划、修改代码及执行该任务要求的验证。"
+        },
+        {
+          "id": "logic-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[4].steps[1]",
+          "parentNodeId": "implementation-loop",
+          "line": 83,
+          "artifacts": [
+            "code_review",
+            "code_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "独立审查实现与原有算法、行为的等价性。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-035",
+      "name": "name-group-015",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-035/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "plan",
+        "compact-review-loop",
+        "cleanup"
+      ],
+      "nodes": [
+        {
+          "id": "plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [
+            "plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "调查、整理约束并形成实施计划。"
+        },
+        {
+          "id": "compact-review-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 19,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：implement、review。"
+        },
+        {
+          "id": "implement",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[1].steps[0]",
+          "parentNodeId": "compact-review-loop",
+          "line": 23,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "实施计划、修改代码及执行该任务要求的验证。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[1].steps[1]",
+          "parentNodeId": "compact-review-loop",
+          "line": 32,
+          "artifacts": [
+            "review_doc",
+            "verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "独立代码或语义审查。"
+        },
+        {
+          "id": "cleanup",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[2]",
+          "parentNodeId": null,
+          "line": 53,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "审查通过后清理该工作流创建的指定临时协作文件。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-036",
+      "name": "name-group-016",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-036/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "adaptive-htf-loop"
+      ],
+      "nodes": [
+        {
+          "id": "adaptive-htf-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：code、review。"
+        },
+        {
+          "id": "code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "adaptive-htf-loop",
+          "line": 14,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "直接修改目标源码，按该工作流的约束实施。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "adaptive-htf-loop",
+          "line": 20,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-037",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-037/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-038",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-038/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-039",
+      "name": "name-group-017",
+      "status": "aborted",
+      "file": "snapshot://workflow-sample-039/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "protect-baseline",
+        "requirements",
+        "design-loop",
+        "implementation-plan",
+        "implement-review-loop"
+      ],
+      "nodes": [
+        {
+          "id": "protect-baseline",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "baseline"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "机械保护基线，保留已有改动。"
+        },
+        {
+          "id": "requirements",
+          "type": "step",
+          "agent": "wf-design",
+          "path": "$.steps[1]",
+          "parentNodeId": null,
+          "line": 21,
+          "artifacts": [
+            "requirements"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "整理需求与约束。"
+        },
+        {
+          "id": "design-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[2]",
+          "parentNodeId": null,
+          "line": 30,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：native-design、design-review。"
+        },
+        {
+          "id": "native-design",
+          "type": "step",
+          "agent": "wf-design",
+          "path": "$.steps[2].steps[0]",
+          "parentNodeId": "design-loop",
+          "line": 34,
+          "artifacts": [
+            "design"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 3,
+          "purpose": "设计原生能力优先的改造。"
+        },
+        {
+          "id": "design-review",
+          "type": "step",
+          "agent": "wf-design-reviewer",
+          "path": "$.steps[2].steps[1]",
+          "parentNodeId": "design-loop",
+          "line": 43,
+          "artifacts": [
+            "design_review",
+            "design_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed",
+            "aborted"
+          ],
+          "executedInstances": 3,
+          "purpose": "对需求与设计进行独立审查。"
+        },
+        {
+          "id": "implementation-plan",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[3]",
+          "parentNodeId": null,
+          "line": 64,
+          "artifacts": [
+            "plan"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "编写针对实施的计划。"
+        },
+        {
+          "id": "implement-review-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[4]",
+          "parentNodeId": null,
+          "line": 73,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "pending"
+          ],
+          "executedInstances": 0,
+          "purpose": "循环调度子节点：native-implementation、implementation-review。"
+        },
+        {
+          "id": "native-implementation",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[4].steps[0]",
+          "parentNodeId": "implement-review-loop",
+          "line": 77,
+          "artifacts": [
+            "verification",
+            "implementation_report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "实施原生能力优先的改造。"
+        },
+        {
+          "id": "implementation-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[4].steps[1]",
+          "parentNodeId": "implement-review-loop",
+          "line": 87,
+          "artifacts": [
+            "implementation_review",
+            "implementation_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [],
+          "executedInstances": 0,
+          "purpose": "独立审查实施改动。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-040",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-040/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-041",
+      "name": "investigate",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-041/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "investigate"
+      ],
+      "nodes": [
+        {
+          "id": "investigate",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读调查业务源码并写证据报告；自定义调查节点另看其定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-042",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-042/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-043",
+      "name": "investigate",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-043/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "investigate"
+      ],
+      "nodes": [
+        {
+          "id": "investigate",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "只读调查业务源码并写证据报告；自定义调查节点另看其定义。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-044",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-044/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-045",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-045/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-046",
+      "name": "name-group-018",
+      "status": "aborted",
+      "file": "snapshot://workflow-sample-046/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "hotspot-loop"
+      ],
+      "nodes": [
+        {
+          "id": "hotspot-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：code、review。"
+        },
+        {
+          "id": "code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "hotspot-loop",
+          "line": 14,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "直接修改目标源码，按该工作流的约束实施。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "hotspot-loop",
+          "line": 21,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 1,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-047",
+      "name": "agent-wf-planner",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-047/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-planner",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-048",
+      "name": "name-group-019",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-048/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "native-implementation-loop"
+      ],
+      "nodes": [
+        {
+          "id": "native-implementation-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [],
+          "maxIterations": 4,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：native-code、native-review。"
+        },
+        {
+          "id": "native-code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "native-implementation-loop",
+          "line": 15,
+          "artifacts": [
+            "implementation"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 2,
+          "purpose": "直接实施原生能力优先的源码改动。"
+        },
+        {
+          "id": "native-review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "native-implementation-loop",
+          "line": 24,
+          "artifacts": [
+            "implementation_review",
+            "implementation_verdict"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 2,
+          "purpose": "独立审查原生能力优先的实施。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-049",
+      "name": "agent-semantic_reviewer",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-049/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-050",
+      "name": "name-group-020",
+      "status": "aborted",
+      "file": "snapshot://workflow-sample-050/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "repair-review-loop"
+      ],
+      "nodes": [
+        {
+          "id": "repair-review-loop",
+          "type": "repeat",
+          "agent": null,
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [],
+          "maxIterations": 3,
+          "hasStopCondition": true,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 1,
+          "purpose": "循环调度子节点：code、review。"
+        },
+        {
+          "id": "code",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0].steps[0]",
+          "parentNodeId": "repair-review-loop",
+          "line": 15,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "直接修改目标源码，按该工作流的约束实施。"
+        },
+        {
+          "id": "review",
+          "type": "step",
+          "agent": "semantic_reviewer",
+          "path": "$.steps[0].steps[1]",
+          "parentNodeId": "repair-review-loop",
+          "line": 21,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "aborted"
+          ],
+          "executedInstances": 0,
+          "purpose": "独立代码或语义审查。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-051",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-051/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 11,
+          "artifacts": [
+            "report"
+          ],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-052",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-052/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    },
+    {
+      "id": "workflow-sample-053",
+      "name": "agent-wf-coder",
+      "status": "completed",
+      "file": "snapshot://workflow-sample-053/workflow-definition.json",
+      "createdAt": null,
+      "topLevelIds": [
+        "run"
+      ],
+      "nodes": [
+        {
+          "id": "run",
+          "type": "step",
+          "agent": "wf-coder",
+          "path": "$.steps[0]",
+          "parentNodeId": null,
+          "line": 10,
+          "artifacts": [],
+          "maxIterations": null,
+          "hasStopCondition": false,
+          "stateStatuses": [
+            "completed"
+          ],
+          "executedInstances": 1,
+          "purpose": "agent:// 合成单步任务的通用节点；本机既有 planner、coder，也有 reviewer，不能单凭名称确定职责。"
+        }
+      ]
+    }
+  ],
+  "builtin": {
+    "packageVersion": "1.1.294",
+    "bundleFile": "<Kiro extension bundle>/extension.js",
+    "sha256": "7639b043c1838c9e226d0c0aeee8f289c444f0f3b4e89c856af279d01df2f1cb",
+    "catalogCharacterOffset": 5985485,
+    "recipes": [
+      {
+        "name": "autoresearch",
+        "nodes": [
+          {
+            "id": "experiments",
+            "type": "repeat",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5963150,
+            "purpose": "重复实验，最多 1000 次，超限暂停。"
+          },
+          {
+            "id": "experiment",
+            "type": "step",
+            "agent": "wf-auto-researcher",
+            "parentNodeId": "experiments",
+            "sourceOffset": 5963229,
+            "purpose": "提出并应用实验，运行 benchmark，保留更优结果或回滚实验。"
+          }
+        ]
+      },
+      {
+        "name": "feature-pipeline",
+        "nodes": [
+          {
+            "id": "setup",
+            "type": "step",
+            "agent": "wf-coder",
+            "parentNodeId": null,
+            "sourceOffset": 5963907,
+            "purpose": "创建本次运行的产物目录。",
+            "explicitEffort": "low"
+          },
+          {
+            "id": "requirements",
+            "type": "step",
+            "agent": "wf-design",
+            "parentNodeId": null,
+            "sourceOffset": 5964656,
+            "purpose": "编写需求文档，不做设计或实现。"
+          },
+          {
+            "id": "design-loop",
+            "type": "repeat",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5965168,
+            "purpose": "设计与设计审查循环，最多 3 次。"
+          },
+          {
+            "id": "design-draft",
+            "type": "step",
+            "agent": "wf-design",
+            "parentNodeId": "design-loop",
+            "sourceOffset": 5965352,
+            "purpose": "检查代码并编写、修订技术设计。"
+          },
+          {
+            "id": "design-review",
+            "type": "step",
+            "agent": "wf-design-reviewer",
+            "parentNodeId": "design-loop",
+            "sourceOffset": 5966296,
+            "purpose": "对照需求和真实代码审查设计，输出 verdict。"
+          },
+          {
+            "id": "plan",
+            "type": "step",
+            "agent": "wf-planner",
+            "parentNodeId": null,
+            "sourceOffset": 5967102,
+            "purpose": "基于获批设计编写有序实施计划。"
+          },
+          {
+            "id": "code-loop",
+            "type": "repeat",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5967827,
+            "purpose": "实现与代码审查循环，最多 3 次。"
+          },
+          {
+            "id": "implement",
+            "type": "step",
+            "agent": "wf-coder",
+            "parentNodeId": "code-loop",
+            "sourceOffset": 5968007,
+            "purpose": "执行计划、相关测试、更新完成情况并提交。"
+          },
+          {
+            "id": "code-reviews",
+            "type": "parallel",
+            "agent": null,
+            "parentNodeId": "code-loop",
+            "sourceOffset": 5968957,
+            "purpose": "并行运行两份相互独立的代码审查。"
+          },
+          {
+            "id": "review-fable",
+            "type": "step",
+            "agent": "semantic_reviewer",
+            "parentNodeId": "code-reviews",
+            "sourceOffset": 5969015,
+            "purpose": "独立代码审查，不读取另一份报告。",
+            "explicitModelId": "claude-fable-5",
+            "explicitEffort": "xhigh"
+          },
+          {
+            "id": "review-gpt",
+            "type": "step",
+            "agent": "semantic_reviewer",
+            "parentNodeId": "code-reviews",
+            "sourceOffset": 5969796,
+            "purpose": "独立代码审查，不读取另一份报告。",
+            "explicitModelId": "gpt-5.6-sol",
+            "explicitEffort": "xhigh"
+          },
+          {
+            "id": "code-aggregate",
+            "type": "step",
+            "agent": "wf-review-aggregator",
+            "parentNodeId": "code-loop",
+            "sourceOffset": 5970570,
+            "purpose": "合并两份审查，核对计划完成度并输出 verdict。"
+          },
+          {
+            "id": "validate-gate",
+            "type": "repeat",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5971158,
+            "purpose": "最多一次验证；verdict 非 PASS 时中止。"
+          },
+          {
+            "id": "validate",
+            "type": "step",
+            "agent": "wf-coder",
+            "parentNodeId": "validate-gate",
+            "sourceOffset": 5971337,
+            "purpose": "执行验收检查、端到端检查及 build/test；只报告，不修代码。"
+          }
+        ]
+      },
+      {
+        "name": "goal",
+        "nodes": [
+          {
+            "id": "goal-loop",
+            "type": "repeat",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5972664,
+            "purpose": "推进目标直到 success，最多 200 次。"
+          },
+          {
+            "id": "work",
+            "type": "step",
+            "agent": "wf-coder",
+            "parentNodeId": "goal-loop",
+            "sourceOffset": 5972784,
+            "purpose": "按任务自主推进，凭具体证据确认目标完成。"
+          }
+        ]
+      },
+      {
+        "name": "investigate",
+        "nodes": [
+          {
+            "id": "investigate",
+            "type": "step",
+            "agent": "wf-planner",
+            "parentNodeId": null,
+            "sourceOffset": 5974578,
+            "purpose": "只读调查源码，输出证据报告和建议，不实施修复。"
+          }
+        ]
+      },
+      {
+        "name": "publish-pr",
+        "nodes": [
+          {
+            "id": "submit",
+            "type": "step",
+            "agent": "wf-pr-submitter",
+            "parentNodeId": null,
+            "sourceOffset": 5975598,
+            "purpose": "发布或复用 PR 并记录 PR 身份。"
+          },
+          {
+            "id": "pr-loop",
+            "type": "repeat",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5976216,
+            "purpose": "等待并处理 PR 反馈，最多 200 次。"
+          },
+          {
+            "id": "wait",
+            "type": "watch",
+            "agent": null,
+            "parentNodeId": "pr-loop",
+            "sourceOffset": 5976317,
+            "purpose": "github-pr handler 轮询 PR 状态，不调用模型。",
+            "handler": "github-pr"
+          },
+          {
+            "id": "respond",
+            "type": "step",
+            "agent": "wf-pr-responder",
+            "parentNodeId": "pr-loop",
+            "sourceOffset": 5976398,
+            "purpose": "处理 PR 反馈；PR 合并或关闭后收尾。"
+          }
+        ]
+      },
+      {
+        "name": "ralph",
+        "nodes": [
+          {
+            "id": "ralph-loop",
+            "type": "repeat",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5977133,
+            "purpose": "按 checklist 迭代直到 complete=true，最多 200 次。"
+          },
+          {
+            "id": "iterate",
+            "type": "step",
+            "agent": "wf-coder",
+            "parentNodeId": "ralph-loop",
+            "sourceOffset": 5977288,
+            "purpose": "建立或推进 checklist，实施未完成项、测试和提交。"
+          }
+        ]
+      },
+      {
+        "name": "semantic-review-multi-model",
+        "nodes": [
+          {
+            "id": "setup",
+            "type": "step",
+            "agent": "wf-coder",
+            "parentNodeId": null,
+            "sourceOffset": 5978050,
+            "purpose": "创建本次审查报告目录。",
+            "explicitEffort": "low"
+          },
+          {
+            "id": "reviews",
+            "type": "parallel",
+            "agent": null,
+            "parentNodeId": null,
+            "sourceOffset": 5978837,
+            "purpose": "并行运行两份独立审查。"
+          },
+          {
+            "id": "review-opus",
+            "type": "step",
+            "agent": "semantic_reviewer",
+            "parentNodeId": "reviews",
+            "sourceOffset": 5978890,
+            "purpose": "独立语义审查，不读取另一审查文件。",
+            "explicitModelId": "claude-opus-5",
+            "explicitEffort": "xhigh"
+          },
+          {
+            "id": "review-gpt",
+            "type": "step",
+            "agent": "semantic_reviewer",
+            "parentNodeId": "reviews",
+            "sourceOffset": 5981080,
+            "purpose": "独立语义审查，不读取另一审查文件。",
+            "explicitModelId": "gpt-5.6-sol",
+            "explicitEffort": "xhigh"
+          },
+          {
+            "id": "aggregate",
+            "type": "step",
+            "agent": "wf-coder",
+            "parentNodeId": null,
+            "sourceOffset": 5983273,
+            "purpose": "合并两份审查为最终 issues-only 报告。",
+            "explicitModelId": "claude-opus-5",
+            "explicitEffort": "xhigh"
+          }
+        ]
+      }
+    ]
+  },
+  "logEvidence": {
+    "files": [
+      {
+        "name": "kiro_traffic.log.1",
+        "outerJsonLines": 7246,
+        "unparsedNonEmptyDetails": 1708
+      },
+      {
+        "name": "kiro_traffic.log",
+        "outerJsonLines": 4130,
+        "unparsedNonEmptyDetails": 647
+      },
+      {
+        "name": "kiro-proxy.log",
+        "outerJsonLines": 0
+      }
+    ],
+    "outerJsonLines": 11376,
+    "outerParseFailures": 0,
+    "nonEmptyDetails": 3614,
+    "parsedDetails": 1259,
+    "unparsedDetails": 2355,
+    "emptyDetails": 7762,
+    "uniqueNodeIds": [
+      "finalize",
+      "implement",
+      "investigate",
+      "plan",
+      "restart-and-verify",
+      "review",
+      "run"
+    ],
+    "eventCounting": "按 messageId 去重，缺失时用 toolCallId；合并 text/toolUse/toolResult 活动事件，不能等同模型请求数或工具调用次数。",
+    "rows": [
+      {
+        "workflowName": "name-group-021",
+        "workflowId": "workflow-sample-044",
+        "nodeId": "run",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 15,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 1007,
+        "lastLine": 1110
+      },
+      {
+        "workflowName": "name-group-022",
+        "workflowId": "workflow-sample-004",
+        "nodeId": "plan",
+        "agent": "wf-planner",
+        "uniqueActivityEvents": 186,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 2203,
+        "lastLine": 3154
+      },
+      {
+        "workflowName": "name-group-022",
+        "workflowId": "workflow-sample-004",
+        "nodeId": "implement",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 141,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 3173,
+        "lastLine": 4053
+      },
+      {
+        "workflowName": "name-group-022",
+        "workflowId": "workflow-sample-004",
+        "nodeId": "review",
+        "agent": "semantic_reviewer",
+        "uniqueActivityEvents": 91,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 4082,
+        "lastLine": 4609
+      },
+      {
+        "workflowName": "name-group-022",
+        "workflowId": "workflow-sample-004",
+        "nodeId": "finalize",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 50,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 4641,
+        "lastLine": 4920
+      },
+      {
+        "workflowName": "name-group-023",
+        "workflowId": "workflow-sample-005",
+        "nodeId": "investigate",
+        "agent": "wf-planner",
+        "uniqueActivityEvents": 232,
+        "file": "kiro_traffic.log",
+        "firstLine": 3564,
+        "lastLine": 4084
+      },
+      {
+        "workflowName": "name-group-024",
+        "workflowId": "workflow-sample-053",
+        "nodeId": "run",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 29,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 639,
+        "lastLine": 739
+      },
+      {
+        "workflowName": "name-group-025",
+        "workflowId": "workflow-sample-045",
+        "nodeId": "run",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 30,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 27,
+        "lastLine": 131
+      },
+      {
+        "workflowName": "name-group-026",
+        "workflowId": "workflow-sample-017",
+        "nodeId": "run",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 51,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 260,
+        "lastLine": 518
+      },
+      {
+        "workflowName": "name-group-027",
+        "workflowId": "workflow-sample-020",
+        "nodeId": "run",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 21,
+        "file": "kiro_traffic.log.1",
+        "firstLine": 835,
+        "lastLine": 913
+      },
+      {
+        "workflowName": "name-group-028",
+        "workflowId": "workflow-sample-002",
+        "nodeId": "restart-and-verify",
+        "agent": "wf-coder",
+        "uniqueActivityEvents": 88,
+        "file": "kiro_traffic.log",
+        "firstLine": 1384,
+        "lastLine": 1847
+      },
+      {
+        "workflowName": "name-group-029",
+        "workflowId": "workflow-sample-003",
+        "nodeId": "run",
+        "agent": "vibe",
+        "uniqueActivityEvents": 175,
+        "file": "kiro_traffic.log",
+        "firstLine": 2526,
+        "lastLine": 2832
+      },
+      {
+        "workflowName": "name-group-029",
+        "workflowId": "workflow-sample-003",
+        "nodeId": "run",
+        "agent": "wf-planner",
+        "uniqueActivityEvents": 4,
+        "file": "kiro_traffic.log",
+        "firstLine": 2504,
+        "lastLine": 2519
+      },
+      {
+        "workflowName": "name-group-030",
+        "workflowId": "workflow-sample-006",
+        "nodeId": "run",
+        "agent": "wf-planner",
+        "uniqueActivityEvents": 206,
+        "file": "kiro_traffic.log",
+        "firstLine": 2985,
+        "lastLine": 3423
+      }
+    ],
+    "recoveredActivityDetails": {
+      "records": 18,
+      "repeatedWorkflowMetadataObservations": 147,
+      "allRecoveredJsonParsed": true,
+      "newNodeIds": [],
+      "countedInActivityEvents": false,
+      "limitations": "仅对失败的真实 /agents/activity 详情恢复完整的小型 workflow 元数据对象；不据此恢复整份活动正文或重新计算事件次数。"
+    },
+    "detailParseFailureKinds": {
+      "unterminatedString": 1161,
+      "invalidPropertyPrefix": 1178,
+      "other": 16
+    }
+  },
+  "searchedCustomWorkflowDirectories": [
+    "<project-root-001>/.kiro/workflows",
+    "<user-profile>/.kiro",
+    "<project-root-002>/.kiro/workflows",
+    "<project-root-003>/.kiro/workflows",
+    "<project-root-004>/.kiro/workflows",
+    "<project-root-005>/.kiro/workflows"
+  ],
+  "parsing": {
+    "localDefinitionErrors": [],
+    "builtinIdOffsetChecks": {
+      "checked": 30,
+      "unmatched": 0
+    },
+    "logNotes": "外层 JSON 全部可解析；部分 detail 无法完整 JSON 解析。另恢复失败活动详情的小型 workflow 元数据，未发现新 ID，不回算事件数。"
+  },
+  "unresolvedForAuto": [
+    "节点名称不是通用职责枚举；agent:// 合成 run 在本机承担 planner、coder、reviewer 三种任务。",
+    "循环/并行容器不应与调用模型的 step 混为一种对象。",
+    "work、iterate、experiment、respond 可以在一个节点内做多类工作，不能仅按名字假定五阶段切换。",
+    "多模型审查 recipe 显式声明不同模型；统一 review 阶段模型与保留原有模型多样性之间需明确取舍。",
+    "节点定义可动态生成或由 update_workflow 重构；当前清单不能替代未来阶段声明契约。"
+  ],
+  "autoConfigurationChanged": false
+}
