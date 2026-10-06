@@ -22,6 +22,13 @@ type Route struct {
 	AutoMode            string
 	AutoStage           string // 实际选中目标所属阶段；工具续轮沿用首轮值。
 	AutoChannelIdentity string // 脱敏调用身份，仅供审计，不参与缓存键。
+	AutoDuty            string
+	AutoEffort          string
+	AutoEffortFixed     bool
+	AutoExecutionID     string
+	AutoLockScope       string
+	AutoSelectionSource string
+	AutoUnknownReason   string
 	// Stages 保留主组和 fallback 的阶段边界，避免调度策略跨阶段重排
 	// 每个阶段是一组候选，调度器必须先耗尽当前阶段才能进入下一阶段
 	Stages []RouteStage
@@ -44,8 +51,9 @@ type Router struct {
 	autoConfig    store.AutoRoutingConfig
 	autoConfigErr error
 
-	autoMu    sync.Mutex
-	autoLocks map[string]autoModelLock
+	autoMu           sync.Mutex
+	autoLocks        map[string]autoModelLock
+	autoObservations map[string]AutoObservation
 }
 
 // New 创建路由器并加载初始数据
@@ -74,7 +82,7 @@ func (r *Router) Reload() {
 		autoConfig, autoConfigErr = store.ParseAutoRoutingConfig(autoConfigRaw)
 	}
 	if autoConfigErr == nil && autoConfig.Enabled {
-		autoConfigErr = store.ValidateAutoRoutingConfig(autoConfig, models)
+		autoConfigErr = ValidateAutoRoutingConfig(autoConfig, models)
 	}
 
 	r.mu.Lock()
@@ -97,7 +105,8 @@ func (r *Router) StageRoutingEnabled() bool {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.autoConfigErr == nil && r.autoConfig.Enabled && r.autoConfig.Mode == store.AutoRoutingModeStageFixed
+	return r.autoConfigErr == nil && r.autoConfig.Enabled &&
+		(r.autoConfig.Mode == store.AutoRoutingModeStageFixed || r.autoConfig.Mode == store.AutoRoutingModeDutyFixed)
 }
 
 // Resolve 根据 Kiro 请求中的 modelId 找到模型配置

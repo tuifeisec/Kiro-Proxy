@@ -80,6 +80,21 @@ func autoPolicyConversation() *converter.ParsedConversation {
 	return &converter.ParsedConversation{ModelID: "auto"}
 }
 
+func autoDutyPolicyConfig() store.AutoRoutingConfig {
+	targets := make(map[string]store.AutoDutyTarget)
+	for _, duty := range store.AutoDutyNames(store.AutoRoutingLayoutStandard) {
+		targets[duty] = store.AutoDutyTarget{ModelID: "task", ReasoningEffort: "high"}
+	}
+	targets["investigation"] = store.AutoDutyTarget{ModelID: "fast", ReasoningEffort: "low"}
+	targets["design"] = store.AutoDutyTarget{ModelID: "mode", ReasoningEffort: "medium"}
+	targets["implementation"] = store.AutoDutyTarget{ModelID: "task", ReasoningEffort: "high"}
+	return store.AutoRoutingConfig{Version: store.AutoRoutingVersion, Mode: store.AutoRoutingModeDutyFixed,
+		Layout: store.AutoRoutingLayoutStandard, Enabled: true, DefaultModelID: "default", DutyModels: targets,
+		NodeBindings: []store.AutoNodeBinding{{DefinitionID: "workflow", DefinitionRevision: "rev-1", NodePath: "steps/investigate", Duty: "investigation"},
+			{DefinitionID: "workflow", DefinitionRevision: "rev-1", NodePath: "steps/other", Duty: "design"}},
+		NodeOverrides: []store.AutoNodeOverride{{DefinitionID: "workflow", DefinitionRevision: "rev-1", NodePath: "steps/investigate", ModelID: "replacement", ReasoningEffort: "max"}}}
+}
+
 func TestResolveAutoLocksStageTargetAndForgetClearsScope(t *testing.T) {
 	config := autoPolicyConfig()
 	r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
@@ -96,7 +111,7 @@ func TestResolveAutoLocksStageTargetAndForgetClearsScope(t *testing.T) {
 
 	config.StageModels.Run = "replacement"
 	setAutoPolicyConfig(t, r, config)
-	main.WorkflowStage = "review"
+	main.WorkflowStage = "run"
 	main.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
 	second, err := r.ResolveAuto(main)
 	if err != nil || second.Model.ID != "fast" || second.AutoStage != "run" ||
@@ -152,7 +167,7 @@ func TestResolveAutoScopeAndConversationIDFallback(t *testing.T) {
 	if _, err := r.ResolveAuto(fallback); err != nil {
 		t.Fatal(err)
 	}
-	fallback.WorkflowStage = "plan"
+	fallback.WorkflowStage = "run"
 	fallback.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
 	if route, err := r.ResolveAuto(fallback); err != nil || route.Model.ID != "fast" ||
 		route.AutoReason != "conversation_lock:stage:run" {
@@ -197,9 +212,6 @@ func TestResolveAutoSerializesFirstChoiceWithinOneScope(t *testing.T) {
 			conv := autoPolicyConversation()
 			conv.ContinuationStateKey = "shared"
 			conv.WorkflowStage = "run"
-			if index%2 == 0 {
-				conv.WorkflowStage = "plan"
-			}
 			conv.WorkflowStageProvided = true
 			conv.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
 			<-start
@@ -362,4 +374,377 @@ func getAutoPolicyModel(t *testing.T, r *Router, id string) store.Model {
 	}
 	t.Fatalf("model %q not found", id)
 	return store.Model{}
+}
+
+func TestDutyFixedUsesExactBindingOverridePriorityAndExplicitTaskType(t *testing.T) {
+	models := autoPolicyModels()
+	models[0].ReasoningEffort = "medium"
+	r := newAutoPolicyTestRouter(t, models, autoDutyPolicyConfig())
+
+	conv := autoPolicyConversation()
+	conv.WorkflowMetadataVersion = 2
+	conv.WorkflowDefinitionID, conv.WorkflowDefinitionRevision, conv.WorkflowNodePath = "workflow", "rev-1", "steps/investigate"
+	conv.WorkflowNodeID = "node-name-is-not-a-duty"
+	conv.WorkflowTaskType = "design"
+	conv.ReasoningEffort = "low"
+	route, err := r.ResolveAuto(conv)
+	if err != nil || route.Model.ID != "replacement" || route.AutoSelectionSource != "node_override" ||
+		route.AutoDuty != "investigation" || route.AutoEffort != "max" || !route.AutoEffortFixed {
+		t.Fatalf("exact node override did not win: route=%+v err=%v", route, err)
+	}
+
+	config := autoDutyPolicyConfig()
+	config.NodeOverrides = []store.AutoNodeOverride{}
+	setAutoPolicyConfig(t, r, config)
+	route, err = r.ResolveAuto(conv)
+	if err != nil || route.Model.ID != "fast" || route.AutoSelectionSource != "node_binding" ||
+		route.AutoDuty != "investigation" || route.AutoEffort != "low" {
+		t.Fatalf("stable node binding did not beat taskType: route=%+v err=%v", route, err)
+	}
+
+	bareNode := autoPolicyConversation()
+	bareNode.WorkflowMetadataVersion = 2
+	bareNode.WorkflowNodeID = "investigate"
+	route, err = r.ResolveAuto(bareNode)
+	if err != nil || route.Model.ID != "default" || route.AutoSelectionSource != "default" ||
+		route.AutoUnknownReason != "stable_identity_unavailable" {
+		t.Fatalf("bare node id was guessed into a duty: route=%+v err=%v", route, err)
+	}
+	observations := r.GetAutoObservations()
+	foundExact := false
+	for _, observation := range observations {
+		if observation.DefinitionID == "workflow" && observation.NodePath == "steps/investigate" &&
+			observation.ModelConfigID == "fast" && observation.EffectiveEffort == "low" {
+			foundExact = true
+		}
+	}
+	if !foundExact {
+		t.Fatalf("stable node identity or effective effort missing from observations: %#v", observations)
+	}
+	longIdentity := autoPolicyConversation()
+	longIdentity.WorkflowMetadataVersion = 2
+	longIdentity.WorkflowDefinitionID = strings.Repeat("d", 1024)
+	longIdentity.WorkflowDefinitionRevision = strings.Repeat("r", 256)
+	longIdentity.WorkflowNodePath = strings.Repeat("p", 1024)
+	longIdentity.WorkflowTaskType = "implementation"
+	if _, err := r.ResolveAuto(longIdentity); err != nil {
+		t.Fatal(err)
+	}
+	observations = r.GetAutoObservations()
+	foundLongIdentity := false
+	for _, observation := range observations {
+		if observation.DefinitionID == longIdentity.WorkflowDefinitionID &&
+			observation.DefinitionRevision == longIdentity.WorkflowDefinitionRevision && observation.NodePath == longIdentity.WorkflowNodePath {
+			foundLongIdentity = true
+		}
+	}
+	if !foundLongIdentity {
+		t.Fatal("observation shortened a valid stable identity")
+	}
+}
+
+func TestDutyFixedExecutionSnapshotSurvivesMappingReloadAndIdleButChecksResources(t *testing.T) {
+	models := autoPolicyModels()
+	models[0].ReasoningEffort = "medium"
+	config := autoDutyPolicyConfig()
+	r := newAutoPolicyTestRouter(t, models, config)
+	conv := autoPolicyConversation()
+	conv.WorkflowMetadataVersion = 2
+	conv.WorkflowTaskType = "implementation"
+	conv.WorkflowExecutionID = "execution-1"
+	first, err := r.ResolveAuto(conv)
+	if err != nil || first.Model.ID != "task" || first.AutoEffort != "high" || first.AutoLockScope != "execution" {
+		t.Fatalf("initial execution route=%+v err=%v", first, err)
+	}
+
+	lockKey := autoExecutionLockKey(conv)
+	lock := r.autoLocks[lockKey]
+	lock.LastUsed = time.Now().Add(-autoLockIdleLimit - time.Minute)
+	r.autoLocks[lockKey] = lock
+	config.DutyModels["implementation"] = store.AutoDutyTarget{ModelID: "replacement", ReasoningEffort: "max"}
+	setAutoPolicyConfig(t, r, config)
+	conv.ReasoningEffort = "low"
+	locked, err := r.ResolveAuto(conv)
+	if err != nil || locked.Model.ID != "task" || locked.AutoEffort != "high" || locked.AutoEffortFixed != true {
+		t.Fatalf("active execution did not retain its idle target snapshot: route=%+v err=%v", locked, err)
+	}
+
+	next := *conv
+	next.WorkflowExecutionID = "execution-2"
+	newRoute, err := r.ResolveAuto(&next)
+	if err != nil || newRoute.Model.ID != "replacement" || newRoute.AutoEffort != "max" {
+		t.Fatalf("new execution did not load the updated mapping: route=%+v err=%v", newRoute, err)
+	}
+
+	model, err := r.db.GetModel("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.BaseURL = "https://changed.example.invalid"
+	if err := r.db.UpdateModel(model); err != nil {
+		t.Fatal(err)
+	}
+	r.Reload()
+	if got, err := r.ResolveAuto(conv); got != nil || err == nil || !strings.Contains(err.Error(), "changed channel identity") {
+		t.Fatalf("changed channel identity did not fail the active execution: route=%+v err=%v", got, err)
+	}
+}
+
+func TestDutyFixedToolLockDoesNotLeakIntoNewExecutionOrDifferentDeclaredBoundary(t *testing.T) {
+	models := autoPolicyModels()
+	models[0].ReasoningEffort = "medium"
+	config := autoDutyPolicyConfig()
+	config.NodeOverrides = []store.AutoNodeOverride{}
+	r := newAutoPolicyTestRouter(t, models, config)
+
+	toolTurn := autoPolicyConversation()
+	toolTurn.ConversationID = "tool-scope"
+	toolTurn.ContinuationStateKey = "tool-scope"
+	toolTurn.WorkflowMetadataVersion = 2
+	toolTurn.WorkflowTaskType = "investigation"
+	toolTurn.WorkflowDefinitionID, toolTurn.WorkflowDefinitionRevision, toolTurn.WorkflowNodePath = "workflow", "rev-1", "steps/investigate"
+	first, err := r.ResolveAuto(toolTurn)
+	if err != nil || first.Model.ID != "fast" || first.AutoLockScope != "tool_continuation" {
+		t.Fatalf("tool-scope route=%+v err=%v", first, err)
+	}
+	toolTurn.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "call-1"}}
+	if _, err := r.ResolveAuto(toolTurn); err != nil {
+		t.Fatal(err)
+	}
+
+	newExecution := *toolTurn
+	newExecution.WorkflowExecutionID = "fresh-execution"
+	newExecution.WorkflowTaskType = "design"
+	newExecution.WorkflowDefinitionID = ""
+	newExecution.WorkflowDefinitionRevision = ""
+	newExecution.WorkflowNodePath = ""
+	newExecution.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "call-2"}}
+	route, err := r.ResolveAuto(&newExecution)
+	if err != nil || route.Model.ID != "mode" || route.AutoLockScope != "execution" {
+		t.Fatalf("new execution reused an older tool lock: route=%+v err=%v", route, err)
+	}
+
+	continued := autoPolicyConversation()
+	continued.ConversationID = "changed-duty"
+	continued.ContinuationStateKey = "changed-duty"
+	continued.WorkflowMetadataVersion = 2
+	continued.WorkflowTaskType = "investigation"
+	continued.WorkflowDefinitionID, continued.WorkflowDefinitionRevision, continued.WorkflowNodePath = "workflow", "rev-1", "steps/unbound"
+	if _, err := r.ResolveAuto(continued); err != nil {
+		t.Fatal(err)
+	}
+	continued.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "call-3"}}
+	continued.WorkflowTaskType = "design"
+	continuedRoute, err := r.ResolveAuto(continued)
+	if err != nil || continuedRoute.Model.ID != "mode" || continuedRoute.AutoDuty != "design" {
+		t.Fatalf("explicit duty change inherited the previous tool lock: route=%+v err=%v", continuedRoute, err)
+	}
+}
+
+func TestDutyFixedToolLockWithoutNodeIdentityKeepsSnapshotWhenMetadataDisappears(t *testing.T) {
+	models := autoPolicyModels()
+	models[0].ReasoningEffort = "medium"
+	config := autoDutyPolicyConfig()
+	config.DutyModels["requirements"] = store.AutoDutyTarget{ModelID: "vision", ReasoningEffort: "medium"}
+	r := newAutoPolicyTestRouter(t, models, config)
+
+	conv := autoPolicyConversation()
+	conv.ConversationID = "metadata-disappeared"
+	conv.ContinuationStateKey = "metadata-disappeared"
+	conv.WorkflowMetadataVersion = 2
+	conv.WorkflowTaskType = "investigation"
+	first, err := r.ResolveAuto(conv)
+	if err != nil || first.Model.ID != "fast" || first.AutoDuty != "investigation" || first.AutoLockScope != "tool_continuation" {
+		t.Fatalf("initial tool target=%+v err=%v", first, err)
+	}
+	lock := r.autoLocks[conv.ContinuationStateKey]
+	if lock.NodeIdentity != "" || lock.TaskType != "investigation" {
+		t.Fatalf("test requires a taskType-only tool lock: %+v", lock)
+	}
+
+	config.DutyModels["investigation"] = store.AutoDutyTarget{ModelID: "mode", ReasoningEffort: "medium"}
+	setAutoPolicyConfig(t, r, config)
+	disableAutoPolicyModel(t, r, "vision")
+	conv.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool-call"}}
+	conv.WorkflowTaskType = ""
+	locked, err := r.ResolveAuto(conv)
+	if err != nil || locked.Model.ID != first.Model.ID || locked.AutoDuty != first.AutoDuty ||
+		locked.AutoEffort != first.AutoEffort || locked.AutoReason != first.AutoReason {
+		t.Fatalf("missing metadata or mapping reload changed the active tool snapshot: route=%+v err=%v", locked, err)
+	}
+}
+
+func TestDutyFixedToolLockSurvivesDisabledOrChangedRoutingConfigUntilBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+	}{
+		{name: "disabled"},
+		{name: "mode changed", mode: store.AutoRoutingModeStageFixed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			models := autoPolicyModels()
+			config := autoDutyPolicyConfig()
+			r := newAutoPolicyTestRouter(t, models, config)
+			conv := autoPolicyConversation()
+			conv.ConversationID, conv.ContinuationStateKey = "config-change", "config-change"
+			conv.WorkflowMetadataVersion, conv.WorkflowTaskType = 2, "investigation"
+			first, err := r.ResolveAuto(conv)
+			if err != nil || first.Model.ID != "fast" {
+				t.Fatalf("initial route=%+v err=%v", first, err)
+			}
+
+			if tc.mode == store.AutoRoutingModeStageFixed {
+				stageConfig := stagePolicyConfig()
+				stageConfig.StageModels.Plan = "replacement"
+				setAutoPolicyConfig(t, r, stageConfig)
+			} else {
+				config.Enabled = false
+				setAutoPolicyConfig(t, r, config)
+			}
+			conv.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool-call"}}
+			locked, err := r.ResolveAuto(conv)
+			if err != nil || locked.Model.ID != first.Model.ID || locked.AutoDuty != first.AutoDuty {
+				t.Fatalf("configuration change replaced a matching active snapshot: route=%+v err=%v", locked, err)
+			}
+
+			conv.WorkflowTaskType = "design"
+			if tc.mode == store.AutoRoutingModeStageFixed {
+				conv.WorkflowMetadataVersion = 1
+				conv.WorkflowStage, conv.WorkflowStageProvided = "plan", true
+			}
+			next, err := r.ResolveAuto(conv)
+			if tc.mode == store.AutoRoutingModeStageFixed {
+				if err != nil || next.Model.ID != "replacement" || next.AutoReason != "tool_continuation_unlocked:stage:plan" {
+					t.Fatalf("new boundary did not use the active stage configuration: route=%+v err=%v", next, err)
+				}
+			} else if err != nil || next.Model.ID != "default" || next.AutoReason != "policy_disabled" {
+				t.Fatalf("new boundary did not honor the disabled policy: route=%+v err=%v", next, err)
+			}
+		})
+	}
+}
+
+func TestDutyFixedNewToolBoundariesRejectInvalidConfiguration(t *testing.T) {
+	for _, boundary := range []string{"task type", "node identity", "execution id"} {
+		t.Run(boundary, func(t *testing.T) {
+			models := autoPolicyModels()
+			config := autoDutyPolicyConfig()
+			config.DutyModels["requirements"] = store.AutoDutyTarget{ModelID: "vision", ReasoningEffort: "medium"}
+			r := newAutoPolicyTestRouter(t, models, config)
+			conv := autoPolicyConversation()
+			conv.ConversationID, conv.ContinuationStateKey = "invalid-config-"+strings.ReplaceAll(boundary, " ", "-"), "invalid-config-"+strings.ReplaceAll(boundary, " ", "-")
+			conv.WorkflowMetadataVersion, conv.WorkflowTaskType = 2, "investigation"
+			if boundary == "node identity" {
+				conv.WorkflowDefinitionID, conv.WorkflowDefinitionRevision, conv.WorkflowNodePath = "workflow", "rev-1", "steps/unbound"
+			}
+			if first, err := r.ResolveAuto(conv); err != nil || first.Model.ID != "fast" {
+				t.Fatalf("initial route=%+v err=%v", first, err)
+			}
+			disableAutoPolicyModel(t, r, "vision")
+			conv.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool-call"}}
+			switch boundary {
+			case "task type":
+				conv.WorkflowTaskType = "design"
+			case "node identity":
+				conv.WorkflowNodePath = "steps/changed"
+			case "execution id":
+				conv.WorkflowExecutionID = "fresh-execution"
+			}
+			if route, err := r.ResolveAuto(conv); route != nil || err == nil || !strings.Contains(err.Error(), "auto routing configuration is invalid") {
+				t.Fatalf("new %s boundary did not reject invalid configuration: route=%+v err=%v", boundary, route, err)
+			}
+			if boundary != "execution id" {
+				if _, ok := r.autoLocks[conv.ContinuationStateKey]; ok {
+					t.Fatalf("new %s boundary kept the old tool lock", boundary)
+				}
+			}
+		})
+	}
+}
+
+func TestDutyFixedToolLockStillValidatesLockedTargetResources(t *testing.T) {
+	for _, mutation := range []string{"disabled target", "changed channel"} {
+		t.Run(mutation, func(t *testing.T) {
+			r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoDutyPolicyConfig())
+			conv := autoPolicyConversation()
+			conv.ConversationID, conv.ContinuationStateKey = "resource-check", "resource-check"
+			conv.WorkflowMetadataVersion, conv.WorkflowTaskType = 2, "investigation"
+			if first, err := r.ResolveAuto(conv); err != nil || first.Model.ID != "fast" {
+				t.Fatalf("initial route=%+v err=%v", first, err)
+			}
+			model := getAutoPolicyModel(t, r, "fast")
+			if mutation == "disabled target" {
+				model.Enabled = false
+			} else {
+				model.BaseURL = "https://changed.example.invalid"
+			}
+			if err := r.db.UpdateModel(&model); err != nil {
+				t.Fatal(err)
+			}
+			r.Reload()
+			conv.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool-call"}}
+			route, err := r.ResolveAuto(conv)
+			want := "changed channel identity"
+			if mutation == "disabled target" {
+				want = "disabled"
+			}
+			if route != nil || err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("invalid locked target resource was accepted: route=%+v err=%v", route, err)
+			}
+		})
+	}
+}
+
+func disableAutoPolicyModel(t *testing.T, r *Router, id string) {
+	t.Helper()
+	model := getAutoPolicyModel(t, r, id)
+	model.Enabled = false
+	if err := r.db.UpdateModel(&model); err != nil {
+		t.Fatal(err)
+	}
+	r.Reload()
+	if r.autoConfigErr == nil {
+		t.Fatalf("disabling mapped model %q did not invalidate the configuration", id)
+	}
+}
+
+func TestLegacyStageMapsOnlyExplicitMainOrchestrationToRun(t *testing.T) {
+	for _, tc := range []struct {
+		name, taskType, workflowID, modelID, stage, source, reason, unknown string
+	}{
+		{name: "explicit orchestration", taskType: "orchestration", modelID: "fast", stage: "run", source: "legacy_orchestration", reason: "stage:run"},
+		{name: "missing declaration", modelID: "default", source: "legacy_default", reason: "stage_unavailable", unknown: "legacy_node_identity_unavailable"},
+		{name: "other declaration", taskType: "requirements", modelID: "default", source: "legacy_default", reason: "stage_unavailable", unknown: "legacy_node_identity_unavailable"},
+		{name: "orchestration inside workflow", taskType: "orchestration", workflowID: "workflow-1", modelID: "default", source: "legacy_default", reason: "stage_unavailable", unknown: "legacy_node_identity_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoPolicyConfig())
+			conv := autoPolicyConversation()
+			conv.WorkflowMetadataVersion = 2
+			conv.WorkflowTaskType = tc.taskType
+			conv.WorkflowID = tc.workflowID
+			route, err := r.ResolveAuto(conv)
+			if err != nil || route.Model.ID != tc.modelID || route.AutoStage != tc.stage ||
+				route.AutoSelectionSource != tc.source || route.AutoReason != tc.reason || route.AutoUnknownReason != tc.unknown {
+				t.Fatalf("legacy v2 selection did not match its declaration boundary: route=%+v err=%v", route, err)
+			}
+		})
+	}
+}
+
+func TestDutyFixedUnknownV2MetadataUsesDefaultAndIgnoresRequestEffort(t *testing.T) {
+	models := autoPolicyModels()
+	models[0].ReasoningEffort = "medium"
+	r := newAutoPolicyTestRouter(t, models, autoDutyPolicyConfig())
+	conv := autoPolicyConversation()
+	conv.WorkflowMetadataVersion = 1
+	conv.WorkflowStage, conv.WorkflowStageProvided = "review", true
+	conv.WorkflowTaskType = "design"
+	conv.ReasoningEffort = "max"
+	route, err := r.ResolveAuto(conv)
+	if err != nil || route.Model.ID != "default" || route.AutoUnknownReason != "metadata_v1" ||
+		route.AutoEffort != "medium" || !route.AutoEffortFixed {
+		t.Fatalf("v1 metadata or request effort changed duty default: route=%+v err=%v", route, err)
+	}
 }

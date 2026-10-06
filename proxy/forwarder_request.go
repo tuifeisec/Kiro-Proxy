@@ -38,6 +38,9 @@ func buildUpstreamURL(baseURL, endpoint string) string {
 }
 
 func resolveReasoningEffort(pre *Preflight, model *store.Model) string {
+	if pre != nil && !pre.IsClassifier && pre.AutoReasoningEffort != nil {
+		return *pre.AutoReasoningEffort
+	}
 	if pre != nil && pre.Conv != nil && !pre.IsClassifier {
 		if pre.Conv.ReasoningEffort != "" {
 			return pre.Conv.ReasoningEffort

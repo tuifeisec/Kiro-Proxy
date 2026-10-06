@@ -449,6 +449,7 @@ func applyLatencyMetric(status *store.ModelHealthStatus, metric modelLatencyMetr
 
 // Forward 执行完整的转发流程
 func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
+	bindAutoReasoningEffort(pre, route, nil)
 	if route == nil || route.Model == nil {
 		return nil, fmt.Errorf("无可用模型候选")
 	}
@@ -1841,7 +1842,7 @@ func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *sto
 		changeReasons = "none"
 	}
 
-	logger.Info("cache", fmt.Sprintf(
+	logger.InfoWithMeta("cache", fmt.Sprintf(
 		"prefix_audit: model=%s model_config=%s endpoint=%s api=%s conv=%s body=%d system_static=%d system_dynamic=%d system_hash=%s env=%d question=%d history=%d tools=%d raw_tools_hash=%s provider_tools_hash=%s tool_invalid=%d tool_schema_invalid=%d tool_websearch_filtered=%d tool_desc_truncated=%d tool_over_limit=%d tool_results=%d tool_blocks=%d tool_nontext_blocks=%d cache_key=%s expected_key=%s provider_input_items=%d provider_input_hash=%s previous_response=%v continuation=%v previous_audit=%v input_relation=%s prefix_changed=%v change_reasons=%s stable_items=%d added_items=%d removed_items=%d first_changed_item=%d",
 		statsModelID(m),
 		m.ID,
@@ -1880,7 +1881,19 @@ func (f *Forwarder) logPrefixDrift(logger *TrafficLogger, pre *Preflight, m *sto
 		diagnostics.AddedItems,
 		diagnostics.RemovedItems,
 		diagnostics.FirstChangedItem,
-	))
+	), LogMeta{Metadata: map[string]interface{}{
+		"conversation_id":     pre.Conv.ConversationID,
+		"workflow_id":         pre.Conv.WorkflowID,
+		"node_id":             pre.Conv.WorkflowNodeID,
+		"definition_id":       pre.Conv.WorkflowDefinitionID,
+		"definition_revision": pre.Conv.WorkflowDefinitionRevision,
+		"node_path":           pre.Conv.WorkflowNodePath,
+		"task_type":           pre.Conv.WorkflowTaskType,
+		"execution_id":        pre.Conv.WorkflowExecutionID,
+		"effective_effort":    resolveReasoningEffort(pre, m),
+		"model_config_id":     m.ID,
+		"outbound_model":      m.ModelID,
+	}})
 }
 
 func sanitizedHeaders(headers http.Header) map[string][]string {

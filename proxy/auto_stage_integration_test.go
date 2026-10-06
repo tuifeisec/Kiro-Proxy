@@ -265,12 +265,12 @@ func TestStageFixedRouteForwardLockFallbackAndUsageIntegration(t *testing.T) {
 
 	expectStage("finalize", "stage-finalize", "finalize", "stage:finalize")
 
-	// A tool continuation that reports another stage reuses the first target and audit stage.
+	// 同一执行域进入真实的新阶段，即使携带工具结果也选择新阶段目标。
 	followupPre, followupRoute, followupObservation := env.routeForward(t, "auto", "locked-scope", "tool continuation", stage("review"), true)
-	if !followupPre.Conv.WorkflowStageProvided || followupRoute.Model.ID != "implement" || followupRoute.AutoStage != "implement" ||
-		followupRoute.AutoReason != "conversation_lock:stage:implement" || followupRoute.AutoChannelIdentity != implementRoute.AutoChannelIdentity ||
-		followupObservation.Model != "upstream-implement" {
-		t.Fatalf("tool continuation did not preserve the initial stage target: pre=%+v route=%+v upstream=%+v", followupPre.Conv, followupRoute, followupObservation)
+	if !followupPre.Conv.WorkflowStageProvided || followupRoute.Model.ID != "shared-responses" || followupRoute.AutoStage != "review" ||
+		followupRoute.AutoReason != "tool_continuation_unlocked:stage:review" || followupRoute.AutoChannelIdentity == implementRoute.AutoChannelIdentity ||
+		followupObservation.Model != "upstream-shared-responses" {
+		t.Fatalf("新阶段未选择 review 目标: pre=%+v route=%+v upstream=%+v", followupPre.Conv, followupRoute, followupObservation)
 	}
 
 	// A new task without current tool results rereads the refreshed mapping in the same conversation.
@@ -312,15 +312,15 @@ func TestStageFixedRouteForwardLockFallbackAndUsageIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]int{
-		"run|auto:stage:run":                               1,
-		"shared-responses|auto:stage:plan":                 1,
-		"implement|auto:stage:implement":                   1,
-		"shared-responses|auto:stage:review":               1,
-		"finalize|auto:stage:finalize":                     1,
-		"implement|auto:conversation_lock:stage:implement": 1,
-		"implement-v2|auto:stage:implement":                1,
-		"default|auto:stage_unavailable":                   1,
-		"default|auto:stage_unknown:future_stage":          1,
+		"run|auto:stage:run":                                            1,
+		"shared-responses|auto:stage:plan":                              1,
+		"implement|auto:stage:implement":                                1,
+		"shared-responses|auto:stage:review":                            1,
+		"finalize|auto:stage:finalize":                                  1,
+		"shared-responses|auto:tool_continuation_unlocked:stage:review": 1,
+		"implement-v2|auto:stage:implement":                             1,
+		"default|auto:stage_unavailable":                                1,
+		"default|auto:stage_unknown:future_stage":                       1,
 	}
 	var autoRows int
 	for _, item := range page.Items {
@@ -356,7 +356,7 @@ func TestStageFixedRouteForwardLockFallbackAndUsageIntegration(t *testing.T) {
 	if got := len(env.requests); got != 0 {
 		t.Fatalf("unconsumed upstream observations: %d", got)
 	}
-	if implementPre.Conv.WorkflowStage != "implement" || followupRoute.AutoStage != implementPre.Conv.WorkflowStage {
-		t.Fatal("locked stage metadata was not retained")
+	if implementPre.Conv.WorkflowStage != "implement" || implementRoute.AutoStage != "implement" || followupRoute.AutoStage != "review" {
+		t.Fatal("阶段切换应保留原请求记录，并为新请求记录 review 阶段")
 	}
 }

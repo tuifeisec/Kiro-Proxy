@@ -156,7 +156,7 @@ func TestStageAutoScopeRoutesScopesAndMetersSelectedModel(t *testing.T) {
 		model, reason string
 	}{
 		{stageScopePreflight(t, "auto", "vibe", "", "run"), "fast", "stage:run"},
-		{stageScopeToolFollowup(t, stageScopePreflight(t, "auto", "vibe", "", "implement")), "fast", "conversation_lock:stage:run"},
+		{stageScopeToolFollowup(t, stageScopePreflight(t, "auto", "vibe", "", "implement")), "coding", "tool_continuation_unlocked:stage:implement"},
 		{stageScopePreflight(t, "auto", "context-gatherer", "branch-1", "plan"), "coding", "stage:plan"},
 		{newTask, "coding", "stage:implement"},
 	}
@@ -193,7 +193,7 @@ func TestStageAutoScopeRoutesScopesAndMetersSelectedModel(t *testing.T) {
 	callsMu.Lock()
 	gotCalls := strings.Join(calls, ",")
 	callsMu.Unlock()
-	if gotCalls != "fast,fast,coding,coding" {
+	if gotCalls != "fast,coding,coding,coding" {
 		t.Fatalf("upstream models=%s", gotCalls)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -276,7 +276,7 @@ func TestStageAutoScopeManualSelectionClearsOnlyItsScope(t *testing.T) {
 	if route, err := s.resolveMainRoute(pre); err != nil || route.Model.ID != "coding" || route.AutoReason != "tool_continuation_unlocked:stage:implement" {
 		t.Fatalf("reselected: %v/%v", route, err)
 	}
-	stageScopeApplyHeader(t, branch.Conv, "implement")
+	stageScopeApplyHeader(t, branch.Conv, "plan")
 	if route, err := s.resolveMainRoute(branch); err != nil || route.Model.ID != "default" || route.AutoReason != "conversation_lock:stage:plan" {
 		t.Fatalf("branch lock lost: %v/%v", route, err)
 	}

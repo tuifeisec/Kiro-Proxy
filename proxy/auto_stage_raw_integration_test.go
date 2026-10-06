@@ -53,7 +53,7 @@ func serveRawStage(t *testing.T, env *autoStageIntegrationEnv, req *http.Request
 	return recorder
 }
 
-func TestStageRawRuntimeInterceptorRoutesAndRetainsToolTarget(t *testing.T) {
+func TestStageRawRuntimeInterceptorRoutesAndFollowsStageBoundaries(t *testing.T) {
 	oldMode := GetProxyMode()
 	SetProxyMode(ModeForward)
 	t.Cleanup(func() { SetProxyMode(oldMode) })
@@ -66,7 +66,7 @@ func TestStageRawRuntimeInterceptorRoutesAndRetainsToolTarget(t *testing.T) {
 		{"run", "upstream-run", 0}, {"plan", "upstream-shared-responses", 0},
 		{"implement", "upstream-implement", 0}, {"review", "upstream-shared-responses", 0},
 		{"finalize", "upstream-finalize", 0}, {"investigate", "upstream-default", 0},
-		{"plan", "upstream-shared-responses", 0}, {"implement", "upstream-shared-responses", 1},
+		{"plan", "upstream-shared-responses", 0}, {"implement", "upstream-implement", 1},
 		{"implement", "upstream-implement", 0},
 	} {
 		resp := serveRawStage(t, env, rawStageRequest(t, "auto", "raw-same-thread", tc.stage, tc.tools))

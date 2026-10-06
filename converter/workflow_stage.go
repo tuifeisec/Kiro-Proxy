@@ -64,37 +64,28 @@ func ApplyWorkflowStageHeader(conv *ParsedConversation, value string) error {
 		return errors.New("workflow header must contain one JSON value")
 	}
 
-	for key := range fields {
-		switch key {
-		case "version", "stage", "workflowId", "conversationId", "agentMode", "agentContinuationId":
-		default:
-			return errors.New("workflow header contains an unknown field")
-		}
-	}
-
 	versionRaw, ok := fields["version"]
 	if !ok {
 		return errors.New("workflow header version is required")
 	}
 	var version int
-	if err := json.Unmarshal(versionRaw, &version); err != nil || version != 1 {
-		return errors.New("workflow header version must be 1")
+	if err := json.Unmarshal(versionRaw, &version); err != nil || (version != 1 && version != 2) {
+		return errors.New("workflow header version must be 1 or 2")
 	}
-
-	stage, err := workflowHeaderString(fields, "stage", true)
-	if err != nil {
-		return err
-	}
-	stage = strings.ToLower(strings.TrimSpace(stage))
-	if stage == "" || len(stage) > 128 {
-		return errors.New("workflow header stage must contain 1 to 128 bytes")
-	}
-	for i := 0; i < len(stage); i++ {
-		ch := stage[i]
-		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || strings.ContainsRune("._:/-", rune(ch)) {
+	for key := range fields {
+		switch key {
+		case "version", "workflowId", "conversationId", "agentMode", "agentContinuationId":
 			continue
+		case "stage":
+			if version == 1 {
+				continue
+			}
+		case "nodeId", "definitionId", "definitionRevision", "nodePath", "taskType", "executionId":
+			if version == 2 {
+				continue
+			}
 		}
-		return errors.New("workflow header stage contains an unsafe character")
+		return errors.New("workflow header contains an unknown field")
 	}
 
 	conversationID, err := workflowHeaderString(fields, "conversationId", true)
@@ -131,10 +122,67 @@ func ApplyWorkflowStageHeader(conv *ParsedConversation, value string) error {
 		}
 	}
 
-	conv.WorkflowStage = stage
-	conv.WorkflowStageSource = "request_header"
-	conv.WorkflowStageProvided = true
-	conv.WorkflowID = workflowID
+	// Stage the complete result so any metadata error leaves the conversation untouched.
+	bound := *conv
+	bound.WorkflowMetadataVersion = version
+	bound.WorkflowStage = ""
+	bound.WorkflowNodeID = ""
+	bound.WorkflowDefinitionID = ""
+	bound.WorkflowDefinitionRevision = ""
+	bound.WorkflowNodePath = ""
+	bound.WorkflowTaskType = ""
+	bound.WorkflowExecutionID = ""
+	if version == 1 {
+		stage, err := workflowHeaderString(fields, "stage", true)
+		if err != nil {
+			return err
+		}
+		stage = strings.ToLower(strings.TrimSpace(stage))
+		if stage == "" || len(stage) > 128 {
+			return errors.New("workflow header stage must contain 1 to 128 bytes")
+		}
+		for i := 0; i < len(stage); i++ {
+			ch := stage[i]
+			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || strings.ContainsRune("._:/-", rune(ch)) {
+				continue
+			}
+			return errors.New("workflow header stage contains an unsafe character")
+		}
+		bound.WorkflowStage = stage
+	} else {
+		entries := []struct {
+			key    string
+			target *string
+			limit  int
+		}{
+			{"nodeId", &bound.WorkflowNodeID, 128},
+			{"definitionId", &bound.WorkflowDefinitionID, 1024},
+			{"definitionRevision", &bound.WorkflowDefinitionRevision, 256},
+			{"nodePath", &bound.WorkflowNodePath, 1024},
+			{"taskType", &bound.WorkflowTaskType, 128},
+			{"executionId", &bound.WorkflowExecutionID, 512},
+		}
+		for _, entry := range entries {
+			text, err := workflowHeaderString(fields, entry.key, true)
+			if err != nil {
+				return err
+			}
+			if entry.key == "taskType" {
+				text = strings.TrimSpace(text)
+			} else if text != strings.TrimSpace(text) {
+				return errors.New("workflow header routing identity must not contain leading or trailing whitespace")
+			}
+			if len(text) > entry.limit || strings.ContainsAny(text, "\x00\r\n") {
+				return errors.New("workflow header routing identity is invalid or too long")
+			}
+			*entry.target = text
+		}
+		bound.WorkflowTaskType = strings.ToLower(bound.WorkflowTaskType)
+	}
+	bound.WorkflowStageSource = "request_header"
+	bound.WorkflowStageProvided = true
+	bound.WorkflowID = workflowID
+	*conv = bound
 	return nil
 }
 

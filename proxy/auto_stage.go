@@ -26,6 +26,12 @@ func workflowStageStatus(conv *converter.ParsedConversation) string {
 	if !conv.WorkflowStageProvided {
 		return "unavailable"
 	}
+	if conv.WorkflowMetadataVersion == 2 {
+		if conv.WorkflowTaskType == "" {
+			return "unknown"
+		}
+		return "declared"
+	}
 	switch conv.WorkflowStage {
 	case "run", "plan", "implement", "review", "finalize":
 		return "recognized"

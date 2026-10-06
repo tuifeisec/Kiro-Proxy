@@ -5,6 +5,7 @@ package api
 
 import (
 	"fmt"
+	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"net/http"
 	"strings"
@@ -20,6 +21,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		delete(settings, store.AutoRoutingStageFixedBackupSetting)
 		typesafeConfig, err := store.ParseTypesafeClassifierConfig(settings[store.TypesafeClassifierSetting])
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, safeTypesafeConfigError(settings[store.TypesafeClassifierSetting], err))
@@ -42,10 +44,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
+		if _, supplied := body[store.AutoRoutingStageFixedBackupSetting]; supplied {
+			writeError(w, http.StatusBadRequest, store.AutoRoutingStageFixedBackupSetting+" is reserved for the server")
+			return
+		}
 		if raw, ok := body[store.AutoRoutingSetting]; ok {
 			config, err := store.ParseAutoRoutingConfig(raw)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if config.Mode != store.AutoRoutingModeDutyFixed {
+				writeError(w, http.StatusBadRequest, "stage_fixed is read-only; explicitly migrate and save duty_fixed v2")
 				return
 			}
 			models, err := s.db.GetModels()
@@ -53,7 +63,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if err := store.ValidateAutoRoutingConfig(config, models); err != nil {
+			if err := router.ValidateAutoRoutingConfig(config, models); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -72,8 +82,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			body[store.TypesafeClassifierSetting] = normalized
 		}
-		if err := s.db.SetSettings(body); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		var saveErr error
+		if _, writesAuto := body[store.AutoRoutingSetting]; writesAuto {
+			saveErr = s.db.SetSettingsWithAutoRoutingMigration(body)
+		} else {
+			saveErr = s.db.SetSettings(body)
+		}
+		if saveErr != nil {
+			writeError(w, http.StatusInternalServerError, saveErr.Error())
 			return
 		}
 		// 如果修改了 active_mapping_id，同步更新路由器

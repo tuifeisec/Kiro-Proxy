@@ -29,9 +29,10 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		return nil, fmt.Errorf("raw Responses route has no selected model")
 	}
 	model := route.Model
-	if route.AutoMode != store.AutoRoutingModeStageFixed {
-		return nil, fmt.Errorf("raw Responses requires a stage_fixed route")
+	if route.AutoMode != store.AutoRoutingModeStageFixed && route.AutoMode != store.AutoRoutingModeDutyFixed {
+		return nil, fmt.Errorf("raw Responses requires a fixed Auto route")
 	}
+	bindAutoReasoningEffort(pre, route, nil)
 	if model.Provider != "openai" {
 		return nil, fmt.Errorf("raw Responses only supports provider openai; got %q", model.Provider)
 	}
@@ -248,7 +249,27 @@ func prepareRawResponsesBody(body []byte, pre *Preflight, model *store.Model) ([
 			shouldSetEffort = true
 		}
 	}
-	if shouldSetEffort {
+	if pre != nil && pre.AutoReasoningEffort != nil && !pre.IsClassifier {
+		effort := *pre.AutoReasoningEffort
+		if effort == "" {
+			delete(reasoning, "effort")
+		} else {
+			effortJSON, err := json.Marshal(effort)
+			if err != nil {
+				return nil, fmt.Errorf("encode fixed raw Responses reasoning effort: %w", err)
+			}
+			reasoning["effort"] = effortJSON
+		}
+		if len(reasoning) == 0 {
+			delete(root, "reasoning")
+		} else {
+			encodedReasoning, err := json.Marshal(reasoning)
+			if err != nil {
+				return nil, fmt.Errorf("encode fixed raw Responses reasoning: %w", err)
+			}
+			root["reasoning"] = encodedReasoning
+		}
+	} else if shouldSetEffort {
 		if effort := resolveReasoningEffort(pre, model); effort != "" {
 			effortJSON, err := json.Marshal(effort)
 			if err != nil {

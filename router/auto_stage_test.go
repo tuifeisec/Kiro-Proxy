@@ -105,7 +105,7 @@ func TestStageFixedToolLockRejectsNewUnsupportedImage(t *testing.T) {
 		t.Fatalf("initial stage target = %+v, error=%v", first, err)
 	}
 
-	c.WorkflowStage = "review"
+	c.WorkflowStage = "plan"
 	c.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool", Content: "done"}}
 	c.CurrentImages = []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "aW1hZ2U="}}}
 	if route, err := r.ResolveAuto(c); route != nil || err == nil ||
@@ -133,7 +133,7 @@ func TestStageFixedToolLockAndNewTaskConfiguration(t *testing.T) {
 	config := stagePolicyConfig()
 	config.StageModels.Plan = "replacement"
 	setAutoPolicyConfig(t, r, config)
-	c.WorkflowStage = "review"
+	c.WorkflowStage = "plan"
 	c.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool-1", Content: "done"}}
 	locked, err := r.ResolveAuto(c)
 	if err != nil || locked.Model.ID != first.Model.ID || locked.AutoStage != "plan" || locked.AutoReason != "conversation_lock:stage:plan" {
@@ -141,6 +141,7 @@ func TestStageFixedToolLockAndNewTaskConfiguration(t *testing.T) {
 	}
 	branch := *c
 	branch.ContinuationStateKey = "independent-branch"
+	branch.WorkflowStage = "review"
 	branchRoute, err := r.ResolveAuto(&branch)
 	if err != nil || branchRoute.Model.ID != "mode" {
 		t.Fatalf("branch shared lock: %+v %v", branchRoute, err)
@@ -151,6 +152,60 @@ func TestStageFixedToolLockAndNewTaskConfiguration(t *testing.T) {
 	next, err := r.ResolveAuto(c)
 	if err != nil || next.Model.ID != "replacement" {
 		t.Fatalf("new task did not load config: %+v %v", next, err)
+	}
+}
+
+func TestStageFixedToolContinuationFollowsAllFiveStageBoundaries(t *testing.T) {
+	for _, raw := range []bool{false, true} {
+		r := newAutoPolicyTestRouter(t, autoPolicyModels(), stagePolicyConfig())
+		resolve := r.ResolveAuto
+		if raw {
+			resolve = r.ResolveStageAuto
+		}
+		c := stageConversation("run")
+		c.WorkflowID = "workflow-1"
+		for index, step := range []struct{ stage, model string }{
+			{"run", "fast"}, {"plan", "task"}, {"implement", "reasoning"}, {"review", "mode"}, {"finalize", "long"},
+		} {
+			c.WorkflowStage = step.stage
+			if index > 0 {
+				c.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "previous-stage-tool", Content: "done"}}
+			}
+			route, err := resolve(c)
+			if err != nil || route.Model.ID != step.model || route.AutoStage != step.stage || strings.HasPrefix(route.AutoReason, "conversation_lock:") {
+				t.Fatalf("阶段边界未重新选模 raw=%t stage=%s route=%+v err=%v", raw, step.stage, route, err)
+			}
+			c.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "current-stage-tool", Content: "done"}}
+			locked, err := resolve(c)
+			if err != nil || locked.Model.ID != step.model || locked.AutoChannelIdentity != route.AutoChannelIdentity || locked.AutoReason != "conversation_lock:stage:"+step.stage {
+				t.Fatalf("同阶段续轮未保持渠道 raw=%t stage=%s route=%+v err=%v", raw, step.stage, locked, err)
+			}
+		}
+	}
+}
+
+func TestStageFixedWorkflowBoundaryAndMissingStage(t *testing.T) {
+	r := newAutoPolicyTestRouter(t, autoPolicyModels(), stagePolicyConfig())
+	c := stageConversation("plan")
+	c.WorkflowID = "workflow-1"
+	first, err := r.ResolveAuto(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := stagePolicyConfig()
+	config.StageModels.Plan = "replacement"
+	setAutoPolicyConfig(t, r, config)
+	c.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool", Content: "done"}}
+	c.WorkflowStageProvided = false
+	missing, err := r.ResolveAuto(c)
+	if err != nil || missing.Model.ID != first.Model.ID || missing.AutoReason != "conversation_lock:stage:plan" {
+		t.Fatalf("阶段缺失时不应猜测切换: route=%+v err=%v", missing, err)
+	}
+	c.WorkflowStageProvided = true
+	c.WorkflowID = "workflow-2"
+	next, err := r.ResolveAuto(c)
+	if err != nil || next.Model.ID != "replacement" || next.AutoReason != "tool_continuation_unlocked:stage:plan" {
+		t.Fatalf("新 workflow 应重新读取阶段配置: route=%+v err=%v", next, err)
 	}
 }
 
@@ -173,7 +228,7 @@ func TestStageFixedLockSurvivesDisabledConfigUntilNextTask(t *testing.T) {
 			}
 			config.Enabled = false
 			setAutoPolicyConfig(t, r, config)
-			c.WorkflowStage = "review"
+			c.WorkflowStage = "plan"
 			c.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool", Content: "done"}}
 			locked, err := resolve(c)
 			if err != nil || locked.Model.ID != first.Model.ID || locked.AutoStage != "plan" ||
@@ -211,7 +266,7 @@ func TestStageFixedLockSurvivesLegacyConfigErrorUntilNextTask(t *testing.T) {
 	}
 	r.Reload()
 
-	c.WorkflowStage = "review"
+	c.WorkflowStage = "plan"
 	c.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "tool"}}
 	route, err := r.ResolveStageAuto(c)
 	if err != nil || route.Model.ID != "task" || route.AutoStage != "plan" ||

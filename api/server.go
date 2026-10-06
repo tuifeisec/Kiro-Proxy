@@ -72,6 +72,7 @@ func (s *Server) registerRoutesTo(mux *http.ServeMux) {
 	mux.HandleFunc("/api/codex-oauth/start", s.handleStartCodexOAuth)
 	mux.HandleFunc("/api/codex-oauth/exchange", s.handleExchangeCodexOAuth)
 	mux.HandleFunc("/api/settings", s.handleSettings)
+	mux.HandleFunc("/api/auto-routing/observations", s.handleAutoRoutingObservations)
 	mux.HandleFunc("/api/test-model", s.handleTestModel)
 	mux.HandleFunc("/api/reload", s.handleReload)
 	mux.HandleFunc("/api/license-info", s.handleLicenseInfo)

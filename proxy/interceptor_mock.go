@@ -130,7 +130,7 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 
 		maxInput := m.ContextWindow
 		maxOutput := m.MaxTokens
-		stageAuto := m.AutoRoutingMode == store.AutoRoutingModeStageFixed
+		stageAuto := m.AutoRoutingMode == store.AutoRoutingModeStageFixed || m.AutoRoutingMode == store.AutoRoutingModeDutyFixed
 		// 修复 ML-05: 未知 token limit 不应伪装成具体高值
 		// 如果用户未配置，应在文档或 UI 中要求明确配置，或使用可追溯的 provider 能力表
 		// 当前作为过渡：如果为 0，使用相对保守的默认值并在日志中标记

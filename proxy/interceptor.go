@@ -43,6 +43,7 @@ type Preflight struct {
 	ConversationID       string
 	StartTime            time.Time
 	GroupReasoningEffort string
+	AutoReasoningEffort  *string // Auto 的固定有效等级；空字符串也覆盖客户端值。
 	usage                *requestUsageRecorder
 }
 
@@ -488,15 +489,25 @@ func (s *Server) setupCaptureResponse() {
 // resolveMainRoute 仅对 Kiro 的 Auto 主请求执行阶段策略。
 func (s *Server) resolveMainRoute(pre *Preflight) (*router.Route, error) {
 	if pre.Protocol == "kiro-runtime-responses" && pre.Conv != nil && strings.EqualFold(pre.SourceModel, "auto") {
-		return s.router.ResolveStageAuto(pre.Conv)
+		route, err := s.router.ResolveStageAuto(pre.Conv)
+		return bindAutoReasoningEffort(pre, route, err)
 	}
 	if pre.Protocol == "kiro" && pre.Conv != nil && strings.EqualFold(pre.SourceModel, "auto") {
-		return s.router.ResolveAuto(pre.Conv)
+		route, err := s.router.ResolveAuto(pre.Conv)
+		return bindAutoReasoningEffort(pre, route, err)
 	}
 	if pre.Conv != nil && !pre.IsClassifier {
 		s.router.ForgetAuto(pre.Conv)
 	}
 	return s.router.Resolve(pre.SourceModel), nil
+}
+
+func bindAutoReasoningEffort(pre *Preflight, route *router.Route, err error) (*router.Route, error) {
+	if err == nil && pre != nil && !pre.IsClassifier && route != nil && route.AutoEffortFixed {
+		effort := route.AutoEffort
+		pre.AutoReasoningEffort = &effort
+	}
+	return route, err
 }
 
 // logAutoRoute 只记录结构化选模依据，不将提示正文加入理由。
@@ -507,20 +518,37 @@ func (s *Server) logAutoRoute(pre *Preflight, route *router.Route) {
 	s.logger.InfoWithMeta("auto-routing", "Auto 选模: "+route.AutoReason+" → "+route.Model.ModelID, LogMeta{
 		Model: statsModelID(route.Model),
 		Metadata: map[string]interface{}{
-			"requested_model":          pre.SourceModel,
-			"auto_route_reason":        route.AutoReason,
-			"selected_model_config_id": route.Model.ID,
-			"auto_mode":                route.AutoMode,
-			"workflow_stage":           pre.Conv.WorkflowStage,
-			"workflow_stage_source":    pre.Conv.WorkflowStageSource,
-			"workflow_stage_status":    workflowStageStatus(pre.Conv),
-			"selected_stage":           route.AutoStage,
-			"outbound_model":           route.Model.ModelID,
-			"channel_identity":         route.AutoChannelIdentity,
-			"agent_task_type":          pre.Conv.AgentTaskType,
-			"agent_mode":               pre.Conv.AgentMode,
-			"chat_trigger_type":        pre.Conv.ChatTriggerType,
-			"continuation_state_key":   pre.Conv.ContinuationStateKey,
+			"requested_model":           pre.SourceModel,
+			"auto_route_reason":         route.AutoReason,
+			"selected_model_config_id":  route.Model.ID,
+			"auto_mode":                 route.AutoMode,
+			"workflow_stage":            pre.Conv.WorkflowStage,
+			"workflow_stage_source":     pre.Conv.WorkflowStageSource,
+			"workflow_stage_status":     workflowStageStatus(pre.Conv),
+			"selected_stage":            route.AutoStage,
+			"outbound_model":            route.Model.ModelID,
+			"channel_identity":          route.AutoChannelIdentity,
+			"workflow_metadata_version": pre.Conv.WorkflowMetadataVersion,
+			"workflow_id":               pre.Conv.WorkflowID,
+			"conversation_id":           pre.Conv.ConversationID,
+			"definition_id":             pre.Conv.WorkflowDefinitionID,
+			"definition_revision":       pre.Conv.WorkflowDefinitionRevision,
+			"node_path":                 pre.Conv.WorkflowNodePath,
+			"node_id":                   pre.Conv.WorkflowNodeID,
+			"task_type":                 pre.Conv.WorkflowTaskType,
+			"selected_duty":             route.AutoDuty,
+			"selection_source":          route.AutoSelectionSource,
+			"unknown_reason":            route.AutoUnknownReason,
+			"execution_id":              route.AutoExecutionID,
+			"lock_scope":                route.AutoLockScope,
+			"requested_effort":          pre.Conv.ReasoningEffort,
+			"effective_effort":          resolveReasoningEffort(pre, route.Model),
+			"effort_fixed":              route.AutoEffortFixed,
+			"effort_conflict":           route.AutoEffortFixed && pre.Conv.ReasoningEffort != "" && pre.Conv.ReasoningEffort != route.AutoEffort,
+			"agent_task_type":           pre.Conv.AgentTaskType,
+			"agent_mode":                pre.Conv.AgentMode,
+			"chat_trigger_type":         pre.Conv.ChatTriggerType,
+			"continuation_state_key":    pre.Conv.ContinuationStateKey,
 		},
 	})
 }

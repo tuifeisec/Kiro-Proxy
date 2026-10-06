@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -147,5 +148,168 @@ func TestValidateAutoRoutingConfigStageFixedTargets(t *testing.T) {
 	}
 	if err := ValidateAutoRoutingConfig(AutoRoutingConfig{Mode: AutoRoutingModeStageFixed, StageModels: AutoStageModels{Run: "missing"}}, models); err == nil {
 		t.Fatal("disabled draft with invalid configured target unexpectedly succeeded")
+	}
+}
+
+func TestParseAutoRoutingConfigV2DutyLayoutsAreStrict(t *testing.T) {
+	for _, layout := range []string{AutoRoutingLayoutStandard, AutoRoutingLayoutExpanded} {
+		t.Run(layout, func(t *testing.T) {
+			raw := v2AutoRoutingRaw(layout)
+			config, err := ParseAutoRoutingConfig(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.Version != AutoRoutingVersion || config.Mode != AutoRoutingModeDutyFixed || config.Layout != layout {
+				t.Fatalf("configuration header = %#v", config)
+			}
+			if got, want := len(config.DutyModels), len(AutoDutyNames(layout)); got != want {
+				t.Fatalf("duty count = %d, want %d", got, want)
+			}
+			if err := ValidateAutoRoutingConfig(config, v2AutoRoutingModels(layout)); err != nil {
+				t.Fatalf("valid config rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseAutoRoutingConfigV2RejectsUnknownDuplicateAndUnstableBindings(t *testing.T) {
+	base := v2AutoRoutingRaw(AutoRoutingLayoutStandard)
+	for name, raw := range map[string]string{
+		"unknown top-level":          strings.Replace(base, `"node_overrides":[]`, `"node_overrides":[],"future":true`, 1),
+		"duplicate top-level":        strings.Replace(base, `"enabled":true`, `"enabled":true,"enabled":true`, 1),
+		"unknown duty":               strings.Replace(base, `"duty_models":{`, `"duty_models":{"future":{"model_id":"m1","reasoning_effort":""},`, 1),
+		"duplicate node binding":     strings.Replace(base, `"node_bindings":[]`, `"node_bindings":[{"definition_id":"d","definition_revision":"1","node_path":"a","duty":"design"},{"definition_id":"d","definition_revision":"1","node_path":"a","duty":"design"}]`, 1),
+		"missing stable revision":    strings.Replace(base, `"node_bindings":[]`, `"node_bindings":[{"definition_id":"d","definition_revision":" ","node_path":"a","duty":"design"}]`, 1),
+		"unsupported effort":         strings.Replace(base, `"reasoning_effort":""`, `"reasoning_effort":"ultra"`, 1),
+		"wrong version":              strings.Replace(base, `"version":2`, `"version":3`, 1),
+		"unexpected stage schema":    strings.Replace(base, `"layout":"standard"`, `"layout":"unknown"`, 1),
+		"v2 unknown field in target": strings.Replace(base, `"model_id":"m1","reasoning_effort":""`, `"model_id":"m1","reasoning_effort":"","effort":"high"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseAutoRoutingConfig(raw); err == nil {
+				t.Fatalf("invalid v2 configuration unexpectedly parsed: %s", raw)
+			}
+		})
+	}
+}
+
+func TestValidateAutoRoutingConfigV2ReferencesEveryActiveTarget(t *testing.T) {
+	config, err := ParseAutoRoutingConfig(v2AutoRoutingRaw(AutoRoutingLayoutStandard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := v2AutoRoutingModels(AutoRoutingLayoutStandard)
+	if err := ValidateAutoRoutingConfig(config, models); err != nil {
+		t.Fatal(err)
+	}
+
+	config.DutyModels["design"] = AutoDutyTarget{ModelID: "missing", ReasoningEffort: "high"}
+	if err := ValidateAutoRoutingConfig(config, models); err == nil || !strings.Contains(err.Error(), "unknown model") {
+		t.Fatalf("unknown duty model error = %v", err)
+	}
+	config, err = ParseAutoRoutingConfig(v2AutoRoutingRaw(AutoRoutingLayoutStandard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(config.DutyModels, "design")
+	if err := ValidateAutoRoutingConfig(config, models); err == nil || !strings.Contains(err.Error(), "duty_models.design") {
+		t.Fatalf("missing enabled duty error = %v", err)
+	}
+
+	draft := AutoRoutingConfig{Version: AutoRoutingVersion, Mode: AutoRoutingModeDutyFixed, Layout: AutoRoutingLayoutStandard,
+		DutyModels: map[string]AutoDutyTarget{"design": {ReasoningEffort: ""}}, NodeBindings: []AutoNodeBinding{}, NodeOverrides: []AutoNodeOverride{}}
+	if err := ValidateAutoRoutingConfig(draft, models); err != nil {
+		t.Fatalf("disabled empty draft rejected: %v", err)
+	}
+}
+
+func TestValidateAutoRoutingConfigV2RequiresOverrideModelOnlyWhenEnabled(t *testing.T) {
+	raw := strings.Replace(v2AutoRoutingRaw(AutoRoutingLayoutStandard), `"node_overrides":[]`,
+		`"node_overrides":[{"definition_id":"d","definition_revision":"1","node_path":"a","model_id":"","reasoning_effort":""}]`, 1)
+	config, err := ParseAutoRoutingConfig(raw)
+	if err != nil {
+		t.Fatalf("empty override model is a valid draft schema: %v", err)
+	}
+	models := v2AutoRoutingModels(AutoRoutingLayoutStandard)
+	if err := ValidateAutoRoutingConfig(config, models); err == nil || !strings.Contains(err.Error(), "node_overrides[0].model_id") {
+		t.Fatalf("enabled override without a model was accepted: %v", err)
+	}
+	config.Enabled = false
+	if err := ValidateAutoRoutingConfig(config, models); err != nil {
+		t.Fatalf("disabled override draft was rejected: %v", err)
+	}
+}
+
+func TestParseAutoRoutingConfigV2PreservesMaximumStableIdentityWithoutTrimming(t *testing.T) {
+	config, err := ParseAutoRoutingConfig(v2AutoRoutingRaw(AutoRoutingLayoutStandard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.NodeBindings = []AutoNodeBinding{{DefinitionID: strings.Repeat("d", 1024), DefinitionRevision: strings.Repeat("r", 256),
+		NodePath: strings.Repeat("p", 1024), Duty: "investigation"}}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseAutoRoutingConfig(string(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parsed.NodeBindings[0]
+	if got.DefinitionID != config.NodeBindings[0].DefinitionID || got.DefinitionRevision != config.NodeBindings[0].DefinitionRevision || got.NodePath != config.NodeBindings[0].NodePath {
+		t.Fatal("maximum stable identity was changed during config parsing")
+	}
+
+	config.NodeBindings[0].NodePath = " steps/investigate"
+	encoded, err = json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAutoRoutingConfig(string(encoded)); err == nil || !strings.Contains(err.Error(), "leading or trailing whitespace") {
+		t.Fatalf("unstable whitespace identity error = %v", err)
+	}
+}
+
+func v2AutoRoutingRaw(layout string) string {
+	targets := make(map[string]AutoDutyTarget)
+	for _, duty := range AutoDutyNames(layout) {
+		targets[duty] = AutoDutyTarget{ModelID: "m1", ReasoningEffort: ""}
+	}
+	config := AutoRoutingConfig{Version: AutoRoutingVersion, Mode: AutoRoutingModeDutyFixed, Layout: layout,
+		Enabled: true, DefaultModelID: "m1", DutyModels: targets, NodeBindings: []AutoNodeBinding{}, NodeOverrides: []AutoNodeOverride{}}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+func v2AutoRoutingModels(layout string) []Model {
+	return []Model{{ID: "m1", Enabled: true, Provider: "openai"}}
+}
+
+func TestSetSettingsWithAutoRoutingMigrationRollsBackBothValuesOnBackupFailure(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "auto-routing-backup.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	legacy := `{"mode":"stage_fixed","enabled":true,"default_model_id":"m1","stage_models":{"run":"m1","plan":"m1","implement":"m1","review":"m1","finalize":"m1"}}`
+	if err := db.SetSetting(AutoRoutingSetting, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(`CREATE TRIGGER reject_auto_routing_backup BEFORE INSERT ON settings WHEN NEW.key = 'auto_routing_config_stage_fixed_backup' BEGIN SELECT RAISE(ABORT, 'backup blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSettingsWithAutoRoutingMigration(map[string]string{AutoRoutingSetting: v2AutoRoutingRaw(AutoRoutingLayoutStandard)}); err == nil {
+		t.Fatal("migration unexpectedly succeeded despite the backup trigger")
+	}
+	stored, err := db.GetSetting(AutoRoutingSetting)
+	if err != nil || stored != legacy {
+		t.Fatalf("failed migration changed the old config: %q (%v)", stored, err)
+	}
+	backup, err := db.GetSetting(AutoRoutingStageFixedBackupSetting)
+	if err != nil || backup != "" {
+		t.Fatalf("failed migration left a backup: %q (%v)", backup, err)
 	}
 }

@@ -32,7 +32,22 @@ func autoChannelIdentity(model *store.Model) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// 调用时已持有 autoMu 与 mu.RLock；阶段策略修改不能改写进行中的工具链。
+// 缺少同步阶段时保持已有工具锁；明确阶段和 workflow 身份变化时建立新阶段目标。
+func autoContinuationMatchesStage(conv *converter.ParsedConversation, lock autoModelLock) bool {
+	if conv.WorkflowMetadataVersion >= 2 {
+		stage := strings.ToLower(strings.TrimSpace(conv.WorkflowNodeID))
+		if stage == "" {
+			return true
+		}
+		return stage == lock.Stage && conv.WorkflowID == lock.WorkflowID
+	}
+	if !conv.WorkflowStageProvided {
+		return true
+	}
+	return strings.ToLower(strings.TrimSpace(conv.WorkflowStage)) == lock.Stage && conv.WorkflowID == lock.WorkflowID
+}
+
+// 调用时已持有 autoMu 与 mu.RLock；阶段内的配置修改不能改写进行中的工具链。
 func (r *Router) resolveAutoContinuationLocked(conv *converter.ParsedConversation, lock autoModelLock, scope string, now time.Time) (*Route, error) {
 	route, err := r.routeForLockedAutoModel(lock.ModelID, conv.ModelID)
 	if err != nil {
@@ -50,5 +65,16 @@ func (r *Router) resolveAutoContinuationLocked(conv *converter.ParsedConversatio
 	route.AutoMode = store.AutoRoutingModeStageFixed
 	route.AutoStage = lock.Stage
 	route.AutoChannelIdentity = lock.ChannelIdentity
+	route.AutoDuty = lock.Duty
+	route.AutoEffort = lock.Effort
+	route.AutoEffortFixed = lock.EffortFixed
+	route.AutoExecutionID = lock.ExecutionID
+	route.AutoLockScope = lock.LockScope
+	if route.AutoLockScope == "" {
+		route.AutoLockScope = "tool_continuation"
+	}
+	route.AutoSelectionSource = lock.SelectionSource
+	route.AutoUnknownReason = lock.UnknownReason
+	r.recordAutoObservationLocked(conv, route, route.AutoLockScope)
 	return route, nil
 }
