@@ -1,4 +1,4 @@
-// 跨视图共享的数字/成本格式化函数。同一语义只保留一份实现；
+// 跨视图共享的数字、美元费用和积分格式化函数。同一语义只保留一份实现；
 // 请求统计（RequestUsage）的 formatNum 与 Token 汇总（formatTokens）
 // 在尾零清理和千分位行为上有历史差异，为保持各页面显示不变而分别导出。
 export function formatTokens(n) {
@@ -17,9 +17,17 @@ export function formatNum(value) {
   return number.toLocaleString()
 }
 
+const creditsFormatter = new Intl.NumberFormat('en-US', {
+  useGrouping: false,
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+// Credits 仅在显示层按两位小数舍入。
 export function formatCredits(n) {
-  const value = Number(n || 0)
-  if (value >= 100) return '$' + value.toFixed(2)
-  if (value >= 1) return '$' + value.toFixed(4)
-  return '$' + value.toFixed(6)
+  return creditsFormatter.format(Number(n || 0))
+}
+
+export function formatUsd(n) {
+  return `$${Number(n || 0).toFixed(6)}`
 }

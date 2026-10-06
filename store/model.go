@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"kiro-proxy/billing"
+
 	"github.com/google/uuid"
 )
 
@@ -409,6 +411,9 @@ func defaultPricesForProvider(provider string) defaultModelPrices {
 		return defaultModelPrices{input: 5, output: 25, cacheInput: 0.5, cacheOutput: 6.25}
 	case "gemini":
 		return defaultModelPrices{input: 1.5, output: 9, cacheInput: 0.15, cacheOutput: 1.5}
+	case "typesafe":
+		// Typesafe 仅对输入 Token 收费，零输出/缓存价格表示免费。
+		return defaultModelPrices{input: 0.042}
 	default:
 		return defaultModelPrices{input: 5, output: 30, cacheInput: 0.5, cacheOutput: 6.25}
 	}
@@ -425,53 +430,42 @@ func (b CreditBreakdown) Total() float64 {
 	return b.Input + b.Output + b.CacheRead + b.CacheWrite
 }
 
-// CalculateCreditBreakdown 按现有计费规则拆分单次请求成本。
+// CalculateCreditBreakdown 按现有计费规则拆分单次请求美元成本。
 func CalculateCreditBreakdown(inputTokens, outputTokens, cacheRead, cacheWrite int, m *Model) CreditBreakdown {
 	if m == nil {
 		m = &Model{}
 	}
 	cp := *m
 	normalizeModelPrices(&cp)
-	if cacheRead < 0 {
-		cacheRead = 0
-	}
-	if cacheWrite < 0 {
-		cacheWrite = 0
-	}
-	regularInput := inputTokens - cacheRead - cacheWrite
-	if regularInput < 0 {
-		regularInput = 0
-	}
-	multiplier := cp.RateMultiplier / 1000000
+	breakdown := billing.CalculateBreakdown(inputTokens, outputTokens, cacheRead, cacheWrite, billing.Prices{
+		Input:          cp.InputPrice,
+		Output:         cp.OutputPrice,
+		CacheRead:      cp.CacheInputPrice,
+		CacheWrite:     cp.CacheOutputPrice,
+		RateMultiplier: cp.RateMultiplier,
+	})
 	return CreditBreakdown{
-		Input:      float64(regularInput) * cp.InputPrice * multiplier,
-		Output:     float64(outputTokens) * cp.OutputPrice * multiplier,
-		CacheRead:  float64(cacheRead) * cp.CacheInputPrice * multiplier,
-		CacheWrite: float64(cacheWrite) * cp.CacheOutputPrice * multiplier,
+		Input:      breakdown.Input,
+		Output:     breakdown.Output,
+		CacheRead:  breakdown.CacheRead,
+		CacheWrite: breakdown.CacheWrite,
 	}
 }
 
-// CalculateCredits 按每百万 token 的模型价格计算 Credit 用量。
+// CalculateCredits 返回按本地 CreditUSD 估算的积分用量。
 func CalculateCredits(inputTokens, outputTokens, cacheRead, cacheWrite int, m *Model) float64 {
 	if m == nil {
 		m = &Model{}
 	}
 	cp := *m
 	normalizeModelPrices(&cp)
-	if cacheRead < 0 {
-		cacheRead = 0
-	}
-	if cacheWrite < 0 {
-		cacheWrite = 0
-	}
-	regularInput := inputTokens - cacheRead - cacheWrite
-	if regularInput < 0 {
-		regularInput = 0
-	}
-	return ((float64(regularInput)*cp.InputPrice +
-		float64(outputTokens)*cp.OutputPrice +
-		float64(cacheRead)*cp.CacheInputPrice +
-		float64(cacheWrite)*cp.CacheOutputPrice) / 1000000) * cp.RateMultiplier
+	return billing.CalculateCredits(inputTokens, outputTokens, cacheRead, cacheWrite, billing.Prices{
+		Input:          cp.InputPrice,
+		Output:         cp.OutputPrice,
+		CacheRead:      cp.CacheInputPrice,
+		CacheWrite:     cp.CacheOutputPrice,
+		RateMultiplier: cp.RateMultiplier,
+	})
 }
 
 func (db *DB) UpdateCodexTokenAndUsage(m *Model) error {

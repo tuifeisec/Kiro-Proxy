@@ -243,7 +243,7 @@ func ContextUsageFrame(usedTokens, maxTokens int) []byte {
 func MeteringFrame(credits float64) []byte {
 	buf := make([]byte, 0, 64)
 	buf = append(buf, `{"unit":"credit","unitPlural":"credits","usage":`...)
-	buf = strconv.AppendFloat(buf, credits, 'f', 3, 64)
+	buf = strconv.AppendFloat(buf, credits, 'g', -1, 64)
 	buf = append(buf, '}')
 	return buildFrameFast(getCachedHeaders("meteringEvent"), buf)
 }

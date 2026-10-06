@@ -11,6 +11,7 @@ import (
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
 	"net/http"
+	"strings"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -186,6 +187,10 @@ func (s *Server) setupInterceptor() {
 		s.logger.InfoBytes("interceptor", fmt.Sprintf("解析完成: model=%s, classifier=%v, convId=%s",
 			pre.SourceModel, pre.IsClassifier, pre.ConversationID), pre.Body)
 
+		if resp, handled := s.tryTypesafeClassifier(req, pre); handled {
+			return req, resp
+		}
+
 		// 用户选择不使用 Classifier 时：不调用上游/官方，直接返回 chat 分类结果
 		if pre.IsClassifier && s.isClassifierDisabled() {
 			s.logger.Info("interceptor", "用户设置不使用 classifier，返回 chat 分类结果")
@@ -193,7 +198,7 @@ func (s *Server) setupInterceptor() {
 		}
 
 		// 彩蛋模型 GPT-8.8：不调用上游，也不调用 classifier
-		if pre.IsClassifier && (pre.SourceModel == "GPT-8.8" || s.mainModelForConversation(pre.ConversationID) == "GPT-8.8") {
+		if s.isEasterEggClassifier(pre) {
 			s.logger.Info("interceptor", "彩蛋模型跳过 classifier，返回伪造分类结果")
 			return req, s.buildEasterEggClassifierResponse(req)
 		}
@@ -206,7 +211,11 @@ func (s *Server) setupInterceptor() {
 		if pre.IsClassifier {
 			route = s.resolveClassifierRoute(pre)
 		} else {
-			route = s.router.Resolve(pre.SourceModel)
+			route, err = s.resolveMainRoute(pre)
+			if err != nil {
+				s.logger.Error("router", "Auto 任务路由失败: "+err.Error())
+				return req, errorResponse(req, http.StatusServiceUnavailable, err.Error())
+			}
 		}
 		if route == nil {
 			s.logger.Error("interceptor", "无可用路由: model="+pre.SourceModel)
@@ -229,15 +238,18 @@ func (s *Server) setupInterceptor() {
 		s.logger.InfoWithMeta("router", fmt.Sprintf("路由命中: %s → %s (%s)", pre.SourceModel, route.Model.ModelID, route.Model.BaseURL), LogMeta{
 			Model: statsModelID(route.Model),
 			Metadata: map[string]interface{}{
-				"source_model":    pre.SourceModel,
-				"provider":        route.Model.Provider,
-				"base_url":        route.Model.BaseURL,
-				"endpoint":        route.Model.Endpoint,
-				"protocol":        pre.Protocol,
-				"classifier":      pre.IsClassifier,
-				"conversation_id": pre.ConversationID,
+				"source_model":             pre.SourceModel,
+				"provider":                 route.Model.Provider,
+				"base_url":                 route.Model.BaseURL,
+				"endpoint":                 route.Model.Endpoint,
+				"protocol":                 pre.Protocol,
+				"classifier":               pre.IsClassifier,
+				"conversation_id":          pre.ConversationID,
+				"auto_route_reason":        route.AutoReason,
+				"selected_model_config_id": route.Model.ID,
 			},
 		})
+		s.logAutoRoute(pre, route)
 		pre.usage = newRequestUsageRecorder(s.db, time.Now(), route.Model, req.URL.Path, pre.Protocol)
 		pre.usage.setRoute(route)
 		pre.usage.setReasoningEffort(resolveReasoningEffort(pre, route.Model))
@@ -404,12 +416,53 @@ func (s *Server) setupCaptureResponse() {
 	})
 }
 
+// resolveMainRoute 仅对 Kiro 的 Auto 主请求执行任务策略。
+func (s *Server) resolveMainRoute(pre *Preflight) (*router.Route, error) {
+	if pre.Protocol == "kiro" && pre.Conv != nil && strings.EqualFold(pre.SourceModel, "auto") {
+		return s.router.ResolveAuto(pre.Conv)
+	}
+	if pre.Conv != nil && !pre.IsClassifier {
+		s.router.ForgetAuto(pre.Conv)
+	}
+	return s.router.Resolve(pre.SourceModel), nil
+}
+
+// logAutoRoute 只记录结构化选模依据，不将提示正文加入理由。
+func (s *Server) logAutoRoute(pre *Preflight, route *router.Route) {
+	if route.AutoReason == "" || pre.Conv == nil {
+		return
+	}
+	s.logger.InfoWithMeta("auto-routing", "Auto 选模: "+route.AutoReason+" → "+route.Model.ModelID, LogMeta{
+		Model: statsModelID(route.Model),
+		Metadata: map[string]interface{}{
+			"requested_model":          pre.SourceModel,
+			"auto_route_reason":        route.AutoReason,
+			"selected_model_config_id": route.Model.ID,
+			"agent_task_type":          pre.Conv.AgentTaskType,
+			"agent_mode":               pre.Conv.AgentMode,
+			"chat_trigger_type":        pre.Conv.ChatTriggerType,
+			"continuation_state_key":   pre.Conv.ContinuationStateKey,
+		},
+	})
+}
+
+// 主会话和独立 agent 分支分别记忆 classifier 跟随的实际模型。
+func classifierMemoryKey(pre *Preflight) string {
+	if pre.Conv != nil && pre.Conv.ContinuationStateKey != "" {
+		return pre.Conv.ContinuationStateKey
+	}
+	return pre.ConversationID
+}
+
 func (s *Server) resolveClassifierRoute(pre *Preflight) *router.Route {
 	if route := s.router.ResolveClassifier(); route != nil {
 		return route
 	}
 
-	if model := s.mainModelForConversation(pre.ConversationID); model != "" {
+	if model := s.mainModelForConversation(classifierMemoryKey(pre)); model != "" {
+		if strings.EqualFold(model, "auto") {
+			return s.router.Resolve(model)
+		}
 		if route := s.router.ResolveByID(model); route != nil {
 			return route
 		}
@@ -432,11 +485,23 @@ func (s *Server) rememberMainModel(pre *Preflight, route *router.Route) {
 		return
 	}
 
+	if strings.EqualFold(pre.SourceModel, "auto") && (route.AutoReason == "" || route.AutoReason == "policy_disabled") {
+		// 未启用任务策略的兼容路由保留分组；任务策略跟随已选实际模型。
+		s.rememberModelName(pre, "auto")
+		return
+	}
 	s.rememberModelName(pre, route.Model.ID)
 }
 
 func (s *Server) rememberEasterEggModel(pre *Preflight) {
+	if s.router != nil && pre != nil && pre.Conv != nil {
+		s.router.ForgetAuto(pre.Conv)
+	}
 	s.rememberModelName(pre, "GPT-8.8")
+}
+
+func (s *Server) isEasterEggClassifier(pre *Preflight) bool {
+	return pre.IsClassifier && (pre.SourceModel == "GPT-8.8" || s.mainModelForConversation(classifierMemoryKey(pre)) == "GPT-8.8")
 }
 
 func (s *Server) rememberModelName(pre *Preflight, modelName string) {
@@ -447,16 +512,17 @@ func (s *Server) rememberModelName(pre *Preflight, modelName string) {
 	s.classifierMu.Lock()
 	defer s.classifierMu.Unlock()
 
-	if pre.ConversationID != "" {
+	memoryKey := classifierMemoryKey(pre)
+	if memoryKey != "" {
 		now := time.Now()
 		if s.conversationPrunedAt.IsZero() || now.Sub(s.conversationPrunedAt) >= conversationPruneInterval || len(s.conversationModels) >= conversationModelMaxItems {
 			s.pruneConversationModelsLocked(now)
 			s.conversationPrunedAt = now
 		}
-		if _, exists := s.conversationModels[pre.ConversationID]; !exists && len(s.conversationModels) >= conversationModelMaxItems {
+		if _, exists := s.conversationModels[memoryKey]; !exists && len(s.conversationModels) >= conversationModelMaxItems {
 			s.evictOldestConversationModelLocked()
 		}
-		s.conversationModels[pre.ConversationID] = conversationModelEntry{modelName: modelName, lastSeen: now}
+		s.conversationModels[memoryKey] = conversationModelEntry{modelName: modelName, lastSeen: now}
 	}
 	s.lastMainModel = modelName
 }
@@ -475,6 +541,7 @@ func (s *Server) mainModelForConversation(conversationID string) string {
 			}
 			delete(s.conversationModels, conversationID)
 		}
+		return ""
 	}
 	return s.lastMainModel
 }

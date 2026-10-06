@@ -55,6 +55,18 @@ type anthropicToolBlock struct {
 
 // NewAnthropicStreamConverter 创建转换器并启动后台 goroutine
 func NewAnthropicStreamConverter(source io.ReadCloser, modelID string, maxTokens int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) *AnthropicStreamConverter {
+	if inputPrice <= 0 {
+		inputPrice = 5
+	}
+	if outputPrice <= 0 {
+		outputPrice = 25
+	}
+	if cacheInputPrice <= 0 {
+		cacheInputPrice = 0.5
+	}
+	if cacheOutputPrice <= 0 {
+		cacheOutputPrice = 6.25
+	}
 	pr, pw := io.Pipe()
 	c := &AnthropicStreamConverter{
 		pr:               pr,

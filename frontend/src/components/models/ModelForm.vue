@@ -747,9 +747,10 @@ async function handleExchangeOAuth() {
 
           <section class="mt-3 rounded-lg border border-line bg-surface p-3">
             <div class="mb-2.5 flex flex-wrap items-center justify-between gap-2">
-              <h3 class="text-sm font-semibold text-ink">Credit 价格配置 <span class="text-xs font-normal text-ink-3">（每百万 Token）</span></h3>
+              <h3 class="text-sm font-semibold text-ink">价格配置 <span class="text-xs font-normal text-ink-3">（USD / 百万 Token）</span></h3>
               <button type="button" class="text-xs font-medium text-primary-fg hover:underline" @click="applyDefaultPrices(form.provider)">⟳ 恢复当前 Provider 默认价格</button>
             </div>
+            <p class="mb-2.5 text-[11px] leading-4 text-ink-4">默认单价仅用于预填，请按实际渠道价格填写。积分按本地估算费用 ÷ 0.04 USD/Credit 计算。</p>
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-5">
               <div>
                 <label class="mb-1.5 block text-xs font-medium text-ink">输入价格</label>
@@ -784,7 +785,7 @@ async function handleExchangeOAuth() {
                 </div>
               </div>
               <div class="sm:border-l sm:border-line sm:pl-3">
-                <label class="mb-1.5 block text-xs font-medium text-ink">倍率</label>
+                <label class="mb-1.5 block text-xs font-medium text-ink">本地费用倍率</label>
                 <input v-model.number="form.rate_multiplier" type="number" step="0.01" min="0"
                   class="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink focus:border-primary-tint-line-strong focus:outline-none focus:ring-2 focus:ring-primary-ring" />
               </div>

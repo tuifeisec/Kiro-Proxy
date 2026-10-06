@@ -52,6 +52,18 @@ type GeminiStreamConverter struct {
 }
 
 func NewGeminiStreamConverter(source io.ReadCloser, modelID string, maxTokens int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) *GeminiStreamConverter {
+	if inputPrice <= 0 {
+		inputPrice = 1.5
+	}
+	if outputPrice <= 0 {
+		outputPrice = 9
+	}
+	if cacheInputPrice <= 0 {
+		cacheInputPrice = 0.15
+	}
+	if cacheOutputPrice <= 0 {
+		cacheOutputPrice = 1.5
+	}
 	pr, pw := io.Pipe()
 	c := &GeminiStreamConverter{
 		pr:               pr,

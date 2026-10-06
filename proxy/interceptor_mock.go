@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"io"
+	"kiro-proxy/billing"
 	"kiro-proxy/converter"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
@@ -107,6 +108,16 @@ func supportedInputTypesForModel(model store.Model) []string {
 // 3. 向后兼容：路由器仍支持按 Name 或 ModelID 匹配（兜底路径）
 func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 	models := s.router.EnabledModels()
+	if auto := s.router.AutoModel(); auto != nil {
+		// 真实配置通常使用 UUID；保留虚拟 auto 标识的唯一性。
+		for i := 0; i < len(models); i++ {
+			if models[i].ID == "auto" {
+				models = append(models[:i], models[i+1:]...)
+				i--
+			}
+		}
+		models = append(models, *auto)
+	}
 
 	entries := make([]map[string]interface{}, 0, len(models)+1)
 	var defaultEntry map[string]interface{}
@@ -211,21 +222,27 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 	return goproxy.NewResponse(req, "application/x-amz-json-1.0", http.StatusOK, string(body))
 }
 
-// buildUsageLimitsResponse 构造 Kiro 用量限制响应（伪造无限额度）
+// buildUsageLimitsResponse 返回本地估算积分的月度累计和可用额度。
 func (s *Server) buildUsageLimitsResponse(req *http.Request) *http.Response {
-	// Kiro 的 usage limits schema 实际要求 currentUsage 和 currentUsageWithPrecision 都是整数。
-	currentUsage := int64(s.stats.TodayCredits())
+	now := time.Now()
+	credits, err := s.stats.MonthlyCredits(now)
+	if err != nil {
+		s.logger.Error("interceptor", "读取月度积分失败: "+err.Error())
+		return errorResponse(req, http.StatusInternalServerError, "读取月度积分失败: "+err.Error())
+	}
+	currentUsage := int64(credits)
+	nextReset := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).Unix()
 	body, _ := json.Marshal(map[string]interface{}{
 		"daysUntilReset": nil,
 		"limits":         nil,
-		"nextDateReset":  2524608000, // 2050-01-01 00:00:00 UTC
+		"nextDateReset":  nextReset,
 		"overageConfiguration": map[string]interface{}{
 			"overageStatus": "ENABLED",
 		},
 		"subscriptionInfo": map[string]interface{}{
 			"overageCapability":            "OVERAGE_CAPABLE",
 			"subscriptionManagementTarget": "MANAGE",
-			"subscriptionTitle":            "Kiro-proxy",
+			"subscriptionTitle":            "Kiro-proxy（本地估算）",
 			"type":                         "Q_DEVELOPER_STANDALONE_PRO_PLUS",
 			"upgradeCapability":            "UPGRADE_CAPABLE",
 		},
@@ -236,16 +253,16 @@ func (s *Server) buildUsageLimitsResponse(req *http.Request) *http.Response {
 				"currentOverages":              0,
 				"currentOveragesWithPrecision": 0,
 				"currentUsage":                 currentUsage,
-				"currentUsageWithPrecision":    currentUsage,
+				"currentUsageWithPrecision":    credits,
 				"displayName":                  "Credit",
 				"displayNamePlural":            "Credits",
 				"freeTrialInfo":                nil,
-				"nextDateReset":                2524608000,
+				"nextDateReset":                nextReset,
 				"overageCap":                   999999,
 				"overageCapWithPrecision":      999999,
 				"overageCharges":               0,
 				"overageCredits":               nil,
-				"overageRate":                  5.21,
+				"overageRate":                  billing.CreditUSD,
 				"resourceType":                 "CREDIT",
 				"unit":                         "INVOCATIONS",
 				"usageLimit":                   520131452,

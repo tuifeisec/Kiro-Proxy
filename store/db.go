@@ -121,6 +121,9 @@ func (db *DB) migrate() error {
 			return err
 		}
 	}
+	if err := db.migrateCreditUnits(); err != nil {
+		return err
+	}
 
 	// 启动时清理过期数据。
 	db.CleanExpiredResponsesSessions()

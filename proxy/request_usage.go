@@ -19,19 +19,20 @@ import (
 
 // requestUsageRecorder 只记录请求指标，不接触或保存请求、响应正文。
 type requestUsageRecorder struct {
-	db        *store.DB
-	item      store.RequestUsage
-	model     *store.Model
-	start     time.Time
-	firstByte atomic.Int64
-	itemMu    sync.Mutex
-	traceMu   sync.Mutex
-	trace     requestTraceMetrics
-	errorMu   sync.Mutex
-	readError string
-	contentMu sync.Mutex
-	content   *contentMetrics
-	once      sync.Once
+	db         *store.DB
+	item       store.RequestUsage
+	model      *store.Model
+	start      time.Time
+	firstByte  atomic.Int64
+	itemMu     sync.Mutex
+	traceMu    sync.Mutex
+	trace      requestTraceMetrics
+	errorMu    sync.Mutex
+	readError  string
+	contentMu  sync.Mutex
+	content    *contentMetrics
+	once       sync.Once
+	autoReason string
 }
 
 func newRequestUsageRecorder(db *store.DB, start time.Time, model *store.Model, requestPath, protocol string) *requestUsageRecorder {
@@ -71,6 +72,10 @@ func (r *requestUsageRecorder) setRoute(route *router.Route) {
 	r.itemMu.Lock()
 	defer r.itemMu.Unlock()
 	r.item.RequestedModel = route.RequestedName
+	r.autoReason = route.AutoReason
+	if r.autoReason != "" {
+		r.item.DispatchReason = "auto:" + r.autoReason
+	}
 	if route.Group != nil {
 		r.item.RouteGroupID = route.Group.ID
 	}
@@ -93,7 +98,15 @@ func (r *requestUsageRecorder) setDispatchReason(reason string) {
 		return
 	}
 	r.itemMu.Lock()
-	r.item.DispatchReason = strings.TrimSpace(reason)
+	reason = strings.TrimSpace(reason)
+	if r.autoReason != "" {
+		r.item.DispatchReason = "auto:" + r.autoReason
+		if reason != "" {
+			r.item.DispatchReason += ";" + reason
+		}
+	} else {
+		r.item.DispatchReason = reason
+	}
 	r.itemMu.Unlock()
 }
 

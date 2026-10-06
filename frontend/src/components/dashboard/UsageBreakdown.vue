@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDailyStats } from '../../composables/useStats.js'
 import IconRefresh from '../icons/IconRefresh.vue'
 import { ALL_STATS_START_DATE, statsDaysAgo } from '../../utils/date.js'
-import { formatTokens } from '../../utils/format.js'
+import { formatCredits, formatTokens } from '../../utils/format.js'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -169,11 +169,6 @@ function cacheHitRate(row) {
   return (cached / totalIn) * 100
 }
 
-function formatCredits(n) {
-  const value = Number(n || 0)
-  if (value >= 1) return '$' + value.toFixed(2)
-  return '$' + value.toFixed(4)
-}
 </script>
 
 <template>
@@ -181,7 +176,7 @@ function formatCredits(n) {
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line-2 px-3 py-2">
       <div class="min-w-0">
         <h3 class="text-[14px] font-semibold text-ink">用量明细</h3>
-        <p class="mt-0.5 text-[12px] text-ink-3">按模型聚合 token、Credits 和缓存命中</p>
+        <p class="mt-0.5 text-[12px] text-ink-3">按模型聚合 Token、本地估算 Credits 和缓存命中</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <template v-if="!isAllRange">
@@ -215,7 +210,7 @@ function formatCredits(n) {
             <th class="py-1.5 pr-3 text-right font-medium">输入 Token</th>
             <th class="py-1.5 pr-3 text-right font-medium">输出 Token</th>
             <th class="py-1.5 pr-3 text-right font-medium">缓存命中</th>
-            <th class="py-1.5 pr-3 text-right font-medium">Credits</th>
+            <th class="py-1.5 pr-3 text-right font-medium">估算 Credits</th>
             <th class="py-1.5 text-right font-medium">命中率</th>
           </tr>
         </thead>

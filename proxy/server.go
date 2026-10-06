@@ -59,7 +59,7 @@ type Server struct {
 	conversationModels   map[string]conversationModelEntry
 	conversationPrunedAt time.Time
 	lastMainModel        string
-	licenseClient        *license.Client
+	licenseClient        licenseChecker
 	responsesFallbackMu  sync.Mutex
 	responsesFallback    map[string]fallbackResponseState
 	closeOnce            sync.Once

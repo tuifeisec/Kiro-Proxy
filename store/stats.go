@@ -168,7 +168,7 @@ func (s *Stats) Flush() {
 		"stat_output_tokens":  strconv.FormatInt(s.OutputTokens.Load(), 10),
 		"stat_cache_read":     strconv.FormatInt(s.CacheRead.Load(), 10),
 		"stat_cache_write":    strconv.FormatInt(s.CacheWrite.Load(), 10),
-		"stat_credits":        strconv.FormatFloat(s.loadCredits(), 'f', 6, 64),
+		"stat_credits":        strconv.FormatFloat(s.loadCredits(), 'g', -1, 64),
 	}
 	var flushErr error
 	for key, value := range settings {
@@ -455,6 +455,33 @@ func (s *Stats) TodayStats() DailyModelStats {
 // TodayCredits 返回按本地时间自然日（00:00）分界的当日 Credit 用量。
 func (s *Stats) TodayCredits() float64 {
 	return s.TodayStats().Credits
+}
+
+// MonthlyCredits 返回本地自然月的累计值，包括未刷盘增量。
+// 与刷盘互斥，防止在查询数据库与内存之间丢失或重复计算一批增量。
+func (s *Stats) MonthlyCredits(now time.Time) (float64, error) {
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	startDate, endDate := statsDay(start), statsDay(now)
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	var total float64
+	if s.db != nil {
+		rows, err := s.db.QueryDailyStats(startDate, endDate)
+		if err != nil {
+			return 0, err
+		}
+		for _, row := range rows {
+			total += row.Credits
+		}
+	}
+	s.dailyMu.Lock()
+	defer s.dailyMu.Unlock()
+	for _, row := range s.dailyStats {
+		if row.Date >= startDate && row.Date <= endDate {
+			total += row.Credits
+		}
+	}
+	return total, nil
 }
 
 type StatsSnapshot struct {

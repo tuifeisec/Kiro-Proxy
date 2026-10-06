@@ -161,7 +161,7 @@ const summaryCards = computed(() => [
   { label: '总请求数', value: Math.round(smoothRequests.value).toLocaleString(), sub: `错误 ${totals.value.errors} · 错误率 ${errorRate.value.toFixed(2)}%`, icon: IconUsage, tone: 'blue' },
   { label: '总 Token', value: formatNum(Math.round(smoothTotalTokens.value)), sub: `输入 ${formatNum(totals.value.input)} · 输出 ${formatNum(totals.value.output)}`, icon: IconDashboard, tone: 'green' },
   { label: '缓存命中', value: smoothCacheHitRate.value ? smoothCacheHitRate.value.toFixed(1) + '%' : '—', sub: `命中 ${formatNum(totals.value.cacheRead)} · 写入 ${formatNum(totals.value.cacheWrite)}`, icon: IconWifi, tone: 'purple' },
-  { label: 'Credits', value: formatCredits(smoothCredits.value), sub: '按模型价格累计', icon: IconArrowRight, tone: 'amber' },
+  { label: '本地估算 Credits', value: formatCredits(smoothCredits.value), sub: '按配置费用 ÷ 0.04 USD/Credit', icon: IconArrowRight, tone: 'amber' },
 ])
 
 const toneMap = {
@@ -279,7 +279,7 @@ onBeforeUnmount(() => {
       <header class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-[22px] font-semibold tracking-tight text-ink">用量明细</h1>
-          <p class="mt-0.5 text-[12px] text-ink-3">查看每日、模型维度的请求量、Token、缓存命中和 Credits 消耗。</p>
+          <p class="mt-0.5 text-[12px] text-ink-3">查看每日、模型维度的请求量、Token、缓存命中和本地估算 Credits。</p>
         </div>
         <div class="inline-flex items-center gap-1 ui-card p-1">
           <button
@@ -347,7 +347,7 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
-                <th class="py-2 pr-3 text-right font-medium">Credits</th>
+                <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
                 <th class="py-2 pr-3 text-right font-medium">命中率</th>
               </tr>
             </thead>
@@ -400,7 +400,7 @@ onBeforeUnmount(() => {
                   <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
                   <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                   <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
-                  <th class="py-2 pr-3 text-right font-medium">Credits</th>
+                  <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
                   <th class="py-2 pr-3 text-right font-medium">命中率</th>
                 </tr>
               </thead>
@@ -475,7 +475,7 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
-                <th class="py-2 pr-3 text-right font-medium">Credits</th>
+                <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
                 <th class="py-2 pr-3 text-right font-medium">命中率</th>
               </tr>
             </thead>

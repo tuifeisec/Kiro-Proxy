@@ -161,9 +161,9 @@ const cards = computed(() => [
     tone: 'purple',
   },
   {
-    label: 'Credits',
+    label: '本地估算 Credits',
     value: formatCredits(smoothCredits.value),
-    sub: '按模型价格累计',
+    sub: '按配置费用 ÷ 0.04 USD/Credit',
     icon: IconArrowRight,
     tone: 'amber',
   },

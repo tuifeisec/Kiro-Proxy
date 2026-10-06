@@ -14,9 +14,12 @@ import {
   deleteModelGroup,
 } from '../api/models.js'
 import ModelRow from '../components/models/ModelRow.vue'
+import AutoModelRow from '../components/models/AutoModelRow.vue'
 import ModelForm from '../components/models/ModelForm.vue'
 import ModelGroupsPanel from '../components/models/ModelGroupsPanel.vue'
 import ConfirmDialog from '../components/common/ConfirmDialog.vue'
+import SettingsDialog from '../components/common/SettingsDialog.vue'
+import AutoRoutingSettings from '../components/dashboard/AutoRoutingSettings.vue'
 import IconPlus from '../components/icons/IconPlus.vue'
 import IconModels from '../components/icons/IconModels.vue'
 import IconSearch from '../components/icons/IconSearch.vue'
@@ -29,6 +32,11 @@ const groups = ref([])
 const groupHealth = ref([])
 const activeView = ref('models')
 const showForm = ref(false)
+const showAutoSettings = ref(false)
+const autoSettingsDialog = ref(null)
+const autoSettingsBusy = ref(false)
+const autoSettingsDirty = ref(false)
+const autoSummaryRefreshToken = ref(0)
 const editingModel = ref(null)
 const testResults = ref({})
 const testingIds = ref({})
@@ -237,7 +245,27 @@ function startGroupHealthRefresh() {
 
 async function refreshCurrentView() {
   if (activeView.value === 'groups') await Promise.all([loadModels(), loadGroups()])
-  else await loadModels()
+  else {
+    autoSummaryRefreshToken.value += 1
+    await loadModels()
+  }
+}
+
+function openAutoSettings() {
+  autoSettingsBusy.value = false
+  autoSettingsDirty.value = false
+  showAutoSettings.value = true
+}
+
+function closeAutoSettings() {
+  showAutoSettings.value = false
+  autoSettingsBusy.value = false
+  autoSettingsDirty.value = false
+}
+
+function handleAutoSaved() {
+  closeAutoSettings()
+  autoSummaryRefreshToken.value += 1
 }
 
 function openAdd() {
@@ -572,7 +600,7 @@ onBeforeUnmount(() => {
         {{ errorMessage }}
       </div>
 
-      <section v-if="activeView === 'models' && models.length > 0" class="overflow-hidden ui-card">
+      <section v-if="activeView === 'models'" class="overflow-hidden ui-card">
         <div class="overflow-x-auto">
           <div class="grid min-w-[1153px] grid-cols-[48px_205px_400px_225px_133px_142px] border-b border-line-2 bg-surface-2 text-[13px] font-medium leading-5 text-ink-3">
             <div class="px-3 py-2.5 text-center"> </div>
@@ -582,6 +610,12 @@ onBeforeUnmount(() => {
             <div class="px-3 py-2.5">状态 / 测试结果</div>
             <div class="px-1 py-2.5 text-left">操作</div>
           </div>
+
+          <AutoModelRow
+            :models="models"
+            :refresh-token="autoSummaryRefreshToken"
+            @configure="openAutoSettings"
+          />
 
           <ModelRow
             v-for="m in filteredModels"
@@ -601,18 +635,17 @@ onBeforeUnmount(() => {
             @refresh-codex="handleRefreshCodex(m)"
           />
 
-          <div v-if="filteredModels.length === 0" class="motion-appear flex min-w-[1153px] flex-col items-center justify-center py-16 text-ink-3">
+          <div v-if="models.length === 0" class="motion-appear flex min-w-[1153px] flex-col items-center justify-center border-t border-line-2 py-12 text-ink-3">
+            <IconModels class="mb-3 h-8 w-8" />
+            <p class="text-sm font-medium text-ink-2">暂无上游模型</p>
+            <p class="mt-1 text-xs">点击「新增模型」开始配置 Kiro 可用的上游模型</p>
+          </div>
+          <div v-else-if="filteredModels.length === 0" class="motion-appear flex min-w-[1153px] flex-col items-center justify-center border-t border-line-2 py-12 text-ink-3">
             <IconModels class="mb-3 h-8 w-8" />
             <p class="text-sm font-medium text-ink-2">没有匹配当前筛选条件的模型</p>
             <p class="mt-1 text-xs">可以清空搜索或切换筛选条件后重试</p>
           </div>
         </div>
-      </section>
-
-      <section v-else-if="activeView === 'models'" class="motion-appear flex flex-col items-center justify-center border border-dashed border-line-strong bg-surface py-20 text-ink-3 shadow-sm">
-        <IconModels class="mb-3 h-9 w-9" />
-        <p class="text-sm font-medium text-ink-2">暂无模型</p>
-        <p class="mt-1 text-xs">点击「新增模型」开始配置 Kiro 可用的上游模型</p>
       </section>
 
       <ModelGroupsPanel
@@ -649,5 +682,23 @@ onBeforeUnmount(() => {
       @confirm="confirmDelete"
       @cancel="closeDeleteModal"
     />
+
+    <SettingsDialog
+      v-if="showAutoSettings"
+      ref="autoSettingsDialog"
+      :visible="showAutoSettings"
+      title="Auto 按任务选模"
+      description="配置 Kiro 主生成请求中 Auto 的默认路由与任务规则。"
+      :busy="autoSettingsBusy"
+      :dirty="autoSettingsDirty"
+      @close="closeAutoSettings"
+    >
+      <AutoRoutingSettings
+        @busy="autoSettingsBusy = $event"
+        @dirty="autoSettingsDirty = $event"
+        @saved="handleAutoSaved"
+        @cancel="autoSettingsDialog?.requestClose()"
+      />
+    </SettingsDialog>
   </div>
 </template>

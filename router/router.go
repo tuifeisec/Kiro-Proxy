@@ -18,6 +18,7 @@ type Route struct {
 	CandidateGroups map[string]*store.ModelGroup
 	Group           *store.ModelGroup
 	RequestedName   string
+	AutoReason      string
 	// Stages 保留主组和 fallback 的阶段边界，避免调度策略跨阶段重排
 	// 每个阶段是一组候选，调度器必须先耗尽当前阶段才能进入下一阶段
 	Stages []RouteStage
@@ -34,9 +35,14 @@ type RouteStage struct {
 type Router struct {
 	db *store.DB
 
-	mu     sync.RWMutex
-	models []store.Model
-	groups []store.ModelGroup
+	mu            sync.RWMutex
+	models        []store.Model
+	groups        []store.ModelGroup
+	autoConfig    store.AutoRoutingConfig
+	autoConfigErr error
+
+	autoMu    sync.Mutex
+	autoLocks map[string]autoModelLock
 }
 
 // New 创建路由器并加载初始数据
@@ -59,12 +65,26 @@ func (r *Router) Reload() {
 		return
 	}
 
+	autoConfigRaw, autoConfigErr := r.db.GetSetting(store.AutoRoutingSetting)
+	autoConfig := store.AutoRoutingConfig{}
+	if autoConfigErr == nil {
+		autoConfig, autoConfigErr = store.ParseAutoRoutingConfig(autoConfigRaw)
+	}
+	if autoConfigErr == nil && autoConfig.Enabled {
+		autoConfigErr = store.ValidateAutoRoutingConfig(autoConfig, models)
+	}
+
 	r.mu.Lock()
 	r.models = models
 	r.groups = groups
+	r.autoConfig = autoConfig
+	r.autoConfigErr = autoConfigErr
 	r.mu.Unlock()
 
 	log.Printf("[router] 路由表已加载: %d 条模型配置, %d 个分组", len(models), len(groups))
+	if autoConfigErr != nil {
+		log.Printf("[router] Auto 任务路由配置无效: %v", autoConfigErr)
+	}
 }
 
 // Resolve 根据 Kiro 请求中的 modelId 找到模型配置
@@ -73,6 +93,10 @@ func (r *Router) Reload() {
 func (r *Router) Resolve(modelID string) *Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	if strings.EqualFold(modelID, "auto") {
+		return r.resolveAutoLocked(modelID)
+	}
 
 	// 优先按分组 UUID 精确匹配
 	for i := range r.groups {
@@ -145,6 +169,9 @@ func (r *Router) Resolve(modelID string) *Route {
 func (r *Router) ResolveByName(modelName string) *Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if strings.EqualFold(modelName, "auto") {
+		return r.resolveAutoLocked(modelName)
+	}
 	if route := r.resolveGroupByNameLocked(modelName); route != nil {
 		return route
 	}
@@ -213,25 +240,7 @@ func (r *Router) EnabledModels() []store.Model {
 			continue
 		}
 
-		// 修复 ML-04: 分组虚拟模型应聚合所有候选能力，而非只继承首候选
-		// 旧分组沿用候选一致时的默认值，新分组使用显式配置的统一默认值。
-		defaultReasoningEffort := group.ReasoningEffort
-		if defaultReasoningEffort == "" {
-			defaultReasoningEffort = groupReasoningEffort(route.Candidates)
-		}
-		virtual := store.Model{
-			ID:              group.ID,
-			Name:            group.Name,
-			Note:            group.Name, // 使用分组名称，不继承首候选备注
-			ImageInputMode:  groupImageInputMode(route.Candidates),
-			ContextWindow:   groupMinContextWindow(route.Candidates),
-			MaxTokens:       groupMinMaxTokens(route.Candidates),
-			ReasoningEffort: defaultReasoningEffort,
-			Provider:        "group", // 标记为分组，避免误用首候选 provider
-			RateMultiplier:  groupRateMultiplier(route.Candidates),
-			Enabled:         true,
-		}
-		result = append(result, virtual)
+		result = append(result, virtualGroupModel(group, route.Candidates))
 	}
 	for _, m := range r.models {
 		if m.Enabled {
@@ -239,6 +248,99 @@ func (r *Router) EnabledModels() []store.Model {
 		}
 	}
 	return result
+}
+
+// AutoModel 返回模型列表中可用于本地 Auto 别名的能力元数据。
+// 它与 Resolve("auto") 使用相同的目标选择规则，避免列表能力和实际路由目标脱节。
+func (r *Router) AutoModel() *store.Model {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.autoConfigErr != nil {
+		return nil
+	}
+	if r.autoConfig.Enabled {
+		return r.autoModelLocked()
+	}
+
+	route := r.resolveAutoLocked("auto")
+	if route == nil || route.Model == nil {
+		return nil
+	}
+
+	var model store.Model
+	if route.Group != nil {
+		model = virtualGroupModel(route.Group, route.Candidates)
+	} else {
+		model = *route.Model
+	}
+	model.ID = "auto"
+	model.Name = "Auto（默认路由）"
+	model.Note = model.Name
+	return &model
+}
+
+func virtualGroupModel(group *store.ModelGroup, candidates []*store.Model) store.Model {
+	// 分组虚拟模型聚合所有候选能力，而非只继承首候选。
+	defaultReasoningEffort := group.ReasoningEffort
+	if defaultReasoningEffort == "" {
+		defaultReasoningEffort = groupReasoningEffort(candidates)
+	}
+	return store.Model{
+		ID:              group.ID,
+		Name:            group.Name,
+		Note:            group.Name,
+		ImageInputMode:  groupImageInputMode(candidates),
+		ContextWindow:   groupMinContextWindow(candidates),
+		MaxTokens:       groupMinMaxTokens(candidates),
+		ReasoningEffort: defaultReasoningEffort,
+		Provider:        "group",
+		RateMultiplier:  groupRateMultiplier(candidates),
+		Enabled:         true,
+	}
+}
+
+func (r *Router) resolveAutoLocked(requestedName string) *Route {
+	for i := range r.groups {
+		group := &r.groups[i]
+		if group.Enabled && strings.EqualFold(group.Name, "auto") {
+			if route := r.routeForGroupLocked(group, requestedName); route != nil {
+				return route
+			}
+		}
+	}
+
+	for i := range r.models {
+		model := &r.models[i]
+		if !model.Enabled {
+			continue
+		}
+		name := model.Name
+		if name == "" {
+			name = model.ModelID
+		}
+		if strings.EqualFold(name, "auto") {
+			if route := r.routeForModelLocked(model, requestedName); route != nil {
+				return route
+			}
+		}
+	}
+
+	for i := range r.groups {
+		group := &r.groups[i]
+		if group.Enabled {
+			if route := r.routeForGroupLocked(group, requestedName); route != nil {
+				return route
+			}
+		}
+	}
+
+	for i := range r.models {
+		model := &r.models[i]
+		if model.Enabled {
+			return r.routeForModelLocked(model, requestedName)
+		}
+	}
+	return nil
 }
 
 // groupMinContextWindow 返回所有候选的最小上下文窗口（安全下界）

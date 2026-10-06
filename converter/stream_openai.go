@@ -21,6 +21,8 @@ import (
 	"log"
 	"strings"
 	"sync"
+
+	"kiro-proxy/billing"
 )
 
 // OpenAIStreamConverter 将 OpenAI SSE 流转换为 Kiro AWS Event Stream
@@ -494,7 +496,7 @@ type openAIPromptTokenDetail struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
-// calcCredits 根据 token 用量和每百万 token 单价计算 credit 消耗。
+// calcCredits 根据 token 用量和每百万 token 单价计算本地估算积分。
 func calcCredits(inputTokens, outputTokens, cacheRead, cacheWrite int, inputPrice, outputPrice, cacheInputPrice, cacheOutputPrice, rateMultiplier float64) float64 {
 	if inputPrice <= 0 {
 		inputPrice = 5
@@ -508,14 +510,13 @@ func calcCredits(inputTokens, outputTokens, cacheRead, cacheWrite int, inputPric
 	if cacheOutputPrice <= 0 {
 		cacheOutputPrice = inputPrice * 1.25
 	}
-	regularInput := inputTokens - cacheRead - cacheWrite
-	if regularInput < 0 {
-		regularInput = 0
-	}
-	return ((float64(regularInput)*inputPrice +
-		float64(outputTokens)*outputPrice +
-		float64(cacheRead)*cacheInputPrice +
-		float64(cacheWrite)*cacheOutputPrice) / 1000000) * normalizeRateMultiplier(rateMultiplier)
+	return billing.CalculateCredits(inputTokens, outputTokens, cacheRead, cacheWrite, billing.Prices{
+		Input:          inputPrice,
+		Output:         outputPrice,
+		CacheRead:      cacheInputPrice,
+		CacheWrite:     cacheOutputPrice,
+		RateMultiplier: normalizeRateMultiplier(rateMultiplier),
+	})
 }
 
 func normalizeRateMultiplier(rateMultiplier float64) float64 {

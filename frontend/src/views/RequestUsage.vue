@@ -6,7 +6,7 @@ import IconSearch from '../components/icons/IconSearch.vue'
 import IconCopy from '../components/icons/IconCopy.vue'
 import { useToast } from '../composables/useToast.js'
 import { statsDaysAgo } from '../utils/date.js'
-import { formatNum } from '../utils/format.js'
+import { formatCredits, formatNum, formatUsd } from '../utils/format.js'
 
 const items = ref([])
 const summary = ref({})
@@ -135,8 +135,11 @@ function streamingDuration(item) {
   return Math.max(0, Number(item.duration_ms || 0) - Number(item.first_byte_ms || 0))
 }
 
-function formatCredits(value) {
-  return `$${Number(value || 0).toFixed(6)}`
+function totalCostUsd(item) {
+  return Number(item.input_cost || 0)
+    + Number(item.output_cost || 0)
+    + Number(item.cache_read_cost || 0)
+    + Number(item.cache_write_cost || 0)
 }
 
 function totalTokens(item) {
@@ -278,7 +281,7 @@ const cards = computed(() => [
   { label: '请求数', value: formatNum(summary.value.requests), sub: `异常 ${formatNum(summary.value.errors)}`, tone: 'blue' },
   { label: '输入 Token', value: formatNum(summaryInputTokens.value), sub: `不含缓存 · 缓存读取 ${formatNum(summary.value.cache_read_tokens)}`, tone: 'cyan' },
   { label: '输出 Token', value: formatNum(summary.value.output_tokens), sub: `缓存写入 ${formatNum(summary.value.cache_write_tokens)}`, tone: 'violet' },
-  { label: '成本', value: formatCredits(summary.value.credits), sub: `首字 ${formatDuration(summary.value.average_first_byte_ms)} · 首内容 ${formatMeasuredDuration(summary.value.average_first_content_ms, Number(summary.value.content_samples || 0) > 0)} · 耗时 ${formatDuration(summary.value.average_duration_ms)}`, tone: 'amber' },
+  { label: '本地估算 Credits', value: formatCredits(summary.value.credits), sub: `首字 ${formatDuration(summary.value.average_first_byte_ms)} · 首内容 ${formatMeasuredDuration(summary.value.average_first_content_ms, Number(summary.value.content_samples || 0) > 0)} · 耗时 ${formatDuration(summary.value.average_duration_ms)}`, tone: 'amber' },
 ])
 
 function contentMeasurementStatus(item) {
@@ -416,7 +419,7 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 font-medium">端点</th>
                 <th class="py-2 pr-3 font-medium">状态</th>
                 <th class="py-2 pr-3 text-right font-medium">Tokens</th>
-                <th class="py-2 pr-3 text-right font-medium">成本</th>
+                <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
                 <th class="py-2 pr-3 text-right font-medium">首字</th>
                 <th class="py-2 pr-3 text-right font-medium">总耗时</th>
                 <th class="py-2 pr-3 font-medium">推理</th>
@@ -494,14 +497,15 @@ onBeforeUnmount(() => {
           <div class="mt-2 flex justify-between border-t border-[#334155] pt-2"><span>总 Token</span><span class="font-semibold text-[#22d3ee]">{{ formatNum(totalTokens(tooltip.item)) }}</span></div>
         </template>
         <template v-else-if="tooltip.type === 'cost'">
-          <div class="mb-2 text-[14px] font-semibold">成本明细</div>
+          <div class="mb-2 text-[14px] font-semibold">费用明细（USD）</div>
           <div class="space-y-1.5 text-[#cbd5e1]">
-            <div class="flex justify-between"><span>输入成本</span><span class="font-medium text-white">{{ formatCredits(tooltip.item.input_cost) }}</span></div>
-            <div class="flex justify-between"><span>输出成本</span><span class="font-medium text-white">{{ formatCredits(tooltip.item.output_cost) }}</span></div>
-            <div class="flex justify-between"><span>缓存读取成本</span><span class="font-medium text-white">{{ formatCredits(tooltip.item.cache_read_cost) }}</span></div>
-            <div class="flex justify-between"><span>缓存写入成本</span><span class="font-medium text-white">{{ formatCredits(tooltip.item.cache_write_cost) }}</span></div>
+            <div class="flex justify-between"><span>输入费用（USD）</span><span class="font-medium text-white">{{ formatUsd(tooltip.item.input_cost) }}</span></div>
+            <div class="flex justify-between"><span>输出费用（USD）</span><span class="font-medium text-white">{{ formatUsd(tooltip.item.output_cost) }}</span></div>
+            <div class="flex justify-between"><span>缓存读取费用（USD）</span><span class="font-medium text-white">{{ formatUsd(tooltip.item.cache_read_cost) }}</span></div>
+            <div class="flex justify-between"><span>缓存写入费用（USD）</span><span class="font-medium text-white">{{ formatUsd(tooltip.item.cache_write_cost) }}</span></div>
           </div>
-          <div class="mt-2 flex justify-between border-t border-[#334155] pt-2"><span>总成本</span><span class="font-semibold text-[#22d3ee]">{{ formatCredits(tooltip.item.credits) }}</span></div>
+          <div class="mt-2 flex justify-between border-t border-[#334155] pt-2"><span>费用合计（USD）</span><span class="font-semibold text-[#22d3ee]">{{ formatUsd(totalCostUsd(tooltip.item)) }}</span></div>
+          <div class="mt-1 flex justify-between"><span>本地估算 Credits</span><span class="font-semibold text-[#22d3ee]">{{ formatCredits(tooltip.item.credits) }}</span></div>
         </template>
         <template v-else>
           <div class="mb-2 text-[14px] font-semibold">{{ tooltip.type === 'total' ? '总耗时明细' : '首字耗时明细' }}</div>
@@ -567,14 +571,14 @@ onBeforeUnmount(() => {
             </section>
 
             <section class="border-b border-line-2 px-4 py-4">
-              <h3 class="mb-3 text-[13px] font-semibold text-ink">Token 与成本</h3>
+              <h3 class="mb-3 text-[13px] font-semibold text-ink">Token 与估算积分</h3>
               <dl class="grid grid-cols-2 gap-x-5 gap-y-2.5 text-[12px]">
                 <div><dt class="text-ink-4">普通输入</dt><dd class="mt-0.5 font-medium tabular-nums text-primary-fg">{{ formatNum(regularInputTokens(selectedItem)) }}</dd></div>
                 <div><dt class="text-ink-4">输出</dt><dd class="mt-0.5 font-medium tabular-nums text-accent">{{ formatNum(selectedItem.output_tokens) }}</dd></div>
                 <div><dt class="text-ink-4">缓存读取</dt><dd class="mt-0.5 font-medium tabular-nums text-success">{{ formatNum(selectedItem.cache_read_tokens) }}</dd></div>
                 <div><dt class="text-ink-4">缓存写入</dt><dd class="mt-0.5 font-medium tabular-nums text-success">{{ formatNum(selectedItem.cache_write_tokens) }}</dd></div>
                 <div><dt class="text-ink-4">总 Token</dt><dd class="mt-0.5 font-semibold tabular-nums text-ink">{{ formatNum(totalTokens(selectedItem)) }}</dd></div>
-                <div><dt class="text-ink-4">总成本</dt><dd class="mt-0.5 font-semibold tabular-nums text-warning">{{ formatCredits(selectedItem.credits) }}</dd></div>
+                <div><dt class="text-ink-4">本地估算 Credits</dt><dd class="mt-0.5 font-semibold tabular-nums text-warning">{{ formatCredits(selectedItem.credits) }}</dd></div>
               </dl>
             </section>
 
