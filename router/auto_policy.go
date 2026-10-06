@@ -6,23 +6,35 @@ import (
 	"kiro-proxy/store"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 const autoLockIdleLimit = time.Hour
 
 type autoModelLock struct {
-	ModelID  string
-	LastUsed time.Time
+	ModelID         string
+	LastUsed        time.Time
+	Stage           string
+	Reason          string
+	ChannelIdentity string
 }
 
-// ResolveAuto 为 Kiro 主生成请求按明确字段和能力配置选择一个实际模型。
+// ResolveAuto 为 Kiro 主生成请求按当前同步阶段选择一个实际模型。
 func (r *Router) ResolveAuto(conv *converter.ParsedConversation) (*Route, error) {
+	return r.resolveAuto(conv, false)
+}
+
+// ResolveStageAuto 用于只提供同步路由元数据的原生 Responses 请求。
+// 没有有效阶段工具锁时，该入口要求启用五阶段路由。
+func (r *Router) ResolveStageAuto(conv *converter.ParsedConversation) (*Route, error) {
+	return r.resolveAuto(conv, true)
+}
+
+func (r *Router) resolveAuto(conv *converter.ParsedConversation, requireStage bool) (*Route, error) {
 	if conv == nil {
 		return nil, fmt.Errorf("auto routing requires a parsed conversation")
 	}
 	if conv.IsClassifier || !strings.EqualFold(conv.ModelID, "auto") {
-		return nil, fmt.Errorf("auto task routing requires a Kiro main request with modelId=auto")
+		return nil, fmt.Errorf("auto stage routing requires a Kiro main request with modelId=auto")
 	}
 
 	now := time.Now()
@@ -33,8 +45,17 @@ func (r *Router) ResolveAuto(conv *converter.ParsedConversation) (*Route, error)
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	// 阶段工具续轮先核对原目标；保存新策略或关闭策略只影响下一新任务。
+	if scopeKey != "" && hasToolContinuation(conv) {
+		if lock, ok := r.autoLocks[scopeKey]; ok {
+			return r.resolveAutoContinuationLocked(conv, lock, scopeKey, now)
+		}
+	}
 	if r.autoConfigErr != nil {
 		return nil, fmt.Errorf("auto routing configuration is invalid: %w", r.autoConfigErr)
+	}
+	if requireStage && (!r.autoConfig.Enabled || r.autoConfig.Mode != store.AutoRoutingModeStageFixed) {
+		return nil, fmt.Errorf("raw Kiro Responses Auto routing requires enabled stage_fixed mode")
 	}
 	if !r.autoConfig.Enabled {
 		if scopeKey != "" {
@@ -46,22 +67,6 @@ func (r *Router) ResolveAuto(conv *converter.ParsedConversation) (*Route, error)
 		}
 		route.AutoReason = "policy_disabled"
 		return route, nil
-	}
-
-	if scopeKey != "" && hasToolContinuation(conv) {
-		if lock, ok := r.autoLocks[scopeKey]; ok {
-			route, err := r.routeForLockedAutoModel(lock.ModelID, conv.ModelID)
-			if err != nil {
-				return nil, err
-			}
-			if hasNonEmptyImages(conv) && !modelSupportsImages(route.Model) {
-				return nil, fmt.Errorf("auto conversation is locked to model %q, which does not support image input", lock.ModelID)
-			}
-			lock.LastUsed = now
-			r.autoLocks[scopeKey] = lock
-			route.AutoReason = "conversation_lock"
-			return route, nil
-		}
 	}
 
 	modelID, policyReason, err := selectAutoTarget(conv, r.autoConfig)
@@ -76,14 +81,21 @@ func (r *Router) ResolveAuto(conv *converter.ParsedConversation) (*Route, error)
 		return nil, fmt.Errorf("auto routing target %q does not support image input", modelID)
 	}
 
+	selectionReason := policyReason
 	if hasToolContinuation(conv) {
 		policyReason = "tool_continuation_unlocked:" + policyReason
 	}
+	route.AutoMode = store.AutoRoutingModeStageFixed
+	if conv.WorkflowStageProvided {
+		route.AutoStage = strings.ToLower(strings.TrimSpace(conv.WorkflowStage))
+	}
+	route.AutoChannelIdentity = autoChannelIdentity(route.Model)
 	if scopeKey != "" {
 		if r.autoLocks == nil {
 			r.autoLocks = make(map[string]autoModelLock)
 		}
-		r.autoLocks[scopeKey] = autoModelLock{ModelID: route.Model.ID, LastUsed: now}
+		r.autoLocks[scopeKey] = autoModelLock{ModelID: route.Model.ID, LastUsed: now,
+			Stage: route.AutoStage, Reason: selectionReason, ChannelIdentity: route.AutoChannelIdentity}
 	}
 	route.AutoReason = policyReason
 	return route, nil
@@ -133,55 +145,22 @@ func (r *Router) routeForLockedAutoModel(modelID, requestedName string) (*Route,
 }
 
 func selectAutoTarget(conv *converter.ParsedConversation, config store.AutoRoutingConfig) (string, string, error) {
-	if hasNonEmptyImages(conv) {
-		if config.VisionModelID == "" {
-			return "", "", fmt.Errorf("auto routing requires a configured vision model for image input")
-		}
-		return config.VisionModelID, "vision_required", nil
+	if conv == nil || !conv.WorkflowStageProvided {
+		return config.DefaultModelID, "stage_unavailable", nil
 	}
-
-	for _, rule := range config.TaskRules {
-		value := autoTaskFieldValue(conv, rule.Field)
-		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(rule.Value)) {
-			field := strings.ToLower(strings.TrimSpace(rule.Field))
-			return rule.ModelID, "task:" + field + "=" + strings.TrimSpace(rule.Value), nil
-		}
+	stage := strings.ToLower(strings.TrimSpace(conv.WorkflowStage))
+	if modelID := config.StageModels.ModelID(stage); modelID != "" {
+		return modelID, "stage:" + stage, nil
 	}
-
-	reasoningEffort := strings.ToLower(strings.TrimSpace(conv.ReasoningEffort))
-	if (reasoningEffort == "high" || reasoningEffort == "xhigh" || reasoningEffort == "max") && config.ReasoningModelID != "" {
-		return config.ReasoningModelID, "high_reasoning", nil
-	}
-
-	chars := conversationUnicodeChars(conv)
-	if chars >= config.LongContextMinChars && config.LongContextModelID != "" {
-		return config.LongContextModelID, "long_context", nil
-	}
-	if !hasFastRouteBlockers(conv) && chars <= config.FastMaxChars && config.FastModelID != "" {
-		return config.FastModelID, "fast_chat", nil
-	}
-	if config.DefaultModelID == "" {
-		return "", "", fmt.Errorf("auto routing has no configured default model")
-	}
-	return config.DefaultModelID, "default", nil
-}
-
-func autoTaskFieldValue(conv *converter.ParsedConversation, field string) string {
-	switch strings.ToLower(strings.TrimSpace(field)) {
-	case "agent_task_type":
-		return conv.AgentTaskType
-	case "agent_mode":
-		return conv.AgentMode
-	case "chat_trigger_type":
-		return conv.ChatTriggerType
-	default:
-		return ""
-	}
+	return config.DefaultModelID, "stage_unknown:" + stage, nil
 }
 
 func hasNonEmptyImages(conv *converter.ParsedConversation) bool {
 	if conv == nil {
 		return false
+	}
+	if conv.RawResponsesHasImages {
+		return true
 	}
 	for _, image := range conv.CurrentImages {
 		if strings.TrimSpace(image.Source.Bytes) != "" {
@@ -206,80 +185,18 @@ func modelSupportsImages(model *store.Model) bool {
 	return err == nil && mode == store.ImageInputSupported
 }
 
-func hasFastRouteBlockers(conv *converter.ParsedConversation) bool {
-	if len(conv.RawTools) > 0 || len(conv.CurrentToolResults) > 0 || hasNonEmptyImages(conv) {
-		return true
-	}
-	for _, entry := range conv.History {
-		if len(entry.ToolUses) > 0 || len(entry.ToolResults) > 0 {
-			return true
-		}
-	}
-	effort := strings.ToLower(strings.TrimSpace(conv.ReasoningEffort))
-	return effort == "high" || effort == "xhigh" || effort == "max"
-}
-
 func hasToolContinuation(conv *converter.ParsedConversation) bool {
-	return conv != nil && len(conv.CurrentToolResults) > 0
-}
-
-func conversationUnicodeChars(conv *converter.ParsedConversation) int {
 	if conv == nil {
-		return 0
+		return false
 	}
-	total := unicodeChars(conv.SystemText) + unicodeChars(conv.CurrentContent)
-	total += toolResultUnicodeChars(conv.CurrentToolResults)
-	for _, raw := range conv.RawTools {
-		total += utf8.RuneCount(raw)
+	if conv.CurrentToolContinuation != nil {
+		return *conv.CurrentToolContinuation
 	}
-	for _, entry := range conv.History {
-		if entry.IsSystem {
-			continue
-		}
-		total += unicodeChars(entry.UserContent)
-		total += unicodeChars(entry.AssistantContent)
-		for _, use := range entry.ToolUses {
-			total += unicodeChars(use.Name)
-			total += utf8.RuneCount(use.Input)
-		}
-		total += toolResultUnicodeChars(entry.ToolResults)
-	}
-	return total
-}
-
-func toolResultUnicodeChars(results []converter.ParsedToolResult) int {
-	total := 0
-	for _, result := range results {
-		if len(result.Blocks) == 0 {
-			total += unicodeChars(result.Content)
-			continue
-		}
-		for _, block := range result.Blocks {
-			if len(block.Raw) > 0 {
-				total += utf8.RuneCount(block.Raw)
-			} else {
-				total += unicodeChars(block.Text)
-			}
-		}
-	}
-	return total
-}
-
-func unicodeChars(value string) int {
-	return utf8.RuneCountInString(value)
+	return len(conv.CurrentToolResults) > 0
 }
 
 func (r *Router) autoModelLocked() *store.Model {
-	candidateIDs := []string{
-		r.autoConfig.DefaultModelID,
-		r.autoConfig.VisionModelID,
-		r.autoConfig.ReasoningModelID,
-		r.autoConfig.LongContextModelID,
-		r.autoConfig.FastModelID,
-	}
-	for _, rule := range r.autoConfig.TaskRules {
-		candidateIDs = append(candidateIDs, rule.ModelID)
-	}
+	candidateIDs := append([]string{r.autoConfig.DefaultModelID}, r.autoConfig.StageModels.ModelIDs()...)
 
 	candidates := make([]*store.Model, 0, len(candidateIDs))
 	seen := make(map[string]bool, len(candidateIDs))
@@ -299,26 +216,35 @@ func (r *Router) autoModelLocked() *store.Model {
 		return nil
 	}
 
-	imageMode := store.ImageInputUnsupported
-	if r.autoConfig.VisionModelID != "" {
-		for _, candidate := range candidates {
-			if candidate.ID == r.autoConfig.VisionModelID && modelSupportsImages(candidate) {
-				imageMode = store.ImageInputSupported
-				break
-			}
+	imageMode := store.ImageInputSupported
+	for _, candidate := range candidates {
+		if !modelSupportsImages(candidate) {
+			imageMode = store.ImageInputUnsupported
+			break
 		}
 	}
-	name := "Auto（按任务选模）"
-	return &store.Model{
-		ID:              "auto",
-		Name:            name,
-		Note:            name,
-		ImageInputMode:  imageMode,
-		ContextWindow:   groupMinContextWindow(candidates),
-		MaxTokens:       groupMinMaxTokens(candidates),
-		ReasoningEffort: groupReasoningEffort(candidates),
-		Provider:        "group",
-		RateMultiplier:  groupRateMultiplier(candidates),
-		Enabled:         true,
+	name := "Auto（五阶段固定模型）"
+	model := &store.Model{
+		ID:             "auto",
+		Name:           name,
+		Note:           name,
+		ImageInputMode: imageMode,
+		ContextWindow:  groupMinContextWindow(candidates),
+		MaxTokens:      groupMinMaxTokens(candidates),
+		Provider:       "group",
+		RateMultiplier: groupRateMultiplier(candidates),
+		Enabled:        true,
 	}
+	model.AutoRoutingMode = store.AutoRoutingModeStageFixed
+	// 任一目标未配置容量时，不能把其余目标的最小值当成安全下界。
+	for _, candidate := range candidates {
+		if candidate.ContextWindow <= 0 {
+			model.ContextWindow = 0
+		}
+		if candidate.MaxTokens <= 0 {
+			model.MaxTokens = 0
+		}
+	}
+	// 默认档位不能证明支持集合，因此不推断支持档位 schema。
+	return model
 }

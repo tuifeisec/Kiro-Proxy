@@ -304,7 +304,8 @@ func TestTypesafeClassifierMapsChoiceUsageAndAccounting(t *testing.T) {
 		t.Fatal(err)
 	}
 	autoConfig, err := json.Marshal(store.AutoRoutingConfig{
-		Enabled: true, DefaultModelID: "manual-model", TaskRules: []store.AutoTaskRule{{Field: "agent_task_type", Value: "spec", ModelID: "auto-target"}},
+		Mode: store.AutoRoutingModeStageFixed, Enabled: true, DefaultModelID: "manual-model",
+		StageModels: store.AutoStageModels{Run: "manual-model", Plan: "auto-target", Implement: "auto-target", Review: "manual-model", Finalize: "manual-model"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -315,7 +316,7 @@ func TestTypesafeClassifierMapsChoiceUsageAndAccounting(t *testing.T) {
 	env.server.router = router.New(env.db)
 
 	mainPre := typesafeClassifierTestPreflight("auto", "kiro", false)
-	mainPre.Conv.AgentTaskType = "spec"
+	stageScopeApplyHeader(t, mainPre.Conv, "plan")
 	mainRouteBefore, err := env.server.resolveMainRoute(mainPre)
 	if err != nil || mainRouteBefore == nil || mainRouteBefore.Model.ID != "auto-target" {
 		t.Fatalf("main Auto route before classification = %+v, error=%v", mainRouteBefore, err)

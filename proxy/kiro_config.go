@@ -62,11 +62,11 @@ func (s *Server) handleKiroProxy(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(status)
 
 	case http.MethodPost:
-		result := configureKiroProxy(targetProxy, s.logger)
+		result := configureKiroProxyAt(targetProxy, s.logger, getKiroSettingsPath(), s.prepareKiroStageLaunch, launchPreparedKiro)
 		json.NewEncoder(w).Encode(result)
 
 	case http.MethodDelete:
-		result := restoreKiroProxy(s.logger)
+		result := restoreKiroProxyAt(s.logger, getKiroSettingsPath(), s.prepareKiroStageLaunch, launchPreparedKiro)
 		json.NewEncoder(w).Encode(result)
 
 	default:
@@ -90,7 +90,7 @@ func (s *Server) handleKiroRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(restartKiro(s.logger, fmt.Sprintf("http://%s:%d", s.proxyBindHost(), s.cfg.Proxy.Port)))
+	json.NewEncoder(w).Encode(restartKiroAt(s.logger, fmt.Sprintf("http://%s:%d", s.proxyBindHost(), s.cfg.Proxy.Port), getKiroSettingsPath(), s.prepareKiroStageLaunch, launchPreparedKiro))
 }
 
 func getKiroProxyStatus(targetProxy string) kiroProxyStatus {

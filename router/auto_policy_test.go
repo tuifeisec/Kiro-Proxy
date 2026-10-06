@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	json "github.com/goccy/go-json"
 )
@@ -33,18 +32,11 @@ func setAutoPolicyConfig(t *testing.T, r *Router, config store.AutoRoutingConfig
 
 func autoPolicyConfig() store.AutoRoutingConfig {
 	return store.AutoRoutingConfig{
-		Enabled:             true,
-		DefaultModelID:      "default",
-		VisionModelID:       "vision",
-		ReasoningModelID:    "reasoning",
-		LongContextModelID:  "long",
-		FastModelID:         "fast",
-		FastMaxChars:        500,
-		LongContextMinChars: 32000,
-		TaskRules: []store.AutoTaskRule{
-			{Field: "agent_task_type", Value: "spec", ModelID: "task"},
-			{Field: "agent_mode", Value: "review", ModelID: "mode"},
-			{Field: "chat_trigger_type", Value: "manual", ModelID: "trigger"},
+		Mode:           store.AutoRoutingModeStageFixed,
+		Enabled:        true,
+		DefaultModelID: "default",
+		StageModels: store.AutoStageModels{
+			Run: "fast", Plan: "task", Implement: "reasoning", Review: "mode", Finalize: "long",
 		},
 	}
 }
@@ -88,388 +80,49 @@ func autoPolicyConversation() *converter.ParsedConversation {
 	return &converter.ParsedConversation{ModelID: "auto"}
 }
 
-func parseAutoPolicyConversation(t *testing.T, agentMode, systemPrompt, currentContent string) *converter.ParsedConversation {
-	t.Helper()
-	request := converter.KiroRequest{
-		AgentMode: agentMode,
-		ConversationState: converter.KiroConversationState{
-			ConversationID: "auto-system-prompt-test",
-			CurrentMessage: converter.KiroCurrentMsg{
-				UserInputMessage: converter.KiroUserInputMsg{ModelID: "auto", Content: currentContent},
-			},
-			History: []converter.KiroHistoryMsg{{
-				UserInputMessage: &converter.KiroUserInputMsg{Content: systemPrompt},
-			}},
-		},
-	}
-	body, err := json.Marshal(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conv, err := converter.ParseKiroRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return conv
-}
-
-func TestResolveAutoCountsParsedSystemHistoryOnceAndPreservesBootstrap(t *testing.T) {
-	config := autoPolicyConfig()
-	models := autoPolicyModels()
-	smallPrompt := "<identity>\n" + strings.Repeat("系统指令", 4250)
-	current := "你好"
-	longPrompt := "<identity>\n" + strings.Repeat("长", 33000)
-
-	tests := []struct {
-		name       string
-		agentMode  string
-		system     string
-		wantSystem bool
-		wantModel  string
-		wantReason string
-	}{
-		{
-			name:       "recognized system history is counted once",
-			system:     smallPrompt,
-			wantSystem: true,
-			wantModel:  "default",
-			wantReason: "default",
-		},
-		{
-			name:       "large recognized system history remains long context",
-			system:     longPrompt,
-			wantSystem: true,
-			wantModel:  "long",
-			wantReason: "long_context",
-		},
-		{
-			name:       "context gatherer bootstrap remains user context",
-			agentMode:  "context-gatherer",
-			system:     smallPrompt,
-			wantSystem: false,
-			wantModel:  "default",
-			wantReason: "default",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			conv := parseAutoPolicyConversation(t, test.agentMode, test.system, current)
-			if len(conv.History) != 1 || conv.History[0].IsSystem != test.wantSystem {
-				t.Fatalf("parser system classification = %#v, want IsSystem=%v", conv.History, test.wantSystem)
-			}
-			wantChars := utf8.RuneCountInString(test.system) + utf8.RuneCountInString(current)
-			if got := conversationUnicodeChars(conv); got != wantChars {
-				t.Fatalf("parsed conversation character count = %d, want %d", got, wantChars)
-			}
-			if test.wantModel != "long" && conversationUnicodeChars(conv) >= config.LongContextMinChars {
-				t.Fatalf("test system prompt should remain below the long-context threshold: %d", conversationUnicodeChars(conv))
-			}
-
-			r := newAutoPolicyTestRouter(t, models, config)
-			route, err := r.ResolveAuto(conv)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if route.Model.ID != test.wantModel || route.AutoReason != test.wantReason {
-				t.Fatalf("parsed Auto route = (%q, %q), want (%q, %q)", route.Model.ID, route.AutoReason, test.wantModel, test.wantReason)
-			}
-		})
-	}
-}
-
-func TestResolveAutoPolicyPriorityAndReasons(t *testing.T) {
-	config := autoPolicyConfig()
-	r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
-	tests := []struct {
-		name   string
-		setup  func(*converter.ParsedConversation)
-		model  string
-		reason string
-	}{
-		{
-			name:   "short unicode text",
-			setup:  func(conv *converter.ParsedConversation) { conv.CurrentContent = strings.Repeat("字", 500) },
-			model:  "fast",
-			reason: "fast_chat",
-		},
-		{
-			name:   "fast boundary exceeded",
-			setup:  func(conv *converter.ParsedConversation) { conv.CurrentContent = strings.Repeat("字", 501) },
-			model:  "default",
-			reason: "default",
-		},
-		{
-			name: "raw tools do not imply a task category and block fast routing",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.RawTools = []json.RawMessage{json.RawMessage(`{"name":"read_file"}`)}
-			},
-			model:  "default",
-			reason: "default",
-		},
-		{
-			name: "history tool activity blocks fast routing",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.History = []converter.ParsedHistoryEntry{{ToolUses: []converter.ParsedToolUse{{Name: "read_file", Input: json.RawMessage(`{"path":"README.md"}`)}}}}
-			},
-			model:  "default",
-			reason: "default",
-		},
-		{
-			name: "high reasoning",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.ReasoningEffort = "HIGH"
-			},
-			model:  "reasoning",
-			reason: "high_reasoning",
-		},
-		{
-			name: "xhigh reasoning",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.ReasoningEffort = "xhigh"
-			},
-			model:  "reasoning",
-			reason: "high_reasoning",
-		},
-		{
-			name: "max reasoning",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.ReasoningEffort = "max"
-			},
-			model:  "reasoning",
-			reason: "high_reasoning",
-		},
-		{
-			name:   "long context unicode boundary",
-			setup:  func(conv *converter.ParsedConversation) { conv.CurrentContent = strings.Repeat("界", 32000) },
-			model:  "long",
-			reason: "long_context",
-		},
-		{
-			name: "ordered task fields use case insensitive exact matching",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.AgentTaskType = " SPEC "
-				conv.AgentMode = "REVIEW"
-				conv.ChatTriggerType = "manual"
-			},
-			model:  "task",
-			reason: "task:agent_task_type=spec",
-		},
-		{
-			name: "task value matching is exact",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.AgentTaskType = "special"
-				conv.AgentMode = "Review"
-			},
-			model:  "mode",
-			reason: "task:agent_mode=review",
-		},
-		{
-			name: "unknown task falls through to fast chat",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.AgentTaskType = "unknown"
-			},
-			model:  "fast",
-			reason: "fast_chat",
-		},
-		{
-			name: "chat trigger rule",
-			setup: func(conv *converter.ParsedConversation) {
-				conv.CurrentContent = "short"
-				conv.ChatTriggerType = "MANUAL"
-			},
-			model:  "trigger",
-			reason: "task:chat_trigger_type=manual",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			conv := autoPolicyConversation()
-			test.setup(conv)
-			route, err := r.ResolveAuto(conv)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if route.Model.ID != test.model || route.AutoReason != test.reason {
-				t.Fatalf("route = (%q, %q), want (%q, %q)", route.Model.ID, route.AutoReason, test.model, test.reason)
-			}
-			if route.RequestedName != "auto" || route.Group != nil || len(route.Candidates) != 1 || route.Candidates[0].ID != test.model {
-				t.Fatalf("Auto must resolve one exact model and preserve the requested name: %#v", route)
-			}
-		})
-	}
-}
-
-func TestResolveAutoCountsAllUnicodeTextSources(t *testing.T) {
-	tests := []struct {
-		name   string
-		setup  func(*converter.ParsedConversation)
-		reason string
-	}{
-		{name: "system text", setup: func(conv *converter.ParsedConversation) { conv.SystemText = "系統內容" }},
-		{name: "history user text", setup: func(conv *converter.ParsedConversation) {
-			conv.History = []converter.ParsedHistoryEntry{{UserContent: "歷史使用者"}}
-		}},
-		{name: "history assistant text", setup: func(conv *converter.ParsedConversation) {
-			conv.History = []converter.ParsedHistoryEntry{{AssistantContent: "助手回答"}}
-		}},
-		{name: "assistant tool input", setup: func(conv *converter.ParsedConversation) {
-			conv.History = []converter.ParsedHistoryEntry{{ToolUses: []converter.ParsedToolUse{{Input: json.RawMessage(`"输入内容"`)}}}}
-		}},
-		{name: "history tool result", setup: func(conv *converter.ParsedConversation) {
-			conv.History = []converter.ParsedHistoryEntry{{ToolResults: []converter.ParsedToolResult{{Content: "工具结果"}}}}
-		}},
-		{name: "current tool result", setup: func(conv *converter.ParsedConversation) {
-			conv.CurrentToolResults = []converter.ParsedToolResult{{Content: "当前结果"}}
-		}, reason: "tool_continuation_unlocked:long_context"},
-		{name: "raw tools", setup: func(conv *converter.ParsedConversation) {
-			conv.RawTools = []json.RawMessage{json.RawMessage(`"工具定义"`)}
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			config := autoPolicyConfig()
-			config.FastMaxChars = 2
-			config.LongContextMinChars = 5
-			r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
-			conv := autoPolicyConversation()
-			conv.CurrentContent = "x"
-			test.setup(conv)
-			route, err := r.ResolveAuto(conv)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantReason := test.reason
-			if wantReason == "" {
-				wantReason = "long_context"
-			}
-			if route.Model.ID != "long" || route.AutoReason != wantReason {
-				t.Fatalf("Unicode character count omitted %s: route=(%q, %q), count=%d", test.name, route.Model.ID, route.AutoReason, conversationUnicodeChars(conv))
-			}
-		})
-	}
-}
-
-func TestResolveAutoHistoryImagePrecedesTaskRules(t *testing.T) {
-	r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoPolicyConfig())
-	conv := autoPolicyConversation()
-	conv.CurrentContent = "short"
-	conv.AgentTaskType = "spec"
-	conv.History = []converter.ParsedHistoryEntry{{Images: []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "aGVsbG8="}}}}}
-
-	route, err := r.ResolveAuto(conv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if route.Model.ID != "vision" || route.AutoReason != "vision_required" {
-		t.Fatalf("history image did not select the explicit vision model: (%q, %q)", route.Model.ID, route.AutoReason)
-	}
-}
-
-func TestResolveAutoImageTargetErrorsAreExplicit(t *testing.T) {
-	models := autoPolicyModels()
-	unsupported := routerTestModel("unsupported-vision", "Unsupported vision")
-	unsupported.ImageInputMode = store.ImageInputUnsupported
-	models = append(models, unsupported)
-
-	config := autoPolicyConfig()
-	config.VisionModelID = ""
-	r := newAutoPolicyTestRouter(t, models, config)
-	conv := autoPolicyConversation()
-	conv.CurrentImages = []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "aGVsbG8="}}}
-	if route, err := r.ResolveAuto(conv); err == nil || route != nil || !strings.Contains(err.Error(), "vision model") {
-		t.Fatalf("missing vision target should fail explicitly: route=%#v err=%v", route, err)
-	}
-
-	config.VisionModelID = "unsupported-vision"
-	r = newAutoPolicyTestRouter(t, models, config)
-	if route, err := r.ResolveAuto(conv); err == nil || route != nil || !strings.Contains(err.Error(), "supported image input") {
-		t.Fatalf("unsupported configured vision target should fail explicitly: route=%#v err=%v", route, err)
-	}
-}
-
-func TestResolveAutoRejectsInvalidConfiguredTarget(t *testing.T) {
-	config := autoPolicyConfig()
-	config.DefaultModelID = "missing-model"
-	r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
-
-	route, err := r.ResolveAuto(autoPolicyConversation())
-	if err == nil || route != nil || !strings.Contains(err.Error(), `unknown model "missing-model"`) {
-		t.Fatalf("invalid target should fail closed: route=%#v err=%v", route, err)
-	}
-	if model := r.AutoModel(); model != nil {
-		t.Fatalf("invalid config must not publish default-route metadata: %#v", model)
-	}
-}
-
-func TestResolveAutoMissingOptionalRoleUsesDefault(t *testing.T) {
-	config := autoPolicyConfig()
-	config.FastModelID = ""
-	r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
-	conv := autoPolicyConversation()
-	conv.CurrentContent = "short"
-
-	route, err := r.ResolveAuto(conv)
-	if err != nil || route.Model.ID != "default" || route.AutoReason != "default" {
-		t.Fatalf("empty optional fast role should use the default target: (%#v, %v)", route, err)
-	}
-}
-
-func TestResolveAutoLocksMainAndBranchAndForgetClearsManualScope(t *testing.T) {
+func TestResolveAutoLocksStageTargetAndForgetClearsScope(t *testing.T) {
 	config := autoPolicyConfig()
 	r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
 	main := autoPolicyConversation()
 	main.ConversationID = "conversation"
 	main.ContinuationStateKey = "conversation"
-	main.CurrentContent = "short"
+	main.WorkflowStage = "run"
+	main.WorkflowStageProvided = true
 
 	first, err := r.ResolveAuto(main)
-	if err != nil || first.Model.ID != "fast" || first.AutoReason != "fast_chat" {
+	if err != nil || first.Model.ID != "fast" || first.AutoReason != "stage:run" {
 		t.Fatalf("first main request = (%#v, %v)", first, err)
 	}
 
-	config.FastModelID = "replacement"
+	config.StageModels.Run = "replacement"
 	setAutoPolicyConfig(t, r, config)
-	main.AgentTaskType = "spec"
-	main.ReasoningEffort = "high"
-	main.CurrentContent = strings.Repeat("x", config.LongContextMinChars+1)
+	main.WorkflowStage = "review"
 	main.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
 	second, err := r.ResolveAuto(main)
-	if err != nil || second.Model.ID != "fast" || second.AutoReason != "conversation_lock" {
-		t.Fatalf("config reload switched the active main conversation: (%#v, %v)", second, err)
+	if err != nil || second.Model.ID != "fast" || second.AutoStage != "run" ||
+		second.AutoMode != store.AutoRoutingModeStageFixed || second.AutoReason != "conversation_lock:stage:run" {
+		t.Fatalf("config reload switched the active tool chain: (%#v, %v)", second, err)
 	}
 
 	main.CurrentToolResults = nil
-	main.History = []converter.ParsedHistoryEntry{{
-		ToolUses:    []converter.ParsedToolUse{{Name: "read_file"}},
-		ToolResults: []converter.ParsedToolResult{{Content: "previous tool result"}},
-	}}
+	main.WorkflowStage = "implement"
 	newTask, err := r.ResolveAuto(main)
-	if err != nil || newTask.Model.ID != "task" || newTask.AutoReason != "task:agent_task_type=spec" {
-		t.Fatalf("new task did not reevaluate rules after old tool activity: (%#v, %v)", newTask, err)
+	if err != nil || newTask.Model.ID != "reasoning" || newTask.AutoReason != "stage:implement" {
+		t.Fatalf("new task did not use the current stage configuration: (%#v, %v)", newTask, err)
 	}
 
 	branch := *main
 	branch.ContinuationStateKey = "branch|conversation|review"
-	branch.AgentTaskType = "unknown"
-	branch.AgentMode = "review"
+	branch.WorkflowStage = "review"
 	branchRoute, err := r.ResolveAuto(&branch)
-	if err != nil || branchRoute.Model.ID != "mode" || branchRoute.AutoReason != "task:agent_mode=review" {
-		t.Fatalf("independent branch did not use its own task policy: (%#v, %v)", branchRoute, err)
+	if err != nil || branchRoute.Model.ID != "mode" {
+		t.Fatalf("independent branch shared the main lock: (%#v, %v)", branchRoute, err)
 	}
 
 	r.ForgetAuto(main)
+	main.WorkflowStage = "plan"
 	manualFollowup, err := r.ResolveAuto(main)
-	if err != nil || manualFollowup.Model.ID != "task" || manualFollowup.AutoReason != "task:agent_task_type=spec" {
+	if err != nil || manualFollowup.Model.ID != "task" || manualFollowup.AutoReason != "stage:plan" {
 		t.Fatalf("ForgetAuto did not clear the current scope: (%#v, %v)", manualFollowup, err)
 	}
 	if exact := r.ResolveExact("upstream-fast"); exact == nil || exact.Model.ID != "fast" || exact.AutoReason != "" {
@@ -477,15 +130,15 @@ func TestResolveAutoLocksMainAndBranchAndForgetClearsManualScope(t *testing.T) {
 	}
 }
 
-func TestResolveAutoNoScopeAndConversationIDFallback(t *testing.T) {
+func TestResolveAutoScopeAndConversationIDFallback(t *testing.T) {
 	r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoPolicyConfig())
 	first := autoPolicyConversation()
-	first.CurrentContent = "short"
+	first.WorkflowStage, first.WorkflowStageProvided = "run", true
 	if route, err := r.ResolveAuto(first); err != nil || route.Model.ID != "fast" {
 		t.Fatalf("unscoped first route = (%#v, %v)", route, err)
 	}
 	second := autoPolicyConversation()
-	second.AgentTaskType = "spec"
+	second.WorkflowStage, second.WorkflowStageProvided = "plan", true
 	if route, err := r.ResolveAuto(second); err != nil || route.Model.ID != "task" {
 		t.Fatalf("unscoped requests should not share a lock: (%#v, %v)", route, err)
 	}
@@ -495,14 +148,15 @@ func TestResolveAutoNoScopeAndConversationIDFallback(t *testing.T) {
 
 	fallback := autoPolicyConversation()
 	fallback.ConversationID = "conversation-id-fallback"
-	fallback.CurrentContent = "short"
+	fallback.WorkflowStage, fallback.WorkflowStageProvided = "run", true
 	if _, err := r.ResolveAuto(fallback); err != nil {
 		t.Fatal(err)
 	}
-	fallback.AgentTaskType = "spec"
+	fallback.WorkflowStage = "plan"
 	fallback.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
-	if route, err := r.ResolveAuto(fallback); err != nil || route.Model.ID != "fast" || route.AutoReason != "conversation_lock" {
-		t.Fatalf("ConversationID fallback did not retain the model lock: (%#v, %v)", route, err)
+	if route, err := r.ResolveAuto(fallback); err != nil || route.Model.ID != "fast" ||
+		route.AutoReason != "conversation_lock:stage:run" {
+		t.Fatalf("ConversationID fallback did not retain the stage lock: (%#v, %v)", route, err)
 	}
 }
 
@@ -510,24 +164,22 @@ func TestResolveAutoExpiredLockAndUnlockedToolContinuation(t *testing.T) {
 	r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoPolicyConfig())
 	conv := autoPolicyConversation()
 	conv.ContinuationStateKey = "expired"
-	conv.AgentTaskType = "spec"
+	conv.WorkflowStage, conv.WorkflowStageProvided = "plan", true
 	conv.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "expired-tool", Content: "done"}}
 	r.autoLocks = map[string]autoModelLock{"expired": {ModelID: "fast", LastUsed: time.Now().Add(-2 * time.Hour)}}
 
 	route, err := r.ResolveAuto(conv)
-	if err != nil || route.Model.ID != "task" || route.AutoReason != "tool_continuation_unlocked:task:agent_task_type=spec" {
+	if err != nil || route.Model.ID != "task" || route.AutoReason != "tool_continuation_unlocked:stage:plan" {
 		t.Fatalf("expired lock was reused: (%#v, %v)", route, err)
 	}
 
 	restarted := autoPolicyConversation()
 	restarted.ConversationID = "restarted"
 	restarted.ContinuationStateKey = "restarted"
-	restarted.CurrentContent = "short"
-	restarted.History = []converter.ParsedHistoryEntry{{ToolResults: []converter.ParsedToolResult{{Content: "previous result"}}}}
 	restarted.CurrentToolResults = []converter.ParsedToolResult{{Content: "current result"}}
 	route, err = r.ResolveAuto(restarted)
-	if err != nil || route.Model.ID != "default" || route.AutoReason != "tool_continuation_unlocked:default" {
-		t.Fatalf("cold tool continuation should use explicit default with a reason: (%#v, %v)", route, err)
+	if err != nil || route.Model.ID != "default" || route.AutoReason != "tool_continuation_unlocked:stage_unavailable" {
+		t.Fatalf("cold tool continuation should use the fixed target: (%#v, %v)", route, err)
 	}
 }
 
@@ -544,11 +196,12 @@ func TestResolveAutoSerializesFirstChoiceWithinOneScope(t *testing.T) {
 			defer workers.Done()
 			conv := autoPolicyConversation()
 			conv.ContinuationStateKey = "shared"
-			conv.CurrentContent = "short"
-			conv.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
+			conv.WorkflowStage = "run"
 			if index%2 == 0 {
-				conv.AgentTaskType = "spec"
+				conv.WorkflowStage = "plan"
 			}
+			conv.WorkflowStageProvided = true
+			conv.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
 			<-start
 			route, err := r.ResolveAuto(conv)
 			if err != nil {
@@ -613,12 +266,12 @@ func TestResolveAutoErrorsWhenLockedModelBecomesUnavailable(t *testing.T) {
 			r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
 			conv := autoPolicyConversation()
 			conv.ContinuationStateKey = "locked"
-			conv.CurrentContent = "short"
+			conv.WorkflowStage, conv.WorkflowStageProvided = "run", true
 			if route, err := r.ResolveAuto(conv); err != nil || route.Model.ID != "fast" {
 				t.Fatalf("initial lock route = (%#v, %v)", route, err)
 			}
 
-			config.FastModelID = "replacement"
+			config.StageModels.Run = "replacement"
 			setAutoPolicyConfig(t, r, config)
 			test.change(t, r)
 			r.Reload()
@@ -630,56 +283,7 @@ func TestResolveAutoErrorsWhenLockedModelBecomesUnavailable(t *testing.T) {
 	}
 }
 
-func TestResolveAutoLockedModelRejectsNewUnsupportedImage(t *testing.T) {
-	config := autoPolicyConfig()
-	r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
-	conv := autoPolicyConversation()
-	conv.ContinuationStateKey = "image-lock"
-	conv.CurrentContent = "short"
-	if route, err := r.ResolveAuto(conv); err != nil || route.Model.ID != "fast" {
-		t.Fatalf("initial route = (%#v, %v)", route, err)
-	}
-
-	model := getAutoPolicyModel(t, r, "fast")
-	model.ImageInputMode = store.ImageInputUnsupported
-	if err := r.db.UpdateModel(&model); err != nil {
-		t.Fatal(err)
-	}
-	config.FastModelID = "replacement"
-	setAutoPolicyConfig(t, r, config)
-	r.Reload()
-
-	conv.CurrentToolResults = []converter.ParsedToolResult{{Content: "tool response"}}
-	conv.CurrentImages = []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "aGVsbG8="}}}
-	if route, err := r.ResolveAuto(conv); err == nil || route != nil || !strings.Contains(err.Error(), "does not support image input") {
-		t.Fatalf("locked model image mismatch should fail without switching: route=%#v err=%v", route, err)
-	}
-}
-
-func TestResolveAutoNewTaskWithHistoricalToolsReevaluatesForImages(t *testing.T) {
-	r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoPolicyConfig())
-	conv := autoPolicyConversation()
-	conv.ContinuationStateKey = "new-task-image"
-	conv.CurrentContent = "short"
-	if route, err := r.ResolveAuto(conv); err != nil || route.Model.ID != "fast" {
-		t.Fatalf("initial Auto task = (%#v, %v)", route, err)
-	}
-
-	conv.CurrentContent = "new image task"
-	conv.History = []converter.ParsedHistoryEntry{{
-		ToolUses: []converter.ParsedToolUse{{Name: "read_file"}},
-		ToolResults: []converter.ParsedToolResult{{
-			Content: "result from the previous task",
-		}},
-	}}
-	conv.CurrentImages = []converter.KiroImage{{Source: converter.KiroImageSource{Bytes: "aGVsbG8="}}}
-	route, err := r.ResolveAuto(conv)
-	if err != nil || route.Model.ID != "vision" || route.AutoReason != "vision_required" {
-		t.Fatalf("new task did not reselect a compatible vision model after historical tool activity: (%#v, %v)", route, err)
-	}
-}
-
-func TestResolveAutoDisabledUsesLegacyRouteAndClearsLock(t *testing.T) {
+func TestResolveAutoDisabledUsesDefaultRouteAndClearsLock(t *testing.T) {
 	models := autoPolicyModels()
 	group := autoTestGroup("legacy-auto", "Auto", "default", "fast")
 	r := newAutoTestRouter(t, models, []store.ModelGroup{group})
@@ -687,7 +291,7 @@ func TestResolveAutoDisabledUsesLegacyRouteAndClearsLock(t *testing.T) {
 	setAutoPolicyConfig(t, r, config)
 	conv := autoPolicyConversation()
 	conv.ContinuationStateKey = "disabled-policy"
-	conv.CurrentContent = "short"
+	conv.WorkflowStage, conv.WorkflowStageProvided = "run", true
 	if route, err := r.ResolveAuto(conv); err != nil || route.Model.ID != "fast" {
 		t.Fatalf("initial policy route = (%#v, %v)", route, err)
 	}
@@ -696,82 +300,13 @@ func TestResolveAutoDisabledUsesLegacyRouteAndClearsLock(t *testing.T) {
 	setAutoPolicyConfig(t, r, config)
 	route, err := r.ResolveAuto(conv)
 	if err != nil || route.AutoReason != "policy_disabled" || route.Group == nil || len(route.Candidates) != 2 {
-		t.Fatalf("disabled policy should retain legacy group routing: (%#v, %v)", route, err)
+		t.Fatalf("disabled policy should retain default group routing: (%#v, %v)", route, err)
 	}
 	if _, ok := r.autoLocks["disabled-policy"]; ok {
 		t.Fatal("disabled policy retained an old Auto lock")
 	}
 	if model := r.AutoModel(); model == nil || model.Name != "Auto（默认路由）" || model.Note != model.Name {
 		t.Fatalf("disabled Auto metadata has the wrong label: %#v", model)
-	}
-}
-
-func TestResolveAutoDisabledPolicyIgnoresUnavailableRoleTargets(t *testing.T) {
-	targetStates := []struct {
-		name   string
-		mutate func(*testing.T, *Router)
-		want   string
-	}{
-		{
-			name: "disabled target",
-			mutate: func(t *testing.T, r *Router) {
-				model := getAutoPolicyModel(t, r, "task")
-				model.Enabled = false
-				if err := r.db.UpdateModel(&model); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "disabled model",
-		},
-		{
-			name: "deleted target",
-			mutate: func(t *testing.T, r *Router) {
-				if err := r.db.DeleteModel("task"); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "unknown model",
-		},
-	}
-
-	for _, targetState := range targetStates {
-		for _, enabled := range []bool{false, true} {
-			policyName := "disabled"
-			if enabled {
-				policyName = "enabled"
-			}
-			name := targetState.name + "/policy-" + policyName
-			t.Run(name, func(t *testing.T) {
-				group := autoTestGroup("legacy-auto", "Auto", "default", "fast")
-				r := newAutoTestRouter(t, autoPolicyModels(), []store.ModelGroup{group})
-				config := autoPolicyConfig()
-				config.Enabled = enabled
-				setAutoPolicyConfig(t, r, config)
-				targetState.mutate(t, r)
-				r.Reload()
-
-				route, err := r.ResolveAuto(autoPolicyConversation())
-				if enabled {
-					if err == nil || route != nil || !strings.Contains(err.Error(), targetState.want) {
-						t.Fatalf("enabled policy should reject the unavailable role target: route=%#v err=%v", route, err)
-					}
-					if model := r.AutoModel(); model != nil {
-						t.Fatalf("enabled policy with an invalid target must not publish Auto metadata: %#v", model)
-					}
-					return
-				}
-
-				if err != nil || route == nil || route.AutoReason != "policy_disabled" || route.Group == nil || len(route.Candidates) != 2 {
-					t.Fatalf("disabled policy should keep the legacy Auto route: route=%#v err=%v", route, err)
-				}
-				if legacy := r.Resolve("auto"); legacy == nil || legacy.Group == nil || len(legacy.Candidates) != 2 {
-					t.Fatalf("legacy Resolve(auto) route was blocked by an unavailable role target: %#v", legacy)
-				}
-				if model := r.AutoModel(); model == nil || model.Name != "Auto（默认路由）" || model.Note != model.Name {
-					t.Fatalf("disabled policy should publish legacy Auto metadata: %#v", model)
-				}
-			})
-		}
 	}
 }
 
@@ -793,43 +328,24 @@ func TestResolveAutoKeepsMalformedPolicyErrorWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestAutoModelAggregatesConfiguredTargets(t *testing.T) {
+func TestResolveStageAutoRequiresEnabledStageConfigWithoutLock(t *testing.T) {
 	config := autoPolicyConfig()
+	config.Enabled = false
 	r := newAutoPolicyTestRouter(t, autoPolicyModels(), config)
-	model := r.AutoModel()
-	if model == nil || model.ID != "auto" || model.Name != "Auto（按任务选模）" || model.Note != model.Name {
-		t.Fatalf("enabled Auto metadata has the wrong identity or label: %#v", model)
-	}
-	if model.ContextWindow != 16000 || model.MaxTokens != 2000 {
-		t.Fatalf("Auto metadata did not use the safe candidate minima: context=%d output=%d", model.ContextWindow, model.MaxTokens)
-	}
-	if model.ImageInputMode != store.ImageInputSupported {
-		t.Fatalf("configured supported vision target was not advertised: %q", model.ImageInputMode)
-	}
-
-	config.VisionModelID = ""
-	setAutoPolicyConfig(t, r, config)
-	model = r.AutoModel()
-	if model == nil || model.ImageInputMode != store.ImageInputUnsupported {
-		t.Fatalf("unconfigured vision support was advertised: %#v", model)
+	if route, err := r.ResolveStageAuto(autoPolicyConversation()); err == nil || route != nil ||
+		!strings.Contains(err.Error(), "requires enabled stage_fixed mode") {
+		t.Fatalf("raw stage Auto must reject a disabled config: route=%#v err=%v", route, err)
 	}
 }
 
 func TestAutoModelReturnsNilWhenNoTargetIsAvailable(t *testing.T) {
 	r := newAutoTestRouter(t, nil, nil)
-	setAutoPolicyConfig(t, r, store.AutoRoutingConfig{Enabled: true, DefaultModelID: "missing"})
+	config := autoPolicyConfig()
+	config.DefaultModelID = "missing"
+	config.StageModels = store.AutoStageModels{Run: "missing", Plan: "missing", Implement: "missing", Review: "missing", Finalize: "missing"}
+	setAutoPolicyConfig(t, r, config)
 	if model := r.AutoModel(); model != nil {
 		t.Fatalf("invalid target metadata should not be published: %#v", model)
-	}
-}
-
-func TestToolResultUnicodeCharsDoesNotCountTextTwice(t *testing.T) {
-	result := converter.ParsedToolResult{
-		Content: "abc",
-		Blocks:  []converter.ParsedToolResultBlock{{Text: "abc"}},
-	}
-	if got := toolResultUnicodeChars([]converter.ParsedToolResult{result}); got != 3 {
-		t.Fatalf("tool result text counted more than once: got %d, want 3", got)
 	}
 }
 

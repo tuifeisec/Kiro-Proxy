@@ -130,13 +130,14 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 
 		maxInput := m.ContextWindow
 		maxOutput := m.MaxTokens
+		stageAuto := m.AutoRoutingMode == store.AutoRoutingModeStageFixed
 		// 修复 ML-05: 未知 token limit 不应伪装成具体高值
 		// 如果用户未配置，应在文档或 UI 中要求明确配置，或使用可追溯的 provider 能力表
 		// 当前作为过渡：如果为 0，使用相对保守的默认值并在日志中标记
-		if maxInput <= 0 {
+		if maxInput <= 0 && !stageAuto {
 			maxInput = 128000 // 降低默认值，避免虚报能力
 		}
-		if maxOutput <= 0 {
+		if maxOutput <= 0 && !stageAuto {
 			maxOutput = 16000 // 降低默认值，避免虚报能力
 		}
 
@@ -167,6 +168,21 @@ func (s *Server) buildModelsResponse(req *http.Request) *http.Response {
 				"maxInputTokens":  maxInput,
 				"maxOutputTokens": maxOutput,
 			},
+		}
+		if stageAuto {
+			// Kiro 消费端使用 tokenLimits?.maxInputTokens，允许未知容量省略。
+			limits := map[string]interface{}{}
+			if maxInput > 0 {
+				limits["maxInputTokens"] = maxInput
+			}
+			if maxOutput > 0 {
+				limits["maxOutputTokens"] = maxOutput
+			}
+			if len(limits) > 0 {
+				entry["tokenLimits"] = limits
+			} else {
+				delete(entry, "tokenLimits")
+			}
 		}
 
 		// 只有存在 reasoning schema 时才添加该字段（省略 vs nil）

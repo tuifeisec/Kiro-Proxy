@@ -70,6 +70,12 @@ func isKiroConversationBody(body []byte) bool {
 // setupInterceptor 注册请求拦截器
 func (s *Server) setupInterceptor() {
 	s.proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		// 代理私有阶段信息必须留在本地，capture/passthrough 同样不能泄漏。
+		workflowHeaders := req.Header.Values(converter.WorkflowStageHeader)
+		req.Header.Del(converter.WorkflowStageHeader)
+		if len(workflowHeaders) > 0 {
+			req = req.WithContext(withWorkflowStageHeaders(req.Context(), workflowHeaders))
+		}
 		host := req.URL.Hostname()
 		if host == "" {
 			host = req.Host
@@ -81,6 +87,35 @@ func (s *Server) setupInterceptor() {
 
 		protocol := router.DetectProtocol(host, path)
 		var preReadBody []byte
+		if protocol == "kiro-runtime-responses" {
+			// 只有同步桥接候选进入新适配；普通 raw 请求仍按原行为放行。
+			if req.Method != http.MethodPost || len(workflowHeaders) == 0 {
+				protocol = "kiro-passthrough"
+			} else {
+				var err error
+				preReadBody, err = readAndRestoreMITMRequestBody(req)
+				if err != nil {
+					return req, errorResponse(req, requestBodyErrorStatus(err), "invalid request body")
+				}
+				clean, err := stripRawWorkflowMetadata(preReadBody)
+				if err != nil {
+					return req, errorResponse(req, http.StatusBadRequest, "invalid raw Responses body")
+				}
+				req.Body = io.NopCloser(bytes.NewReader(clean))
+				req.ContentLength = int64(len(clean))
+				req.Header.Set("Content-Length", fmt.Sprint(len(clean)))
+				var model struct {
+					Model string `json:"model"`
+				}
+				if json.Unmarshal(preReadBody, &model) != nil || !strings.EqualFold(model.Model, "auto") {
+					// 手动选择不参与阶段策略；可关联时清除本 scope 的旧 Auto 锁。
+					if conv, err := converter.ParseKiroRawResponsesRouting(preReadBody); err == nil {
+						s.router.ForgetAuto(conv)
+					}
+					protocol = "kiro-passthrough"
+				}
+			}
+		}
 		if protocol == "kiro-runtime-root" {
 			if req.Method == http.MethodPost {
 				var err error
@@ -213,7 +248,7 @@ func (s *Server) setupInterceptor() {
 		} else {
 			route, err = s.resolveMainRoute(pre)
 			if err != nil {
-				s.logger.Error("router", "Auto 任务路由失败: "+err.Error())
+				s.logger.Error("router", "Auto 阶段路由失败: "+err.Error())
 				return req, errorResponse(req, http.StatusServiceUnavailable, err.Error())
 			}
 		}
@@ -255,7 +290,12 @@ func (s *Server) setupInterceptor() {
 		pre.usage.setReasoningEffort(resolveReasoningEffort(pre, route.Model))
 
 		// 转发
-		resp, err := s.forwarder.Forward(req, pre, route, s.logger)
+		var resp *http.Response
+		if pre.Protocol == "kiro-runtime-responses" {
+			resp, err = s.forwarder.ForwardRawResponses(req, pre, route, s.logger)
+		} else {
+			resp, err = s.forwarder.Forward(req, pre, route, s.logger)
+		}
 		if err != nil {
 			pre.usage.finish(http.StatusBadGateway, localCompatUsage{}, err.Error())
 			s.logger.ErrorWithMeta("forwarder", "转发失败: "+err.Error(), LogMeta{
@@ -268,6 +308,9 @@ func (s *Server) setupInterceptor() {
 				},
 			})
 			s.stats.RecordRequestFull(0, 0, 0, 0, statsModelID(route.Model), true)
+			if pre.Protocol == "kiro-runtime-responses" {
+				return req, errorResponse(req, http.StatusBadGateway, err.Error())
+			}
 			return req, buildKiroExceptionStreamResponse(
 				req,
 				"upstream_forward_failed",
@@ -311,6 +354,21 @@ func (s *Server) parseRequest(req *http.Request, protocol string, preReadBody []
 	if len(pre.Body) == 0 {
 		return pre, nil
 	}
+	if protocol == "kiro-runtime-responses" {
+		conv, err := converter.ParseKiroRawResponsesRouting(pre.Body)
+		if err != nil {
+			return nil, err
+		}
+		values := workflowStageHeaders(req)
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			return nil, fmt.Errorf("raw Responses requires one nonempty workflow header")
+		}
+		if err := converter.ApplyWorkflowStageHeader(conv, values[0]); err != nil {
+			return nil, err
+		}
+		pre.Conv, pre.SourceModel, pre.ConversationID = conv, conv.ModelID, conv.ConversationID
+		return pre, nil
+	}
 
 	// Kiro 协议：结构化解析
 	if protocol == "kiro" {
@@ -322,6 +380,17 @@ func (s *Server) parseRequest(req *http.Request, protocol string, preReadBody []
 		pre.SourceModel = conv.ModelID
 		pre.IsClassifier = conv.IsClassifier || router.IsClassifierModel(conv.ModelID)
 		conv.IsClassifier = pre.IsClassifier
+		if !pre.IsClassifier && strings.EqualFold(conv.ModelID, "auto") {
+			values := workflowStageHeaders(req)
+			if len(values) > 1 || (len(values) == 1 && strings.TrimSpace(values[0]) == "") {
+				return nil, fmt.Errorf("workflow header must contain one nonempty value")
+			}
+			if len(values) == 1 {
+				if err := converter.ApplyWorkflowStageHeader(conv, values[0]); err != nil {
+					return nil, err
+				}
+			}
+		}
 		pre.ConversationID = conv.ConversationID
 		return pre, nil
 	}
@@ -416,8 +485,11 @@ func (s *Server) setupCaptureResponse() {
 	})
 }
 
-// resolveMainRoute 仅对 Kiro 的 Auto 主请求执行任务策略。
+// resolveMainRoute 仅对 Kiro 的 Auto 主请求执行阶段策略。
 func (s *Server) resolveMainRoute(pre *Preflight) (*router.Route, error) {
+	if pre.Protocol == "kiro-runtime-responses" && pre.Conv != nil && strings.EqualFold(pre.SourceModel, "auto") {
+		return s.router.ResolveStageAuto(pre.Conv)
+	}
 	if pre.Protocol == "kiro" && pre.Conv != nil && strings.EqualFold(pre.SourceModel, "auto") {
 		return s.router.ResolveAuto(pre.Conv)
 	}
@@ -438,6 +510,13 @@ func (s *Server) logAutoRoute(pre *Preflight, route *router.Route) {
 			"requested_model":          pre.SourceModel,
 			"auto_route_reason":        route.AutoReason,
 			"selected_model_config_id": route.Model.ID,
+			"auto_mode":                route.AutoMode,
+			"workflow_stage":           pre.Conv.WorkflowStage,
+			"workflow_stage_source":    pre.Conv.WorkflowStageSource,
+			"workflow_stage_status":    workflowStageStatus(pre.Conv),
+			"selected_stage":           route.AutoStage,
+			"outbound_model":           route.Model.ModelID,
+			"channel_identity":         route.AutoChannelIdentity,
 			"agent_task_type":          pre.Conv.AgentTaskType,
 			"agent_mode":               pre.Conv.AgentMode,
 			"chat_trigger_type":        pre.Conv.ChatTriggerType,
@@ -486,7 +565,7 @@ func (s *Server) rememberMainModel(pre *Preflight, route *router.Route) {
 	}
 
 	if strings.EqualFold(pre.SourceModel, "auto") && (route.AutoReason == "" || route.AutoReason == "policy_disabled") {
-		// 未启用任务策略的兼容路由保留分组；任务策略跟随已选实际模型。
+		// 未启用阶段策略的兼容路由保留分组；阶段策略跟随已选实际模型。
 		s.rememberModelName(pre, "auto")
 		return
 	}

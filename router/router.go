@@ -12,13 +12,16 @@ import (
 
 // Route 一次路由决策的结果。未分组模型只有一个候选。
 type Route struct {
-	Model           *store.Model
-	Candidates      []*store.Model
-	CandidateLimits map[string]int
-	CandidateGroups map[string]*store.ModelGroup
-	Group           *store.ModelGroup
-	RequestedName   string
-	AutoReason      string
+	Model               *store.Model
+	Candidates          []*store.Model
+	CandidateLimits     map[string]int
+	CandidateGroups     map[string]*store.ModelGroup
+	Group               *store.ModelGroup
+	RequestedName       string
+	AutoReason          string
+	AutoMode            string
+	AutoStage           string // 实际选中目标所属阶段；工具续轮沿用首轮值。
+	AutoChannelIdentity string // 脱敏调用身份，仅供审计，不参与缓存键。
 	// Stages 保留主组和 fallback 的阶段边界，避免调度策略跨阶段重排
 	// 每个阶段是一组候选，调度器必须先耗尽当前阶段才能进入下一阶段
 	Stages []RouteStage
@@ -83,8 +86,18 @@ func (r *Router) Reload() {
 
 	log.Printf("[router] 路由表已加载: %d 条模型配置, %d 个分组", len(models), len(groups))
 	if autoConfigErr != nil {
-		log.Printf("[router] Auto 任务路由配置无效: %v", autoConfigErr)
+		log.Printf("[router] Auto 阶段路由配置无效: %v", autoConfigErr)
 	}
+}
+
+// StageRoutingEnabled 只用于客户端启动桥接开关，不代表真实桥接已安装。
+func (r *Router) StageRoutingEnabled() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.autoConfigErr == nil && r.autoConfig.Enabled && r.autoConfig.Mode == store.AutoRoutingModeStageFixed
 }
 
 // Resolve 根据 Kiro 请求中的 modelId 找到模型配置
@@ -701,6 +714,8 @@ func DetectProtocol(host, path string) string {
 	// 新版本：Kiro 按职责拆分为 runtime / management 子域名。
 	if isKiroRuntimeHostName(hostname) {
 		switch {
+		case path == "/v1/responses":
+			return "kiro-runtime-responses"
 		case path == "/":
 			// 新版将对话操作放到根路径，请求层需继续根据 method/body 确认。
 			return "kiro-runtime-root"

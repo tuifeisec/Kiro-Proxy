@@ -1317,6 +1317,15 @@ func (f *Forwarder) sendWithRetry(ctx context.Context, url string, body []byte, 
 }
 
 func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration) (*http.Response, error) {
+	return f.sendWithRetryBudgetPolicy(ctx, url, body, m, logger, sessionID, usage, retryBudget, false)
+}
+
+// 原生 raw 响应交回客户端后不做预读/事件转换；认证与发送重放保护仍复用同一实现。
+func (f *Forwarder) sendRawResponsesWithRetryBudget(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration) (*http.Response, error) {
+	return f.sendWithRetryBudgetPolicy(ctx, url, body, m, logger, sessionID, usage, retryBudget, true)
+}
+
+func (f *Forwarder) sendWithRetryBudgetPolicy(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration, preserveRawResponse bool) (*http.Response, error) {
 	operation := upstreamRequestOperationFromContext(ctx)
 	if operation == nil {
 		operation = newUpstreamRequestOperation()
@@ -1446,7 +1455,7 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 		if chatRequest {
 			observeOpenAIChatResponse(resp, logger, m, traceID, attemptNumber, body)
 		}
-		if shouldProbeSSEPrecommit(resp, body, m, url) {
+		if !preserveRawResponse && shouldProbeSSEPrecommit(resp, body, m, url) {
 			probeErr := probeSSEPrecommit(attemptCtx, resp, m.Provider, url, time.Until(deadline), 0)
 			if probeErr != nil {
 				if resp.Body != nil {

@@ -29,6 +29,7 @@ import (
 
 // Model 一条模型配置
 type Model struct {
+	AutoRoutingMode       string  `json:"-"` // 仅虚拟 Auto 元数据，不持久化到实际模型。
 	ID                    string  `json:"id"`
 	Name                  string  `json:"name"`                    // 显示名称（如 "OpenAI - GPT-4o"）
 	ModelID               string  `json:"model_id"`                // 模型标识（如 "gpt-4o"），发给上游的 model 值

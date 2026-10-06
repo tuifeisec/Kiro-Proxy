@@ -19,12 +19,12 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-func autoTaskPreflight(t *testing.T, modelID, mode, branch, task string) *Preflight {
+func stageScopePreflight(t *testing.T, modelID, mode, branch, stage string) *Preflight {
 	t.Helper()
 	req := converter.KiroRequest{
 		AgentMode: mode,
 		ConversationState: converter.KiroConversationState{
-			ConversationID: "task-auto-conversation", AgentContinuationID: branch, AgentTaskType: task,
+			ConversationID: "stage-scope-conversation", AgentContinuationID: branch,
 			CurrentMessage: converter.KiroCurrentMsg{UserInputMessage: converter.KiroUserInputMsg{ModelID: modelID, Content: "hello"}},
 		},
 	}
@@ -36,11 +36,30 @@ func autoTaskPreflight(t *testing.T, modelID, mode, branch, task string) *Prefli
 	if err != nil {
 		t.Fatal(err)
 	}
+	stageScopeApplyHeader(t, conv, stage)
 	return &Preflight{Body: body, Conv: conv, Protocol: "kiro", SourceModel: modelID, ConversationID: conv.ConversationID, StartTime: time.Now()}
 }
 
-func autoTaskToolFollowup(t *testing.T, pre *Preflight) *Preflight {
+func stageScopeApplyHeader(t *testing.T, conv *converter.ParsedConversation, stage string) {
 	t.Helper()
+	if stage == "" {
+		return
+	}
+	header, err := json.Marshal(map[string]interface{}{
+		"version": 1, "stage": stage, "conversationId": conv.ConversationID,
+		"agentMode": conv.AgentMode, "agentContinuationId": conv.AgentContinuationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := converter.ApplyWorkflowStageHeader(conv, string(header)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stageScopeToolFollowup(t *testing.T, pre *Preflight) *Preflight {
+	t.Helper()
+	stage := pre.Conv.WorkflowStage
 	var req converter.KiroRequest
 	if err := json.Unmarshal(pre.Body, &req); err != nil {
 		t.Fatal(err)
@@ -59,11 +78,12 @@ func autoTaskToolFollowup(t *testing.T, pre *Preflight) *Preflight {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stageScopeApplyHeader(t, conv, stage)
 	pre.Body, pre.Conv = body, conv
 	return pre
 }
 
-func TestTaskAutoRoutesScopesAndMetersSelectedModel(t *testing.T) {
+func TestStageAutoScopeRoutesScopesAndMetersSelectedModel(t *testing.T) {
 	var callsMu sync.Mutex
 	var calls []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -82,7 +102,7 @@ func TestTaskAutoRoutesScopesAndMetersSelectedModel(t *testing.T) {
 		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":100,\"prompt_tokens_details\":{\"cached_tokens\":600}}}\n\ndata: [DONE]\n\n")
 	}))
 	defer upstream.Close()
-	db, err := store.Open(filepath.Join(t.TempDir(), "task-auto.db"))
+	db, err := store.Open(filepath.Join(t.TempDir(), "stage-auto.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +116,8 @@ func TestTaskAutoRoutesScopesAndMetersSelectedModel(t *testing.T) {
 		}
 		models[id] = model
 	}
-	config := store.AutoRoutingConfig{Enabled: true, DefaultModelID: "default", FastModelID: "fast", FastMaxChars: 500, LongContextMinChars: 32000,
-		TaskRules: []store.AutoTaskRule{{Field: "agent_mode", Value: "context-gatherer", ModelID: "coding"}, {Field: "agent_task_type", Value: "spec", ModelID: "coding"}}}
+	config := store.AutoRoutingConfig{Mode: store.AutoRoutingModeStageFixed, Enabled: true, DefaultModelID: "default",
+		StageModels: store.AutoStageModels{Run: "fast", Plan: "coding", Implement: "coding", Review: "default", Finalize: "default"}}
 	configJSON, _ := json.Marshal(config)
 	if err := db.SetSetting(store.AutoRoutingSetting, string(configJSON)); err != nil {
 		t.Fatal(err)
@@ -112,8 +132,8 @@ func TestTaskAutoRoutesScopesAndMetersSelectedModel(t *testing.T) {
 	defer logger.Close()
 	s := &Server{db: db, stats: stats, router: router.New(db), logger: logger, conversationModels: make(map[string]conversationModelEntry)}
 	fwd := NewForwarder(stats, db)
-	newTask := autoTaskPreflight(t, "auto", "vibe", "", "spec")
-	autoTaskToolFollowup(t, newTask)
+	newTask := stageScopePreflight(t, "auto", "vibe", "", "implement")
+	stageScopeToolFollowup(t, newTask)
 	var newTaskRequest converter.KiroRequest
 	if err := json.Unmarshal(newTask.Body, &newTaskRequest); err != nil {
 		t.Fatal(err)
@@ -130,14 +150,15 @@ func TestTaskAutoRoutesScopesAndMetersSelectedModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stageScopeApplyHeader(t, newTask.Conv, "implement")
 	tests := []struct {
 		pre           *Preflight
 		model, reason string
 	}{
-		{autoTaskPreflight(t, "auto", "vibe", "", ""), "fast", "fast_chat"},
-		{autoTaskToolFollowup(t, autoTaskPreflight(t, "auto", "vibe", "", "spec")), "fast", "conversation_lock"},
-		{autoTaskPreflight(t, "auto", "context-gatherer", "branch-1", ""), "coding", "task:agent_mode=context-gatherer"},
-		{newTask, "coding", "task:agent_task_type=spec"},
+		{stageScopePreflight(t, "auto", "vibe", "", "run"), "fast", "stage:run"},
+		{stageScopeToolFollowup(t, stageScopePreflight(t, "auto", "vibe", "", "implement")), "fast", "conversation_lock:stage:run"},
+		{stageScopePreflight(t, "auto", "context-gatherer", "branch-1", "plan"), "coding", "stage:plan"},
+		{newTask, "coding", "stage:implement"},
 	}
 	var wantTotal float64
 	for _, tc := range tests {
@@ -162,7 +183,7 @@ func TestTaskAutoRoutesScopesAndMetersSelectedModel(t *testing.T) {
 	}
 	// 独立分支不覆盖主会话的 classifier 跟随目标。
 	for _, tc := range []struct{ mode, branch, want string }{{"vibe", "", "coding"}, {"context-gatherer", "branch-1", "coding"}} {
-		pre := autoTaskPreflight(t, "simple-task", tc.mode, tc.branch, "")
+		pre := stageScopePreflight(t, "simple-task", tc.mode, tc.branch, "")
 		pre.IsClassifier = true
 		route := s.resolveClassifierRoute(pre)
 		if route == nil || route.Model.ID != tc.want || route.Group != nil {
@@ -219,7 +240,7 @@ func TestTaskAutoRoutesScopesAndMetersSelectedModel(t *testing.T) {
 	}
 }
 
-func TestTaskAutoManualSelectionClearsOnlyItsScope(t *testing.T) {
+func TestStageAutoScopeManualSelectionClearsOnlyItsScope(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "manual.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -230,54 +251,55 @@ func TestTaskAutoManualSelectionClearsOnlyItsScope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	config := store.AutoRoutingConfig{Enabled: true, DefaultModelID: "default", TaskRules: []store.AutoTaskRule{{Field: "agent_task_type", Value: "spec", ModelID: "coding"}}}
+	config := store.AutoRoutingConfig{Mode: store.AutoRoutingModeStageFixed, Enabled: true, DefaultModelID: "default",
+		StageModels: store.AutoStageModels{Run: "default", Plan: "default", Implement: "coding", Review: "default", Finalize: "default"}}
 	raw, _ := json.Marshal(config)
 	if err := db.SetSetting(store.AutoRoutingSetting, string(raw)); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{router: router.New(db)}
-	pre := autoTaskPreflight(t, "auto", "vibe", "", "")
+	pre := stageScopePreflight(t, "auto", "vibe", "", "run")
 	if route, err := s.resolveMainRoute(pre); err != nil || route.Model.ID != "default" {
 		t.Fatalf("initial: %v/%v", route, err)
 	}
-	branch := autoTaskPreflight(t, "auto", "context-gatherer", "branch", "")
+	branch := stageScopePreflight(t, "auto", "context-gatherer", "branch", "plan")
 	if _, err := s.resolveMainRoute(branch); err != nil {
 		t.Fatal(err)
 	}
-	autoTaskToolFollowup(t, branch)
-	manual := autoTaskPreflight(t, "coding", "vibe", "", "")
+	stageScopeToolFollowup(t, branch)
+	manual := stageScopePreflight(t, "coding", "vibe", "", "")
 	if route, err := s.resolveMainRoute(manual); err != nil || route.Model.ID != "coding" || route.AutoReason != "" {
 		t.Fatalf("manual: %v/%v", route, err)
 	}
-	autoTaskToolFollowup(t, pre)
-	pre.Conv.AgentTaskType = "spec"
-	if route, err := s.resolveMainRoute(pre); err != nil || route.Model.ID != "coding" || route.AutoReason != "tool_continuation_unlocked:task:agent_task_type=spec" {
+	stageScopeToolFollowup(t, pre)
+	stageScopeApplyHeader(t, pre.Conv, "implement")
+	if route, err := s.resolveMainRoute(pre); err != nil || route.Model.ID != "coding" || route.AutoReason != "tool_continuation_unlocked:stage:implement" {
 		t.Fatalf("reselected: %v/%v", route, err)
 	}
-	branch.Conv.AgentTaskType = "spec"
-	if route, err := s.resolveMainRoute(branch); err != nil || route.Model.ID != "default" || route.AutoReason != "conversation_lock" {
+	stageScopeApplyHeader(t, branch.Conv, "implement")
+	if route, err := s.resolveMainRoute(branch); err != nil || route.Model.ID != "default" || route.AutoReason != "conversation_lock:stage:plan" {
 		t.Fatalf("branch lock lost: %v/%v", route, err)
 	}
 	// 彩蛋走快捷响应路径，同样须清除手动改选所在的执行域。
 	s.conversationModels = make(map[string]conversationModelEntry)
-	egg := autoTaskPreflight(t, "GPT-8.8", "vibe", "", "")
+	egg := stageScopePreflight(t, "GPT-8.8", "vibe", "", "")
 	s.rememberEasterEggModel(egg)
-	pre.Conv.AgentTaskType = ""
-	if route, err := s.resolveMainRoute(pre); err != nil || route.Model.ID != "default" || route.AutoReason != "tool_continuation_unlocked:default" {
+	stageScopeApplyHeader(t, pre.Conv, "run")
+	if route, err := s.resolveMainRoute(pre); err != nil || route.Model.ID != "default" || route.AutoReason != "tool_continuation_unlocked:stage:run" {
 		t.Fatalf("easter egg did not clear Auto lock: %v/%v", route, err)
 	}
-	if route, err := s.resolveMainRoute(branch); err != nil || route.Model.ID != "default" || route.AutoReason != "conversation_lock" {
+	if route, err := s.resolveMainRoute(branch); err != nil || route.Model.ID != "default" || route.AutoReason != "conversation_lock:stage:plan" {
 		t.Fatalf("easter egg cleared another branch: %v/%v", route, err)
 	}
 }
 
-func TestTaskAutoEasterEggClassifierUsesBranchScope(t *testing.T) {
+func TestStageAutoScopeEasterEggClassifierUsesBranchScope(t *testing.T) {
 	s := &Server{conversationModels: make(map[string]conversationModelEntry)}
-	main := autoTaskPreflight(t, "GPT-8.8", "vibe", "", "")
-	branch := autoTaskPreflight(t, "normal", "context-gatherer", "branch", "")
-	mainClassifier := autoTaskPreflight(t, "simple-task", "vibe", "", "")
+	main := stageScopePreflight(t, "GPT-8.8", "vibe", "", "")
+	branch := stageScopePreflight(t, "normal", "context-gatherer", "branch", "")
+	mainClassifier := stageScopePreflight(t, "simple-task", "vibe", "", "")
 	mainClassifier.IsClassifier = true
-	branchClassifier := autoTaskPreflight(t, "simple-task", "context-gatherer", "branch", "")
+	branchClassifier := stageScopePreflight(t, "simple-task", "context-gatherer", "branch", "")
 	branchClassifier.IsClassifier = true
 	s.rememberEasterEggModel(main)
 	s.rememberModelName(branch, "normal")
