@@ -1,0 +1,233 @@
+{
+  "original_sha256": "6acca01dfa75f7a301618f59736c996b481843445838bf618499487194d35fbb",
+  "candidate_sha256": "8384475aad60356ba18dc0be15b75af37efcfd506987797a5dcad127540e77be",
+  "patches": [
+    {
+      "name": "stage-functions",
+      "before": "function B6o(t,e){",
+      "after": "\nconst kiroProxyRunSourcesV2=new Map;\nfunction kiroProxyDutyHelpV2(){return \" Fixed duty keys: orchestration, routine_support, investigation, requirements, design, implementation_plan, implementation, iterative_execution, experiment, design_review, code_review, semantic_review, review_synthesis, review_verdict, validation, delivery_audit, operations, pr_lifecycle. The 20-duty layout replaces routine_support with preparation/finalization and pr_lifecycle with pr_submit/pr_feedback. Use a configured key; unknown declarations use the fixed default target.\";}\nconst kiroProxyBuiltinDutiesV2={\n \"bundled://autoresearch\":{\"experiments/experiment\":\"experiment\"},\n \"bundled://feature-pipeline\":{\"setup\":\"routine_support\",\"requirements\":\"requirements\",\"design-loop/design-draft\":\"design\",\"design-loop/design-review\":\"design_review\",\"plan\":\"implementation_plan\",\"code-loop/implement\":\"implementation\",\"code-loop/code-reviews/review-fable\":\"code_review\",\"code-loop/code-reviews/review-gpt\":\"code_review\",\"code-loop/code-aggregate\":\"review_verdict\",\"validate-gate/validate\":\"validation\"},\n \"bundled://goal\":{\"goal-loop/work\":\"iterative_execution\"},\n \"bundled://investigate\":{\"investigate\":\"investigation\"},\n \"bundled://publish-pr\":{\"submit\":\"pr_lifecycle\",\"pr-loop/respond\":\"pr_lifecycle\"},\n \"bundled://ralph\":{\"ralph-loop/iterate\":\"iterative_execution\"},\n \"bundled://semantic-review-multi-model\":{\"setup\":\"routine_support\",\"reviews/review-opus\":\"semantic_review\",\"reviews/review-gpt\":\"semantic_review\",\"aggregate\":\"review_synthesis\"}\n};\nfunction kiroProxyRecordRunV2(id,source){if(process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\")kiroProxyRunSourcesV2.set(id,{...source});}\nfunction kiroProxyStampMainExecutionV2(session,execution){if(process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&!session.workflowId&&session.kiroProxyRoute&&typeof execution.executionId===\"string\")session.kiroProxyRoute={...session.kiroProxyRoute,executionId:execution.executionId};}\nfunction kiroProxyAgentRevisionV2(workflow,taskType){let definition={...workflow};delete definition.planRevision;return require(\"node:crypto\").createHash(\"sha256\").update(JSON.stringify({workflow:definition,taskType})).digest(\"hex\");}\nfunction kiroProxySingleRunV2(workflow){return workflow?.steps?.length===1&&workflow.steps[0]?.type===\"step\"&&workflow.steps[0]?.id===\"run\";}\nfunction kiroProxyTextV2(value,key,max){if(typeof value!==\"string\"||Buffer.byteLength(value,\"utf8\")>max||value!==value.trim()||value.includes(String.fromCharCode(0))||value.includes(String.fromCharCode(10))||value.includes(String.fromCharCode(13)))throw new Error(\"Kiro proxy \"+key+\" is invalid\");return value;}\nfunction kiroProxySourceFileV2(base,id){return Mn.join(fH(base,id),\"kiro-proxy-routing-v2.json\");}\nfunction kiroProxyValidateSourceV2(record,id){\n if(!record||typeof record!==\"object\"||Array.isArray(record)||record.version!==2||record.workflowId!==id)throw new Error(\"Kiro proxy workflow source record has invalid version or workflowId\");\n for(let key of Object.keys(record))if(![\"version\",\"workflowId\",\"definitionId\",\"definitionRevision\",\"taskType\",\"bundleSha\",\"parentRoute\"].includes(key))throw new Error(\"Kiro proxy workflow source record has unknown \"+key);\n for(let [key,max] of [[\"workflowId\",512],[\"definitionId\",1024],[\"definitionRevision\",256],[\"taskType\",128],[\"bundleSha\",64]])kiroProxyTextV2(record[key],\"workflow source \"+key,max);\n if(record.parentRoute!==undefined){if(!record.parentRoute||typeof record.parentRoute!==\"object\"||Array.isArray(record.parentRoute))throw new Error(\"Kiro proxy parent route is invalid\");for(let key of Object.keys(record.parentRoute))if(![\"nodeId\",\"definitionId\",\"definitionRevision\",\"nodePath\",\"taskType\",\"executionId\",\"workflowId\"].includes(key))throw new Error(\"Kiro proxy parent route has unknown \"+key);for(let [key,max] of [[\"nodeId\",128],[\"definitionId\",1024],[\"definitionRevision\",256],[\"nodePath\",1024],[\"taskType\",128],[\"executionId\",512],[\"workflowId\",512]])if(record.parentRoute[key]!==undefined)kiroProxyTextV2(record.parentRoute[key],\"parent route \"+key,max);}\n return record;\n}\nasync function kiroProxyWriteSourceV2(fs,base,id,source){\n if(process.env.KIRO_PROXY_STAGE_BRIDGE!==\"1\")return;\n let record=kiroProxyValidateSourceV2({version:2,workflowId:id,definitionId:source.definitionId??\"\",definitionRevision:source.definitionRevision??\"\",taskType:source.taskType??\"\",bundleSha:source.bundleSha??\"\",...source.parentRoute?{parentRoute:{...source.parentRoute}}:{}},id),path=kiroProxySourceFileV2(base,id),temporary=path+\".tmp.\"+Ix.randomUUID();\n try{await fs.writeFile(temporary,JSON.stringify(record));await fs.rename(temporary,path)}catch(error){try{await fs.unlink(temporary)}catch{}throw error}\n let verified=kiroProxyValidateSourceV2(JSON.parse(await fs.readFile(path)),id);\n if(JSON.stringify(verified)!==JSON.stringify(record))throw new Error(\"Kiro proxy workflow source record verification failed\");\n kiroProxyRecordRunV2(id,verified);\n}\nasync function kiroProxyReadSourceV2(fs,base,id){\n if(process.env.KIRO_PROXY_STAGE_BRIDGE!==\"1\")return;\n let value;try{value=await fs.readFile(kiroProxySourceFileV2(base,id))}catch(error){if(error?.code===\"ENOENT\")return;throw error}\n let record=kiroProxyValidateSourceV2(JSON.parse(value),id);kiroProxyRecordRunV2(id,record);return record;\n}\nfunction kiroProxyDefinitionV2(workflow){\n if(!workflow||typeof workflow!==\"object\")return;\n let copy={...workflow};delete copy.planRevision;\n let serialized=JSON.stringify(copy);\n if(typeof serialized!==\"string\")return;\n for(let recipe of hoe())if(JSON.stringify(recipe.workflow)===serialized)return{definitionId:\"bundled://\"+recipe.name,bundleSha:\"6acca01dfa75f7a301618f59736c996b481843445838bf618499487194d35fbb\"};\n if(/^agent-/.test(workflow.name)&&kiroProxySingleRunV2(workflow))return;\n return{definitionId:\"content://\"+require(\"node:crypto\").createHash(\"sha256\").update(serialized).digest(\"hex\")};\n}\nfunction kiroProxyNodePathV2(path,workflowId,definition,nodeId){\n if(!Array.isArray(path)||path.length<2||path[0]!==workflowId||!Array.isArray(definition?.steps))return \"\";\n let children=definition.steps,parts=[],index=1;\n while(index<path.length){\n  let segment=path[index++];if(typeof segment!==\"string\"||!Array.isArray(children))return \"\";\n  let matches=children.filter(node=>node&&typeof node===\"object\"&&node.id===segment);\n  if(matches.length!==1)return \"\";\n  let node=matches[0],encoded;try{encoded=encodeURIComponent(node.id)||\"%\"}catch{return \"\"}\n  parts.push(encoded);\n  if(node.type===\"step\"){\n   if(index!==path.length||node.id!==nodeId)return \"\";\n   let result=parts.join(\"/\");return Buffer.byteLength(result,\"utf8\")<=1024?result:\"\";\n  }\n  if(node.type===\"repeat\"){\n   if(index>=path.length||typeof path[index]!==\"string\"||!/^iter-\\d+$/.test(path[index++]))return \"\";\n   children=node.steps;\n  }else if(node.type===\"sequence\")children=node.steps;\n  else if(node.type===\"parallel\")children=node.branches;\n  else return \"\";\n }\n return \"\";\n}\nfunction kiroProxyStepRouteV2(meta,sessionId,revision){\n let path=kiroProxyNodePathV2(meta.nodePath,meta.workflowId,meta.kiroProxyDefinition,meta.nodeId),recorded=kiroProxyRunSourcesV2.get(meta.workflowId),agentSource=recorded?.parentRoute!==undefined,singleRun=agentSource&&meta.nodeId===\"run\"&&path===\"run\"&&kiroProxySingleRunV2(meta.kiroProxyDefinition);\n let source=singleRun?{...recorded,definitionRevision:recorded.taskType?kiroProxyAgentRevisionV2(meta.kiroProxyDefinition,recorded.taskType):\"\"}:revision===0&&!agentSource?recorded:undefined;\n source??=kiroProxyDefinitionV2(meta.kiroProxyDefinition);\n if(source?.parentRoute&&!source.taskType)return{...source.parentRoute,executionId:source.parentRoute.executionId??\"\",workflowId:meta.workflowId??\"\"};\n let bundled=source?.definitionId?.startsWith(\"bundled://\")&&revision===0&&source.bundleSha===\"6acca01dfa75f7a301618f59736c996b481843445838bf618499487194d35fbb\";\n let duty=bundled?kiroProxyBuiltinDutiesV2[source.definitionId]?.[path]:undefined;\n return{nodeId:typeof meta.nodeId===\"string\"?meta.nodeId:\"\",definitionId:source?.definitionId??\"\",definitionRevision:source?(source.definitionRevision|| (bundled?source.bundleSha+\":0\":String(revision??\"\"))):\"\",nodePath:path,taskType:duty??source?.taskType??\"\",executionId:sessionId??\"\",workflowId:meta.workflowId??\"\"};\n}\nfunction kiroProxyEnvelopeV2(state,mode,workflow){\n if(process.env.KIRO_PROXY_STAGE_BRIDGE!==\"1\"||workflow?.autoDomain!==true)return;\n if(state.currentMessage?.userInputMessage?.modelId!==\"auto\")throw new Error(\"Kiro proxy Auto domain requires an Auto request model\");\n if(typeof state.conversationId!==\"string\"||!state.conversationId.trim())throw new Error(\"Kiro proxy workflow requires a request conversationId\");\n let continuation=state.agentContinuationId??\"\";\n if(typeof continuation!==\"string\")throw new Error(\"Kiro proxy continuation identity must be a string\");\n let fields={version:2,nodeId:workflow.nodeId??\"\",definitionId:workflow.definitionId??\"\",definitionRevision:workflow.definitionRevision??\"\",nodePath:workflow.nodePath??\"\",taskType:workflow.taskType??\"\",executionId:workflow.executionId??\"\",workflowId:workflow.workflowId??\"\",conversationId:state.conversationId,agentMode:typeof mode===\"string\"?mode:\"\",agentContinuationId:continuation};\n for(let [key,max] of [[\"nodeId\",128],[\"definitionId\",1024],[\"definitionRevision\",256],[\"nodePath\",1024],[\"taskType\",128],[\"executionId\",512],[\"workflowId\",512],[\"conversationId\",512],[\"agentMode\",128],[\"agentContinuationId\",512]])kiroProxyTextV2(fields[key],\"workflow \"+key,max);\n return fields;\n}\nfunction kiroProxyStageHeadersV2(state,mode,workflow){\n let meta=kiroProxyEnvelopeV2(state,mode,workflow);\n return meta?{\"X-Kiro-Proxy-Workflow\":JSON.stringify(meta)}:{};\n}\nfunction kiroProxyAttachStageV2(command,state,mode,workflow){\n let headers=kiroProxyStageHeadersV2(state,mode,workflow);\n if(Object.keys(headers).length)command.middlewareStack.add(next=>async args=>{args.request.headers={...args.request.headers,...headers};return next(args)},{step:\"finalizeRequest\",priority:\"low\",name:\"kiroProxyStageV2\"});\n return command;\n}\nfunction kiroProxyStageRawBodyV2(body,state,mode,workflow){\n let meta=kiroProxyEnvelopeV2(state,mode,workflow);\n if(!meta)return body;\n if(body.model!==\"auto\")throw new Error(\"Kiro proxy Auto domain requires an Auto raw model\");\n let results=state.currentMessage?.userInputMessage?.userInputMessageContext?.toolResults??[];\n if(!Array.isArray(results))throw new Error(\"Kiro proxy current toolResults must be an array\");\n return{...body,metadata:{...body.metadata,\"kiro:conversation_id\":meta.conversationId,\"kiro:agent_mode\":meta.agentMode,\"kiro:proxy_continuation_id\":meta.agentContinuationId,\"kiro:proxy_current_tool_results\":results.length}};\n}\nfunction B6o(t,e){"
+    },
+    {
+      "name": "workflow-source",
+      "before": "if(A!==void 0)try{await t.host.stateFs.unlink(A)}catch(F){T.warn(\"workflow.new.generated_cleanup_failed\"",
+      "after": "if(process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&C===\"auto\"){let kiroProxySource=d.workflowPath?.startsWith(\"agent://\")?{definitionId:d.taskType?d.workflowPath:\"\",definitionRevision:d.taskType?kiroProxyAgentRevisionV2(g,d.taskType):\"\",taskType:d.taskType??\"\",parentRoute:t.host.getSession(p)?.kiroProxyRoute??{}}:kiroProxyDefinitionV2(g)??{};await kiroProxyWriteSourceV2(t.host.stateFs,v,S,kiroProxySource)}if(A!==void 0)try{await t.host.stateFs.unlink(A)}catch(F){T.warn(\"workflow.new.generated_cleanup_failed\""
+    },
+    {
+      "name": "workflow-source-load",
+      "before": "let p=zEe(n);tWu(n),",
+      "after": "process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&n.parentModelId===\"auto\"&&await kiroProxyReadSourceV2(this.deps.fs,r,e);let p=zEe(n);tWu(n),"
+    },
+    {
+      "name": "run-workflow-task-schema",
+      "before": "FKu=b.object({workflowPath:b.string().nullish().describe(",
+      "after": "FKu=b.object({taskType:b.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/).optional().describe(\"Explicit duty for an agent:// single-step run; omit to inherit the parent Auto context when available.\"+kiroProxyDutyHelpV2()),workflowPath:b.string().nullish().describe("
+    },
+    {
+      "name": "run-workflow-task-params",
+      "before": "function QFi(t,e,r,n){let s={workflowPath:t,inputs:e,parentSessionId:r};return n!==void 0&&(s.runLabel=n),s}",
+      "after": "function QFi(t,e,r,n,s){let a={workflowPath:t,inputs:e,parentSessionId:r};return n!==void 0&&(a.runLabel=n),s!==void 0&&(a.taskType=s),a}"
+    },
+    {
+      "name": "run-workflow-task-validate",
+      "before": "if(this.isWorkflowStepSession(s.execution.chatSessionId)){let p=",
+      "after": "if(n.taskType&&!n.workflowPath?.startsWith(\"agent://\")){let p=\"taskType is accepted only for an agent:// single-step workflow.\";return r.recordToolError(new Error(p)),this.concludeToolUse(s,a,l(de.HandledError,p))}if(this.isWorkflowStepSession(s.execution.chatSessionId)){let p="
+    },
+    {
+      "name": "run-workflow-task-forward",
+      "before": "QFi(n.workflowPath??\"\",n.inputs,s.execution.chatSessionId,n.runLabel)",
+      "after": "QFi(n.workflowPath??\"\",n.inputs,s.execution.chatSessionId,n.runLabel,n.taskType)"
+    },
+    {
+      "name": "workflow-auto-inheritance",
+      "before": "function P8(t,e){return Jve(t.modelId)??Jve(e.modelId)??Jve(e.parentModelId)}",
+      "after": "function P8(t,e){return process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&(e.parentModelId===\"auto\"||e.modelId===\"auto\")?\"auto\":Jve(t.modelId)??Jve(e.modelId)??Jve(e.parentModelId)}"
+    },
+    {
+      "name": "main-execution-source",
+      "before": "ye=this.controller.trigger(it,this.buildSessionServices(r,ne),j.signal),s()",
+      "after": "ye=this.controller.trigger(it,this.buildSessionServices(r,ne),j.signal),kiroProxyStampMainExecutionV2(r,ye),s()"
+    },
+    {
+      "name": "step-meta-continue",
+      "before": "let I={stepNode:n,userMessage:S,meta:{workflowId:e.workflowId,",
+      "after": "let I={stepNode:n,userMessage:S,meta:{kiroProxyRevision:e.workflow.planRevision,kiroProxyDefinition:e.workflow,workflowId:e.workflowId,"
+    },
+    {
+      "name": "step-meta-create",
+      "before": "m=n.prompt,g={stepNode:n,userMessage:wTt(E3u(m,h,(this.deps.generateFrameNonce??FVu)()),e.state.originalUserMessages??[]),meta:{workflowId:e.workflowId,",
+      "after": "m=n.prompt,g={stepNode:n,userMessage:wTt(E3u(m,h,(this.deps.generateFrameNonce??FVu)()),e.state.originalUserMessages??[]),meta:{kiroProxyRevision:e.workflow.planRevision,kiroProxyDefinition:e.workflow,workflowId:e.workflowId,"
+    },
+    {
+      "name": "step-session-create",
+      "before": "n.workflowId=t.meta.workflowId,n.workflowNodeId=t.meta.nodeId,n.checkpointWorkflow=",
+      "after": "n.workflowId=t.meta.workflowId,n.workflowNodeId=t.meta.nodeId,process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&(n.kiroProxyRoute=kiroProxyStepRouteV2(t.meta,r,t.meta.kiroProxyRevision)),n.checkpointWorkflow="
+    },
+    {
+      "name": "step-session-resident-load",
+      "before": "g=this.host.getSession(t);if(g){this.bindStepToRun(r.workflowId,g),this.restampLegacyStepSessionRoot(g,t,d);",
+      "after": "g=this.host.getSession(t);if(g){this.bindStepToRun(r.workflowId,g),process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&(g.kiroProxyRoute=kiroProxyStepRouteV2(r,t,r.kiroProxyRevision)),this.restampLegacyStepSessionRoot(g,t,d);"
+    },
+    {
+      "name": "step-session-load",
+      "before": "A.workflowId=r.workflowId,A.workflowNodeId=r.nodeId,this.restampLegacyStepSessionRoot(A,t,d)",
+      "after": "A.workflowId=r.workflowId,A.workflowNodeId=r.nodeId,process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&(A.kiroProxyRoute=kiroProxyStepRouteV2(r,t,r.kiroProxyRevision)),this.restampLegacyStepSessionRoot(A,t,d)"
+    },
+    {
+      "name": "session-services",
+      "before": "buildSessionServices(e,r){e.policySession.authority.requireAvailable();let n=r??this.requireSessionModelId(e);return{workspace:e.workspace,",
+      "after": "buildSessionServices(e,r){e.policySession.authority.requireAvailable();let n=r??this.requireSessionModelId(e);if(process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\")e.kiroProxyRoute??=e.workflowId?{}:{taskType:\"orchestration\"};return{workspace:e.workspace,workflowId:e.workflowId,workflowNodeId:e.workflowNodeId,kiroProxyAutoDomain:process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&n===\"auto\",kiroProxyRoute:process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&n===\"auto\"&&!e.workflowId?{...e.kiroProxyRoute,executionId:void 0}:e.kiroProxyRoute,"
+    },
+    {
+      "name": "subagent-auto-inheritance",
+      "before": "let y=t.inline?t.inline.resolvedModelId:yoe(e.model,\"subagent-registered\").modelId",
+      "after": "let y=f.sessionServices.kiroProxyAutoDomain?\"auto\":t.inline?t.inline.resolvedModelId:yoe(e.model,\"subagent-registered\").modelId"
+    },
+    {
+      "name": "subagent-task-schema",
+      "before": "S1i={name:Qe().min(1).describe(",
+      "after": "S1i={taskType:Qe().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/).optional().describe(\"Explicit duty for an independent sub-agent; omit to inherit the parent Auto context.\"+kiroProxyDutyHelpV2()),name:Qe().min(1).describe("
+    },
+    {
+      "name": "dag-task-schema",
+      "before": "u={name:Qe().describe(\"Unique stage name\"),role:l,",
+      "after": "u={taskType:Qe().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/).optional().describe(\"Explicit duty for this independent stage; omit to inherit the parent Auto context.\"+kiroProxyDutyHelpV2()),name:Qe().describe(\"Unique stage name\"),role:l,"
+    },
+    {
+      "name": "dag-task-forward",
+      "before": "input:{name:e.role,prompt:p,explanation:",
+      "after": "input:{name:e.role,prompt:p,taskType:e.taskType,explanation:"
+    },
+    {
+      "name": "subagent-task-extract",
+      "before": "inlineAgent:v,executionId:S}=e,E=I1i(w)",
+      "after": "inlineAgent:v,executionId:S,taskType:kiroProxyTaskType}=e,E=I1i(w)"
+    },
+    {
+      "name": "subagent-task-forward",
+      "before": "contextMessages:U,executionId:P,inline:j,events:",
+      "after": "contextMessages:U,executionId:P,taskType:kiroProxyTaskType,inline:j,events:"
+    },
+    {
+      "name": "subagent-private-copy",
+      "before": "sessionServices:f.sessionServices,promptContext:f.promptContext",
+      "after": "sessionServices:process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"?{...f.sessionServices,kiroProxyRoute:t.taskType?{nodeId:t.executionId??\"\",definitionId:\"dynamic://invoke-sub-agent\",definitionRevision:\"1\",nodePath:\"\",taskType:t.taskType,executionId:t.executionId??\"\",workflowId:f.sessionServices.kiroProxyRoute?.workflowId??\"\"}:{...f.sessionServices.kiroProxyRoute,executionId:f.sessionServices.kiroProxyRoute?.executionId??(f.subExecutionDepth===0?f.executionId:\"\")}}:f.sessionServices,promptContext:f.promptContext"
+    },
+    {
+      "name": "execution-call-options",
+      "before": "metadata:{sessionId:this.chatSessionId,agentName:this.agentName,executionId:this.executionId,chatId:h},additionalModelRequestFields:",
+      "after": "metadata:{sessionId:this.chatSessionId,agentName:this.agentName,executionId:this.executionId,chatId:h},kiroProxyWorkflow:{...this.sessionServices.kiroProxyRoute,executionId:this.sessionServices.kiroProxyRoute?.executionId??(this.subExecutionDepth===0?this.executionId:\"\"),autoDomain:this.sessionServices.kiroProxyAutoDomain},additionalModelRequestFields:"
+    },
+    {
+      "name": "sdk-generate-options",
+      "before": "buildRequestCommand(l,s,e.additionalModelRequestFields,n,a)",
+      "after": "buildRequestCommand(l,s,e.additionalModelRequestFields,n,a,e.kiroProxyWorkflow)"
+    },
+    {
+      "name": "sdk-stream-options",
+      "before": "buildRequestCommand(F,t,e.additionalModelRequestFields,s,a)",
+      "after": "buildRequestCommand(F,t,e.additionalModelRequestFields,s,a,e.kiroProxyWorkflow)"
+    },
+    {
+      "name": "sdk-command-header",
+      "before": "buildRequestCommand(t,e,r,n,s){let a=new VUu({conversationState:e,profileArn:t.profileArn,additionalModelRequestFields:r,agentMode:this.agentMode,systemPrompt:n});return this.emitTestModelCallerHeaders&&s&&B6o(a,s),a}",
+      "after": "buildRequestCommand(t,e,r,n,s,i){let a=new VUu({conversationState:e,profileArn:t.profileArn,additionalModelRequestFields:r,agentMode:this.agentMode,systemPrompt:n});return this.emitTestModelCallerHeaders&&s&&B6o(a,s),kiroProxyAttachStageV2(a,e,this.agentMode,i)}"
+    },
+    {
+      "name": "raw-body-open",
+      "before": "function sFu(t){let{conversationState:e,systemPrompt:r,modelId:n,origin:s,profileArn:a,agentMode:l,additionalModelRequestFields:u}=t,d=iFu(e),p={};return ",
+      "after": "function sFu(t){let{conversationState:e,systemPrompt:r,modelId:n,origin:s,profileArn:a,agentMode:l,additionalModelRequestFields:u}=t,d=iFu(e),p={};return kiroProxyStageRawBodyV2(("
+    },
+    {
+      "name": "raw-body-close",
+      "before": "...Object.keys(p).length>0&&{metadata:p},...aFu(u)}}function aFu(t)",
+      "after": "...Object.keys(p).length>0&&{metadata:p},...aFu(u)}),e,l,t.kiroProxyWorkflow)}function aFu(t)"
+    },
+    {
+      "name": "raw-workflow-option",
+      "before": "getOrigin(),profileArn:me,agentMode:this.agentMode,additionalModelRequestFields:e.additionalModelRequestFields}",
+      "after": "getOrigin(),profileArn:me,agentMode:this.agentMode,additionalModelRequestFields:e.additionalModelRequestFields,kiroProxyWorkflow:e.kiroProxyWorkflow}"
+    },
+    {
+      "name": "raw-header-option",
+      "before": "userAgent:this.getUserAgent?.()});if(re.statusCode>=400)",
+      "after": "userAgent:this.getUserAgent?.(),kiroProxyWorkflowHeaders:kiroProxyStageHeadersV2(t,this.agentMode,e.kiroProxyWorkflow)});if(re.statusCode>=400)"
+    },
+    {
+      "name": "raw-transport-header",
+      "before": "...e.userAgent?{\"User-Agent\":e.userAgent}:{}},p=XR(r);",
+      "after": "...e.userAgent?{\"User-Agent\":e.userAgent}:{},...e.kiroProxyWorkflowHeaders},p=XR(r);"
+    }
+  ],
+  "previous_versions": [
+    {
+      "candidate_sha256": "7639b043c1838c9e226d0c0aeee8f289c444f0f3b4e89c856af279d01df2f1cb",
+      "patches": [
+        {
+          "name": "stage-functions",
+          "before": "function B6o(t,e){",
+          "after": "\nfunction kiroProxyStageEnvelopeV1(state,mode,workflow){\n if(process.env.KIRO_PROXY_STAGE_BRIDGE!==\"1\"||workflow?.autoDomain!==true)return;\n let stage=workflow.nodeId==null?\"run\":String(workflow.nodeId).trim().toLowerCase();\n if(!/^[a-z0-9._:/-]{1,128}$/.test(stage))throw new Error(\"Kiro proxy workflow nodeId is invalid\");\n if(state.currentMessage?.userInputMessage?.modelId!==\"auto\")throw new Error(\"Kiro proxy Auto domain requires an Auto request model\");\n if(typeof state.conversationId!==\"string\"||!state.conversationId.trim())throw new Error(\"Kiro proxy workflow requires a request conversationId\");\n let continuation=state.agentContinuationId??\"\";\n if(typeof continuation!==\"string\")throw new Error(\"Kiro proxy continuation identity must be a string\");\n if(workflow.workflowId!==void 0&&typeof workflow.workflowId!==\"string\")throw new Error(\"Kiro proxy workflowId must be a string\");\n return{version:1,stage:stage,...workflow.workflowId?{workflowId:workflow.workflowId}:{},conversationId:state.conversationId,agentMode:typeof mode===\"string\"?mode:\"\",agentContinuationId:continuation};\n}\nfunction kiroProxyStageHeadersV1(state,mode,workflow){\n let meta=kiroProxyStageEnvelopeV1(state,mode,workflow);\n return meta?{\"X-Kiro-Proxy-Workflow\":JSON.stringify(meta)}:{};\n}\nfunction kiroProxyAttachStageV1(command,state,mode,workflow){\n let headers=kiroProxyStageHeadersV1(state,mode,workflow);\n if(Object.keys(headers).length)command.middlewareStack.add(next=>async args=>{args.request.headers={...args.request.headers,...headers};return next(args)},{step:\"finalizeRequest\",priority:\"low\",name:\"kiroProxyStageV1\"});\n return command;\n}\nfunction kiroProxyStageRawBodyV1(body,state,mode,workflow){\n let meta=kiroProxyStageEnvelopeV1(state,mode,workflow);\n if(!meta)return body;\n if(body.model!==\"auto\")throw new Error(\"Kiro proxy Auto domain requires an Auto raw model\");\n let results=state.currentMessage?.userInputMessage?.userInputMessageContext?.toolResults??[];\n if(!Array.isArray(results))throw new Error(\"Kiro proxy current toolResults must be an array\");\n return{...body,metadata:{...body.metadata,\"kiro:conversation_id\":meta.conversationId,\"kiro:agent_mode\":meta.agentMode,\"kiro:proxy_continuation_id\":meta.agentContinuationId,\"kiro:proxy_current_tool_results\":results.length}};\n}\nfunction B6o(t,e){"
+        },
+        {
+          "name": "workflow-auto-inheritance",
+          "before": "function P8(t,e){return Jve(t.modelId)??Jve(e.modelId)??Jve(e.parentModelId)}",
+          "after": "function P8(t,e){return process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&(e.parentModelId===\"auto\"||e.modelId===\"auto\")?\"auto\":Jve(t.modelId)??Jve(e.modelId)??Jve(e.parentModelId)}"
+        },
+        {
+          "name": "session-services",
+          "before": "buildSessionServices(e,r){e.policySession.authority.requireAvailable();let n=r??this.requireSessionModelId(e);return{workspace:e.workspace,",
+          "after": "buildSessionServices(e,r){e.policySession.authority.requireAvailable();let n=r??this.requireSessionModelId(e);return{workspace:e.workspace,workflowId:e.workflowId,workflowNodeId:e.workflowNodeId,kiroProxyAutoDomain:process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"&&n===\"auto\","
+        },
+        {
+          "name": "subagent-auto-inheritance",
+          "before": "let y=t.inline?t.inline.resolvedModelId:yoe(e.model,\"subagent-registered\").modelId",
+          "after": "let y=f.sessionServices.kiroProxyAutoDomain?\"auto\":t.inline?t.inline.resolvedModelId:yoe(e.model,\"subagent-registered\").modelId"
+        },
+        {
+          "name": "execution-call-options",
+          "before": "metadata:{sessionId:this.chatSessionId,agentName:this.agentName,executionId:this.executionId,chatId:h},additionalModelRequestFields:",
+          "after": "metadata:{sessionId:this.chatSessionId,agentName:this.agentName,executionId:this.executionId,chatId:h},kiroProxyWorkflow:{workflowId:this.sessionServices.workflowId,nodeId:this.sessionServices.workflowNodeId,autoDomain:this.sessionServices.kiroProxyAutoDomain},additionalModelRequestFields:"
+        },
+        {
+          "name": "sdk-generate-options",
+          "before": "buildRequestCommand(l,s,e.additionalModelRequestFields,n,a)",
+          "after": "buildRequestCommand(l,s,e.additionalModelRequestFields,n,a,e.kiroProxyWorkflow)"
+        },
+        {
+          "name": "sdk-stream-options",
+          "before": "buildRequestCommand(F,t,e.additionalModelRequestFields,s,a)",
+          "after": "buildRequestCommand(F,t,e.additionalModelRequestFields,s,a,e.kiroProxyWorkflow)"
+        },
+        {
+          "name": "sdk-command-header",
+          "before": "buildRequestCommand(t,e,r,n,s){let a=new VUu({conversationState:e,profileArn:t.profileArn,additionalModelRequestFields:r,agentMode:this.agentMode,systemPrompt:n});return this.emitTestModelCallerHeaders&&s&&B6o(a,s),a}",
+          "after": "buildRequestCommand(t,e,r,n,s,i){let a=new VUu({conversationState:e,profileArn:t.profileArn,additionalModelRequestFields:r,agentMode:this.agentMode,systemPrompt:n});return this.emitTestModelCallerHeaders&&s&&B6o(a,s),kiroProxyAttachStageV1(a,e,this.agentMode,i)}"
+        },
+        {
+          "name": "raw-body-open",
+          "before": "function sFu(t){let{conversationState:e,systemPrompt:r,modelId:n,origin:s,profileArn:a,agentMode:l,additionalModelRequestFields:u}=t,d=iFu(e),p={};return ",
+          "after": "function sFu(t){let{conversationState:e,systemPrompt:r,modelId:n,origin:s,profileArn:a,agentMode:l,additionalModelRequestFields:u}=t,d=iFu(e),p={};return kiroProxyStageRawBodyV1(("
+        },
+        {
+          "name": "raw-body-close",
+          "before": "...Object.keys(p).length>0&&{metadata:p},...aFu(u)}}function aFu(t)",
+          "after": "...Object.keys(p).length>0&&{metadata:p},...aFu(u)}),e,l,t.kiroProxyWorkflow)}function aFu(t)"
+        },
+        {
+          "name": "raw-workflow-option",
+          "before": "getOrigin(),profileArn:me,agentMode:this.agentMode,additionalModelRequestFields:e.additionalModelRequestFields}",
+          "after": "getOrigin(),profileArn:me,agentMode:this.agentMode,additionalModelRequestFields:e.additionalModelRequestFields,kiroProxyWorkflow:e.kiroProxyWorkflow}"
+        },
+        {
+          "name": "raw-header-option",
+          "before": "userAgent:this.getUserAgent?.()});if(re.statusCode>=400)",
+          "after": "userAgent:this.getUserAgent?.(),kiroProxyWorkflowHeaders:kiroProxyStageHeadersV1(t,this.agentMode,e.kiroProxyWorkflow)});if(re.statusCode>=400)"
+        },
+        {
+          "name": "raw-transport-header",
+          "before": "...e.userAgent?{\"User-Agent\":e.userAgent}:{}},p=XR(r);",
+          "after": "...e.userAgent?{\"User-Agent\":e.userAgent}:{},...e.kiroProxyWorkflowHeaders},p=XR(r);"
+        }
+      ]
+    }
+  ]
+}

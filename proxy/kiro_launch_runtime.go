@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -24,6 +25,9 @@ func launchPreparedKiro(plan kiroLaunchPlan, logger *TrafficLogger) error {
 }
 
 func executeKiroRestart(plan kiroLaunchPlan, logger *TrafficLogger, driver kiroRestartDriver) error {
+	if plan.platform == "windows" && kiroStageBridgeEnabledInEnv(plan.env) && plan.stageInstall == nil {
+		return fmt.Errorf("Windows Kiro 阶段桥接已启用，但缺少安装预检计划")
+	}
 	if driver.running == nil {
 		return fmt.Errorf("检查 Kiro 进程状态失败: 未设置状态检查器")
 	}
@@ -60,6 +64,30 @@ func executeKiroRestart(plan kiroLaunchPlan, logger *TrafficLogger, driver kiroR
 			logKiroConfig(logger, "停止命令失败，但已确认旧 Kiro 进程退出: "+stopErr.Error())
 		}
 	}
+	if plan.stageInstall != nil {
+		// 仅对需要安装桥接的启动计划再次确认进程状态，避免旧进程占用 bundle。
+		stillRunning, err := driver.running()
+		if err != nil {
+			return fmt.Errorf("安装 Kiro 阶段桥接前检查进程状态失败: %w", err)
+		}
+		if stillRunning {
+			return fmt.Errorf("旧 Kiro 进程仍在运行，取消阶段桥接安装和新实例启动")
+		}
+		result, err := installKiroStageBridge(plan.stageInstall)
+		if err != nil {
+			if logger != nil {
+				logger.Error("kiro-stage-bridge", "安装失败: "+err.Error())
+			}
+			return fmt.Errorf("安装 Kiro 阶段桥接失败: %w", err)
+		}
+		if logger != nil {
+			if result.backupPath == "" {
+				logger.Info("kiro-stage-bridge", fmt.Sprintf("已核验安装: %s SHA256=%s", plan.stageInstall.target, plan.stageInstall.candidateHash))
+			} else {
+				logger.Info("kiro-stage-bridge", fmt.Sprintf("安装完成: %s SHA256=%s；原文件备份: %s SHA256=%s", plan.stageInstall.target, plan.stageInstall.candidateHash, result.backupPath, plan.stageInstall.originalHash))
+			}
+		}
+	}
 	if err := driver.start(plan); err != nil {
 		return fmt.Errorf("启动 Kiro 失败: %w", err)
 	}
@@ -72,7 +100,8 @@ func stopKiroProcesses(logger *TrafficLogger) error {
 }
 
 func startKiroProcess(plan kiroLaunchPlan) error {
-	cmd := hiddenCmd(plan.executable, plan.args...)
+	// Kiro 是需要显示窗口的 GUI 应用，不能使用带 HideWindow 的后台命令启动器。
+	cmd := exec.Command(plan.executable, plan.args...)
 	cmd.Env = plan.env
 	if plan.platform == "darwin" {
 		output, err := cmd.CombinedOutput()

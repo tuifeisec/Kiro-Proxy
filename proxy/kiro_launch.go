@@ -14,10 +14,11 @@ import (
 const kiroExtraCACertEnv = "NODE_EXTRA_CA_CERTS"
 
 type kiroLaunchPlan struct {
-	platform   string
-	executable string
-	args       []string
-	env        []string
+	platform     string
+	executable   string
+	args         []string
+	env          []string
+	stageInstall *kiroStageInstallPlan
 }
 
 type kiroLaunchPreparer func(injectCA bool) (kiroLaunchPlan, error)

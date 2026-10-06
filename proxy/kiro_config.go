@@ -10,9 +10,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	json "github.com/goccy/go-json"
 )
+
+// 将配置、还原与重启的预检到启动过程串行化，避免并发请求交错改写 Kiro 状态。
+var kiroLifecycleMu sync.Mutex
 
 // getKiroSettingsPath 返回 Kiro settings.json 路径
 func getKiroSettingsPath() string {
@@ -124,6 +128,9 @@ func configureKiroProxy(targetProxy string, logger *TrafficLogger) kiroProxyResu
 }
 
 func configureKiroProxyAt(targetProxy string, logger *TrafficLogger, settingsPath string, prepare kiroLaunchPreparer, launch kiroLaunchRunner) kiroProxyResult {
+	kiroLifecycleMu.Lock()
+	defer kiroLifecycleMu.Unlock()
+
 	settings, err := readKiroSettings(settingsPath)
 	if err != nil {
 		return kiroProxyResult{OK: false, Message: "读取 Kiro 设置失败: " + err.Error()}
@@ -163,6 +170,9 @@ func restoreKiroProxy(logger *TrafficLogger) kiroProxyResult {
 }
 
 func restoreKiroProxyAt(logger *TrafficLogger, settingsPath string, prepare kiroLaunchPreparer, launch kiroLaunchRunner) kiroProxyResult {
+	kiroLifecycleMu.Lock()
+	defer kiroLifecycleMu.Unlock()
+
 	backupPath := settingsPath + ".proxy-backup"
 
 	// 读取备份的原始值
@@ -212,6 +222,9 @@ func restartKiro(logger *TrafficLogger, targetProxy string) kiroProxyResult {
 }
 
 func restartKiroAt(logger *TrafficLogger, targetProxy, settingsPath string, prepare kiroLaunchPreparer, launch kiroLaunchRunner) kiroProxyResult {
+	kiroLifecycleMu.Lock()
+	defer kiroLifecycleMu.Unlock()
+
 	settings, err := readKiroSettings(settingsPath)
 	if err != nil {
 		return kiroProxyResult{OK: false, Message: "读取 Kiro 设置失败: " + err.Error()}
