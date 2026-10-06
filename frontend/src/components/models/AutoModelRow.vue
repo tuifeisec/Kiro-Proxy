@@ -1,8 +1,9 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { getSettings } from '../../api/settings.js'
+import { AUTO_ROUTING_SETTINGS_KEY, AUTO_STAGE_OPTIONS, parseAutoStageConfig } from '../../utils/autoStageConfig.js'
 
-const SETTINGS_KEY = 'auto_routing_config'
+const STAGE_KEYS = AUTO_STAGE_OPTIONS.map((stage) => stage.key)
 
 const props = defineProps({
   models: { type: Array, default: () => [] },
@@ -11,20 +12,17 @@ const props = defineProps({
 
 const emit = defineEmits(['configure'])
 const summary = ref(null)
+const legacyConfig = ref(false)
 const readError = ref('')
 const loading = ref(false)
 let readSequence = 0
 
 const modelById = computed(() => new Map(props.models.map((model) => [model.id, model])))
 const targetIds = computed(() => {
-  if (!summary.value?.enabled) return []
+  if (legacyConfig.value || !summary.value?.enabled) return []
   return [...new Set([
     summary.value.default_model_id,
-    summary.value.vision_model_id,
-    summary.value.reasoning_model_id,
-    summary.value.long_context_model_id,
-    summary.value.fast_model_id,
-    ...summary.value.task_rules.map((rule) => rule.model_id),
+    ...STAGE_KEYS.map((key) => summary.value.stage_models[key]),
   ].filter(Boolean))]
 })
 const targetRates = computed(() => targetIds.value.map((id) => {
@@ -33,57 +31,26 @@ const targetRates = computed(() => targetIds.value.map((id) => {
   const name = model.name || model.model_id || id
   return `${name}：${formatPrice(model.input_price)} / ${formatPrice(model.output_price)}`
 }))
+const configuredStageCount = computed(() => STAGE_KEYS.filter((key) => summary.value?.stage_models[key]).length)
+const stageTargetSummary = computed(() => STAGE_KEYS.map((key) => `${key}：${targetName(summary.value?.stage_models[key])}`).join('；'))
 const defaultTargetName = computed(() => {
-  if (summary.value && !summary.value.enabled) return '按当前默认候选路由'
   const id = summary.value?.default_model_id
-  if (!id) return '未配置默认模型'
+  if (!id) return '未配置固定目标'
+  return targetName(id)
+})
+const defaultTargetLabel = computed(() => legacyConfig.value ? '待保存固定目标：' : '固定目标：')
+const routingLabel = computed(() => {
+  if (legacyConfig.value) return '五阶段待配置（旧配置待替换）'
+  if (summary.value?.enabled) return '五阶段固定模型（已启用）'
+  return configuredStageCount.value === STAGE_KEYS.length && summary.value?.default_model_id
+    ? '五阶段固定模型（未启用）'
+    : '五阶段固定模型（待配置，未启用）'
+})
+
+function targetName(id) {
+  if (!id) return '未配置'
   const model = modelById.value.get(id)
   return model ? (model.name || model.model_id || id) : `${id}（模型不存在）`
-})
-const routingLabel = computed(() => summary.value?.enabled ? '按任务选模' : '兼容默认路由')
-
-function emptyConfig() {
-  return {
-    enabled: false,
-    default_model_id: '',
-    vision_model_id: '',
-    reasoning_model_id: '',
-    long_context_model_id: '',
-    fast_model_id: '',
-    fast_max_chars: 500,
-    long_context_min_chars: 32000,
-    task_rules: [],
-  }
-}
-
-function parseConfig(raw) {
-  if (raw === undefined || raw === null || raw === '') return emptyConfig()
-  let parsed
-  try {
-    parsed = JSON.parse(raw)
-  } catch (error) {
-    throw new Error(`自动任务选模配置不是有效 JSON：${error.message}`)
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('自动任务选模配置必须是 JSON 对象。')
-  }
-  if (parsed.task_rules !== undefined && !Array.isArray(parsed.task_rules)) {
-    throw new Error('自动任务选模配置中的 task_rules 不是数组。')
-  }
-  const next = { ...emptyConfig(), ...parsed }
-  if (typeof next.enabled !== 'boolean') {
-    throw new Error('自动任务选模配置中的 enabled 必须是布尔值。')
-  }
-  for (const key of ['default_model_id', 'vision_model_id', 'reasoning_model_id', 'long_context_model_id', 'fast_model_id']) {
-    if (typeof next[key] !== 'string') throw new Error(`自动任务选模配置中的 ${key} 必须是字符串。`)
-  }
-  if (!Number.isInteger(next.fast_max_chars) || !Number.isInteger(next.long_context_min_chars)) {
-    throw new Error('自动任务选模配置中的字符阈值必须是整数。')
-  }
-  if (!next.task_rules.every((rule) => rule && typeof rule === 'object' && typeof rule.field === 'string' && typeof rule.value === 'string' && typeof rule.model_id === 'string')) {
-    throw new Error('自动任务选模配置中的任务规则格式不完整。')
-  }
-  return next
 }
 
 function formatPrice(value) {
@@ -98,12 +65,16 @@ async function loadSummary() {
   loading.value = true
   readError.value = ''
   summary.value = null
+  legacyConfig.value = false
   try {
     const settings = await getSettings()
-    const next = parseConfig(settings?.[SETTINGS_KEY])
-    if (sequence === readSequence) summary.value = next
+    const next = parseAutoStageConfig(settings?.[AUTO_ROUTING_SETTINGS_KEY])
+    if (sequence === readSequence) {
+      summary.value = next.config
+      legacyConfig.value = next.legacy
+    }
   } catch (error) {
-    if (sequence === readSequence) readError.value = error?.message || '自动任务选模配置读取失败。'
+    if (sequence === readSequence) readError.value = error?.message || 'Auto 模型配置读取失败。'
   } finally {
     if (sequence === readSequence) loading.value = false
   }
@@ -123,7 +94,7 @@ watch(() => props.refreshToken, loadSummary, { immediate: true })
         <div class="text-[14px] font-semibold leading-5 text-ink">Auto</div>
         <div class="mt-1 flex items-center gap-1.5 text-[11px] leading-4 text-ink-3">
           <span class="font-mono text-ink-2">auto</span>
-          <span>内置默认配置</span>
+          <span>内置模型路由</span>
         </div>
       </div>
 
@@ -132,9 +103,9 @@ watch(() => props.refreshToken, loadSummary, { immediate: true })
         <div v-else-if="readError" class="truncate text-danger" role="alert" :title="readError">{{ readError }}</div>
         <template v-else-if="summary">
           <div class="font-medium text-ink-2">{{ routingLabel }}</div>
-          <div class="mt-1 truncate text-[11px] text-ink-3" :title="`${summary.enabled ? '默认：' : ''}${defaultTargetName}`">{{ summary.enabled ? '默认：' : '' }}{{ defaultTargetName }}</div>
-          <div class="mt-1 truncate text-[11px] text-ink-4" :title="`${summary.task_rules.length} 条任务规则${summary.enabled ? '' : '（未启用）'}`">
-            {{ summary.task_rules.length }} 条任务规则<span v-if="!summary.enabled">（未启用）</span>
+          <div class="mt-1 truncate text-[11px] text-ink-3" :title="`${defaultTargetLabel}${defaultTargetName}`">{{ defaultTargetLabel }}{{ defaultTargetName }}</div>
+          <div class="mt-1 truncate text-[11px] text-ink-4" :title="stageTargetSummary">
+            {{ configuredStageCount }}/5 个阶段已配置<span v-if="legacyConfig">（待保存）</span><span v-else-if="!summary.enabled">（未启用）</span>
           </div>
         </template>
       </div>
@@ -143,7 +114,8 @@ watch(() => props.refreshToken, loadSummary, { immediate: true })
         <div class="font-medium text-ink-3">按实际选中模型计价</div>
         <div v-if="loading" class="mt-1 text-ink-4">读取中...</div>
         <div v-else-if="readError" class="mt-1 truncate text-danger" :title="readError">读取失败</div>
-        <div v-else-if="summary && !summary.enabled" class="mt-1 text-ink-4">由兼容默认路由决定</div>
+        <div v-else-if="legacyConfig" class="mt-1 text-ink-4">新版 Auto 需先配置五阶段模型</div>
+        <div v-else-if="summary && !summary.enabled" class="mt-1 text-ink-4">由默认路由决定</div>
         <div v-else-if="targetRates.length" class="mt-1 truncate text-ink-2" :title="targetRates.join('；')">{{ targetRates.join('；') }}</div>
         <div v-else class="mt-1 text-ink-4">未配置目标模型</div>
         <div class="mt-0.5 text-[10px] text-ink-4">USD / 1M tokens，输入 / 输出</div>
