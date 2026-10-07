@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { get } from '../../api/http.js'
 import { getModelGroups, getModels } from '../../api/models.js'
 import { getSettings, updateSettings } from '../../api/settings.js'
@@ -25,6 +25,7 @@ import {
   resolveAutoTarget,
   validateAutoDutyConfig,
 } from '../../utils/autoDutyConfig.js'
+import { getAutoDutyDescription, getAutoNodeReference } from '../../utils/autoNodeDescriptions.js'
 
 const models = ref([])
 const groups = ref([])
@@ -46,6 +47,11 @@ const selectedMigrationLayout = ref('standard')
 const pendingLayout = ref('')
 const mergeResolutions = ref({})
 const bindingResolutions = ref({})
+const descriptionDialog = ref(null)
+const descriptionCloseButton = ref(null)
+const descriptionTitleId = useId()
+const activeDescription = ref(null)
+let descriptionTrigger = null
 const { showToast } = useToast()
 const emit = defineEmits(['busy', 'dirty', 'saved', 'cancel'])
 
@@ -61,6 +67,20 @@ const enabledGroups = computed(() => groups.value.filter((group) => (
 const availableTargetCount = computed(() => selectableModels.value.length + enabledGroups.value.length)
 const modelById = computed(() => new Map(models.value.map((model) => [model.id, model])))
 const duties = computed(() => AUTO_DUTY_LAYOUTS[config.value.layout])
+const activeNodeReference = computed(() => (
+  activeDescription.value?.kind === 'node'
+    ? getAutoNodeReference(activeDescription.value.observation?.node_id)
+    : null
+))
+const activeObservedDuty = computed(() => {
+  const selectedDuty = activeDescription.value?.observation?.selected_duty
+  if (!selectedDuty) return null
+  for (const layout of Object.values(AUTO_DUTY_LAYOUTS)) {
+    const duty = layout.find((item) => item.key === selectedDuty || item.label === selectedDuty)
+    if (duty) return { label: duty.label, description: getAutoDutyDescription(duty.key) }
+  }
+  return { label: selectedDuty, description: null }
+})
 const migrationMappings = computed(() => {
   const layout = migrationActive.value ? config.value.layout : selectedMigrationLayout.value
   return [
@@ -248,6 +268,50 @@ function stableObservationLabel(observation) {
   return `${observation.definition_id}@${observation.definition_revision} · ${observation.node_path}`
 }
 
+function openDutyDescription(duty, trigger) {
+  descriptionTrigger = trigger
+  restoreDescriptionFocus = true
+  activeDescription.value = { kind: 'duty', duty }
+  nextTick(() => {
+    if (!descriptionDialog.value?.open) descriptionDialog.value?.showModal()
+    descriptionCloseButton.value?.focus()
+  })
+}
+
+function openNodeDescription(observation, trigger) {
+  descriptionTrigger = trigger
+  restoreDescriptionFocus = true
+  activeDescription.value = { kind: 'node', observation }
+  nextTick(() => {
+    if (!descriptionDialog.value?.open) descriptionDialog.value?.showModal()
+    descriptionCloseButton.value?.focus()
+  })
+}
+
+let restoreDescriptionFocus = true
+
+function finishDescriptionDialogClose() {
+  activeDescription.value = null
+  const trigger = descriptionTrigger
+  descriptionTrigger = null
+  if (restoreDescriptionFocus && trigger?.isConnected) trigger.focus({ preventScroll: true })
+  restoreDescriptionFocus = true
+}
+
+function closeDescriptionDialog(restoreFocus = true) {
+  restoreDescriptionFocus = restoreFocus
+  if (descriptionDialog.value?.open) {
+    descriptionDialog.value.close()
+    return
+  }
+  finishDescriptionDialogClose()
+}
+
+function handleDescriptionDialogClose() {
+  if (descriptionDialog.value?.open) return
+  finishDescriptionDialogClose()
+}
+
 function observedTargetLabel(observation) {
   if (observation.target_group_id) {
     const group = groups.value.find((item) => item.id === observation.target_group_id)
@@ -378,12 +442,13 @@ async function save() {
 }
 
 onMounted(load)
+onBeforeUnmount(() => closeDescriptionDialog(false))
 </script>
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col">
     <div class="min-h-0 flex-1 overflow-y-auto p-4">
-      <p class="mb-3 text-[12px] leading-5 text-ink-4">Auto 按固定职责选择模型配置和思考等级。普通子 Agent 继承当前 Auto 目标；新声明的职责节点按自身绑定选择。模型配置按 UUID 固定，不使用分组轮询。</p>
+      <p class="mb-3 text-[12px] leading-5 text-ink-4">Auto 按固定职责选择模型配置或现有分组，并应用该职责固定的思考等级。普通子 Agent 继承当前 Auto 目标；显式声明的职责节点按自身绑定选择。选择分组时沿用该分组现有成员与后备组调度。</p>
       <div v-if="configError" class="mb-3 rounded-md border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] leading-5 text-danger" role="alert">
         <p>{{ configError }}</p>
         <details class="mt-2"><summary class="cursor-pointer">查看保留的原始配置</summary><pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px]">{{ rawConfig }}</pre></details>
@@ -471,7 +536,10 @@ onMounted(load)
               <div class="space-y-2">
                 <div v-for="duty in duties" :key="duty.key" class="grid gap-2 rounded-md border border-line-2 px-2.5 py-2 sm:grid-cols-[minmax(130px,0.8fr)_minmax(180px,1.5fr)_130px]">
                   <div class="min-w-0">
-                    <div class="text-[11px] font-medium text-ink-2">{{ duty.label }}</div>
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-[11px] font-medium text-ink-2">{{ duty.label }}</div>
+                      <button type="button" class="shrink-0 rounded border border-line-2 bg-surface px-2 py-1 text-[10px] text-ink-2 hover:bg-hover" @click="openDutyDescription(duty, $event.currentTarget)">说明</button>
+                    </div>
                     <div class="mt-0.5 truncate font-mono text-[9px] leading-4 text-ink-4" :title="duty.nodes.join(', ')">{{ duty.nodes.join(' · ') }}</div>
                   </div>
                   <select :value="config.duty_models[duty.key].model_id" class="ui-control-h ui-control min-w-0 px-2 text-[11px] text-ink" :aria-label="`${duty.label}模型或分组`" @change="updateConfigTarget(config.duty_models[duty.key], $event.target.value)">
@@ -495,7 +563,7 @@ onMounted(load)
               <p v-if="observationsError" class="mt-2 text-[11px] text-danger" role="alert">{{ observationsError }}</p>
               <div v-if="!observationsError && observations.length" class="mt-3 space-y-2">
                 <div v-for="observation in unknownObservations" :key="observationRecordKey(observation)" class="rounded-md border border-warning-tint-line bg-warning-tint p-2.5 text-[10px] leading-4 text-warning-fg">
-                  <div class="flex flex-wrap items-center justify-between gap-2"><strong>未归类 / 路由未知</strong><span>原因：{{ observation.unknown_reason || '尚未选择职责' }}</span></div>
+                  <div class="flex flex-wrap items-center justify-between gap-2"><strong>未归类 / 路由未知</strong><div class="flex items-center gap-2"><span>原因：{{ observation.unknown_reason || '尚未选择职责' }}</span><button type="button" class="rounded border border-warning-tint-line bg-surface px-2 py-1 text-[10px] text-ink-2" @click="openNodeDescription(observation, $event.currentTarget)">节点说明</button></div></div>
                   <div class="mt-1 break-all font-mono">{{ observation.definition_id || 'definition_id 缺失' }}@{{ observation.definition_revision || 'revision 缺失' }} · {{ observation.node_path || observation.node_id || 'node_path 缺失' }}</div>
                   <div class="mt-1 text-ink-3">task_type={{ observation.task_type || '空' }} · source={{ observation.selection_source || '空' }} · target={{ observedTargetLabel(observation) }} · effort={{ observation.effective_effort || '上游默认' }} · {{ observation.count || 0 }} 次</div>
                   <div v-if="nodeIdentityComplete(observation)" class="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_110px_auto_auto]">
@@ -508,7 +576,7 @@ onMounted(load)
                   <p v-else class="mt-2">缺少稳定身份字段，不能保存长期绑定或覆盖。</p>
                 </div>
                 <div v-for="observation in classifiedObservations" :key="observationRecordKey(observation)" class="rounded-md border border-line-2 p-2.5 text-[10px] leading-4 text-ink-3">
-                  <div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-ink-2">{{ observation.selected_duty }}</strong><span>source={{ observation.selection_source || '空' }} · lock={{ observation.lock_scope || '未知' }}</span></div>
+                  <div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-ink-2">{{ observation.selected_duty }}</strong><div class="flex items-center gap-2"><span>source={{ observation.selection_source || '空' }} · lock={{ observation.lock_scope || '未知' }}</span><button type="button" class="rounded border border-line-2 bg-surface px-2 py-1 text-[10px] text-ink-2" @click="openNodeDescription(observation, $event.currentTarget)">节点说明</button></div></div>
                   <div class="mt-1 break-all font-mono">{{ observation.definition_id || 'definition_id 缺失' }}@{{ observation.definition_revision || 'revision 缺失' }} · {{ observation.node_path || observation.node_id || 'node_path 缺失' }}</div>
                   <div class="mt-1">task_type={{ observation.task_type || '空' }} · target={{ observedTargetLabel(observation) }} · effort={{ observation.effective_effort || '上游默认' }} · channel={{ observation.channel_identity || '未知' }} · {{ observation.count || 0 }} 次 · 最近 {{ observation.last_seen || '未知' }}</div>
                   <div v-if="nodeIdentityComplete(observation)" class="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_110px_auto_auto]">
@@ -552,4 +620,100 @@ onMounted(load)
       </button>
     </footer>
   </section>
+  <dialog
+    ref="descriptionDialog"
+    class="m-auto w-[min(42rem,calc(100vw-1rem))] max-h-[calc(100dvh-1rem)] overflow-hidden rounded-xl border border-line-2 bg-surface p-0 text-ink shadow-xl backdrop:bg-black/50 sm:w-[min(42rem,calc(100vw-2rem))] sm:max-h-[calc(100dvh-2rem)]"
+    :aria-labelledby="descriptionTitleId"
+    aria-modal="true"
+    @click.self="closeDescriptionDialog()"
+    @cancel.prevent="closeDescriptionDialog()"
+    @close="handleDescriptionDialogClose"
+    @keydown.stop
+  >
+    <div class="flex max-h-[calc(100dvh-1rem)] flex-col sm:max-h-[calc(100dvh-2rem)]">
+      <header class="flex shrink-0 items-start justify-between gap-4 border-b border-line-2 px-4 py-3 sm:px-5">
+        <div>
+          <h2 :id="descriptionTitleId" class="text-sm font-semibold text-ink">
+            {{ activeDescription?.kind === 'duty' ? `${activeDescription.duty.label}职责说明` : '节点说明' }}
+          </h2>
+          <p v-if="activeDescription?.kind === 'duty'" class="mt-1 text-[11px] text-ink-4">{{ AUTO_DUTY_LAYOUT_LABELS[config.layout] }} · 只读说明</p>
+          <p v-else class="mt-1 text-[11px] text-ink-4">只读观察信息；节点名称用途仅供参考</p>
+        </div>
+        <button ref="descriptionCloseButton" type="button" autofocus aria-label="关闭说明弹窗" class="shrink-0 rounded-md border border-line-2 bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-hover" @click="closeDescriptionDialog()">关闭</button>
+      </header>
+      <div class="min-h-0 overflow-y-auto p-4 sm:p-5">
+        <template v-if="activeDescription?.kind === 'duty'">
+          <template v-if="getAutoDutyDescription(activeDescription.duty.key)">
+            <div class="space-y-4 text-[12px] leading-5">
+              <section>
+                <h3 class="font-semibold text-ink">职责用途</h3>
+                <p class="mt-1 text-ink-3">{{ getAutoDutyDescription(activeDescription.duty.key).purpose }}</p>
+              </section>
+              <div class="grid gap-4 sm:grid-cols-2">
+                <section>
+                  <h3 class="font-semibold text-ink">主要输入</h3>
+                  <ul class="mt-1 list-disc space-y-1 pl-5 text-ink-3"><li v-for="item in getAutoDutyDescription(activeDescription.duty.key).inputs" :key="item">{{ item }}</li></ul>
+                </section>
+                <section>
+                  <h3 class="font-semibold text-ink">主要产物</h3>
+                  <ul class="mt-1 list-disc space-y-1 pl-5 text-ink-3"><li v-for="item in getAutoDutyDescription(activeDescription.duty.key).outputs" :key="item">{{ item }}</li></ul>
+                </section>
+              </div>
+              <section>
+                <h3 class="font-semibold text-ink">选择模型时关注的能力</h3>
+                <ul class="mt-1 list-disc space-y-1 pl-5 text-ink-3"><li v-for="item in getAutoDutyDescription(activeDescription.duty.key).modelFocus" :key="item">{{ item }}</li></ul>
+                <p class="mt-2 text-[11px] text-ink-4">这是能力关注点，不绑定具体模型、思考等级或价格排名。</p>
+              </section>
+              <section>
+                <h3 class="font-semibold text-ink">关联节点用途参考</h3>
+                <ul class="mt-1 space-y-2 text-ink-3">
+                  <li v-for="nodeId in activeDescription.duty.nodes" :key="nodeId" class="break-words rounded-md border border-line-2 bg-surface-2 px-3 py-2">
+                    <code class="font-mono text-[11px] text-ink-2">{{ nodeId }}</code>
+                    <span class="ml-2">{{ getAutoNodeReference(nodeId)?.usage || '该节点名目前没有独立用途说明。' }}</span>
+                  </li>
+                </ul>
+                <p class="mt-2 text-[11px] text-ink-4">节点名称和用途仅作阅读参考，不参与职责判定或路由；路由依据可信职责来源和当前配置。</p>
+              </section>
+            </div>
+          </template>
+          <p v-else class="text-[12px] text-ink-3">该职责暂无说明。</p>
+        </template>
+        <template v-else-if="activeDescription?.kind === 'node'">
+          <div class="space-y-4 text-[12px] leading-5">
+            <section class="rounded-md border border-line-2 bg-surface-2 p-3">
+              <h3 class="font-semibold text-ink">实际路由职责</h3>
+              <p class="mt-1 break-words text-base font-semibold text-ink">{{ activeDescription.observation.selected_duty || '未确认' }}<span v-if="activeObservedDuty?.label && activeObservedDuty.label !== activeDescription.observation.selected_duty" class="ml-1 text-sm font-normal text-ink-3">（{{ activeObservedDuty.label }}）</span></p>
+              <p v-if="activeDescription.observation.selected_duty" class="mt-1 text-ink-3">{{ activeObservedDuty?.description?.purpose || '观察记录保留了该 selected_duty 值，但没有匹配到已知职责说明。' }}</p>
+              <p v-else class="mt-1 text-[11px] text-ink-4">当前实际用途未确认。节点名称和 task_type 只作参考，不会被用来推断路由职责。</p>
+            </section>
+            <section>
+              <h3 class="font-semibold text-ink">节点与路由来源</h3>
+              <dl class="mt-2 grid gap-x-3 gap-y-1 sm:grid-cols-[max-content_minmax(0,1fr)]">
+                <dt class="text-ink-4">node_id</dt><dd class="break-all font-mono text-ink-3">{{ activeDescription.observation.node_id || '缺失' }}</dd>
+                <dt class="text-ink-4">task_type</dt><dd class="break-words text-ink-3">{{ activeDescription.observation.task_type || '未提供' }}</dd>
+                <dt class="text-ink-4">source</dt><dd class="break-words text-ink-3">{{ activeDescription.observation.selection_source || '未提供' }}</dd>
+                <dt class="text-ink-4">unknown_reason</dt><dd class="break-words text-ink-3">{{ activeDescription.observation.unknown_reason || '未提供' }}</dd>
+              </dl>
+            </section>
+            <section>
+              <h3 class="font-semibold text-ink">稳定身份</h3>
+              <dl class="mt-2 grid gap-x-3 gap-y-1 sm:grid-cols-[max-content_minmax(0,1fr)]">
+                <dt class="text-ink-4">definition_id</dt><dd class="break-all font-mono text-ink-3">{{ activeDescription.observation.definition_id || '缺失' }}</dd>
+                <dt class="text-ink-4">definition_revision</dt><dd class="break-all font-mono text-ink-3">{{ activeDescription.observation.definition_revision || '缺失' }}</dd>
+                <dt class="text-ink-4">node_path</dt><dd class="break-all font-mono text-ink-3">{{ activeDescription.observation.node_path || '缺失' }}</dd>
+              </dl>
+            </section>
+            <section class="rounded-md border border-line-2 bg-surface-2 p-3">
+              <h3 class="font-semibold text-ink">节点名用途参考（不决定职责）</h3>
+              <template v-if="activeNodeReference">
+                <p class="mt-1 text-ink-3"><code class="font-mono">{{ activeNodeReference.nodeId }}</code>：{{ activeNodeReference.usage }}</p>
+              </template>
+              <p v-else class="mt-1 text-ink-3">该节点名没有独立参考说明；实际路由职责以上方观察记录为准。不会根据裸 node_id 推断路由。</p>
+              <p class="mt-2 text-[11px] text-ink-4">此处只解释名称，不会改变职责、模型选择或配置。</p>
+            </section>
+          </div>
+        </template>
+      </div>
+    </div>
+  </dialog>
 </template>
