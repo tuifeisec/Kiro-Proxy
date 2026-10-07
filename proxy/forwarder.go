@@ -450,7 +450,7 @@ func applyLatencyMetric(status *store.ModelHealthStatus, metric modelLatencyMetr
 // Forward 执行完整的转发流程
 func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
 	bindAutoReasoningEffort(pre, route, nil)
-	if route == nil || route.Model == nil {
+	if route == nil || route.Model == nil && route.Group == nil {
 		return nil, fmt.Errorf("无可用模型候选")
 	}
 	if route.Group == nil {
@@ -533,6 +533,7 @@ func (f *Forwarder) Forward(req *http.Request, pre *Preflight, route *router.Rou
 
 func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
 	now := time.Now()
+	rawResponses := pre != nil && pre.Protocol == "kiro-runtime-responses"
 	imageState := conversationImageState{}
 	conversationID := ""
 	if pre != nil && pre.Conv != nil {
@@ -542,6 +543,9 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 	imageCount := imageState.totalCount()
 	imageBytes := imageState.totalBytes()
 	requiresVision := imageState.requiresVision()
+	if rawResponses && pre.Conv != nil {
+		requiresVision = requiresVision || pre.Conv.RawResponsesHasImages
+	}
 	affinityModelID := f.affinity.get(route.Group.ID, conversationID, now)
 	scopes := dispatchAvoidanceScopes(route.Group.ID, conversationID, requestClientIP(req))
 
@@ -555,6 +559,19 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			Candidates: route.Candidates,
 		}}
 	}
+	if rawResponses {
+		compatible := 0
+		for _, stage := range stages {
+			for _, candidate := range stage.Candidates {
+				if _, err := rawResponsesCandidateURL(candidate); err == nil {
+					compatible++
+				}
+			}
+		}
+		if compatible == 0 {
+			return nil, fmt.Errorf("模型组 %s 没有 OpenAI /responses 兼容候选", route.Group.Name)
+		}
+	}
 
 	deadline := now.Add(modelGroupRetryBudget(route))
 	attempted := 0
@@ -564,6 +581,11 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 	var unsupportedEffortErr error
 	var lastContResult *converter.ResponsesContinuationResult
 	var lastModel *store.Model
+	defer func() {
+		if lastResp != nil && lastResp.Body != nil {
+			_ = lastResp.Body.Close()
+		}
+	}()
 
 	// 按阶段遍历，每个阶段内应用调度策略
 	for stageIndex, stage := range stages {
@@ -588,6 +610,18 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			continue
 		}
 
+		if rawResponses {
+			compatible := make([]*store.Model, 0, len(stage.Candidates))
+			for _, candidate := range stage.Candidates {
+				if _, err := rawResponsesCandidateURL(candidate); err == nil {
+					compatible = append(compatible, candidate)
+				}
+			}
+			stage.Candidates = compatible
+		}
+		if len(stage.Candidates) == 0 {
+			continue
+		}
 		// 阶段内应用调度策略（亲和、延迟、上游健康、图片能力）
 		stageCandidates := orderedRouteCandidates(&router.Route{
 			Model:           stage.Candidates[0],
@@ -638,7 +672,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				break
 			}
 
-			if pre != nil && pre.Protocol == "kiro" && pre.Conv != nil {
+			if pre != nil && (pre.Protocol == "kiro" || rawResponses) && pre.Conv != nil {
 				if err := converter.ValidateProviderReasoningEffort(model.Provider, resolveReasoningEffort(pre, model)); err != nil {
 					unsupportedEffortErr = err
 					logger.Info("dispatcher", fmt.Sprintf("跳过无法表达思考强度的候选: stage=%d group=%s model=%s error=%v", stageIndex, stage.GroupName, statsModelID(model), err))
@@ -711,8 +745,14 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				pre.usage.setDispatchReason(dispatchSelectionReason(route, model, affinityModelID, capacityWaited, f.latency.isDegraded(affinityModelID, time.Now())))
 			}
 			imageCapability, capabilitySource := f.imageCaps.effective(model, time.Now())
-			candidateView := candidateConversationForModel(pre, imageState, imageCapability)
+			candidateView := candidateConversationView{pre: pre, historyView: "raw"}
+			if !rawResponses {
+				candidateView = candidateConversationForModel(pre, imageState, imageCapability)
+			}
 			providerHasImage := candidateView.imageCount > 0
+			if rawResponses {
+				providerHasImage = requiresVision
+			}
 			logger.InfoWithMeta("dispatcher", fmt.Sprintf("尝试分组候选: stage=%d group=%s candidate=%d model=%s", stageIndex, stage.GroupName, candidateIndex, statsModelID(model)), LogMeta{
 				Model: statsModelID(model),
 				Metadata: map[string]interface{}{
@@ -752,26 +792,46 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				providerHasImage,
 				len(stageCandidates),
 			)
-			resp, firstByteDuration, err := requestWithProtocolFallback(req.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+			sendCandidate := func(attemptCtx context.Context) (*http.Response, error) {
 				var forwardErr error
-				attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, candidateView.pre, model, logger, 0)
+				retryBudget := time.Duration(0)
+				attemptResp, contResult, forwardErr = f.forwardCandidate(attemptCtx, candidateView.pre, model, logger, retryBudget)
 				return attemptResp, forwardErr
-			}, func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
+			}
+			probeCandidate := func(attemptCtx context.Context, attemptResp *http.Response, remaining time.Duration) error {
 				if !isSSEResponse(attemptResp) {
 					return waitForUpstreamFirstByte(attemptResp, remaining)
 				}
 				return probeSSEPrecommit(attemptCtx, attemptResp, model.Provider, sseProbeEndpointForResponse(attemptResp, model.Endpoint), remaining, 0)
-			})
+			}
+			var resp *http.Response
+			var firstByteDuration time.Duration
+			var err error
+			if rawResponses {
+				// Header deadline only: no body read, protocol fallback or SSE probe.
+				resp, _, err = requestWithFirstByteTimeout(req.Context(), firstByteTimeout, sendCandidate, func(context.Context, *http.Response, time.Duration) error { return nil })
+			} else {
+				resp, firstByteDuration, err = requestWithProtocolFallback(req.Context(), firstByteTimeout, sendCandidate, probeCandidate)
+			}
+			if resp == nil && err == nil {
+				err = fmt.Errorf("upstream returned no response")
+			}
 			if err != nil {
 				lease.release()
 				if req.Context().Err() != nil {
+					if rawResponses {
+						f.health.neutral(model)
+						f.upstream.neutral(model, time.Now())
+					}
 					return nil, req.Context().Err()
 				}
 				lastErr = err
 				failureClass := "candidate_error"
 				if errors.Is(err, errFirstByteTimeout) {
 					failureClass = "first_byte_slow"
-					f.latency.record(model.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
+					if !rawResponses {
+						f.latency.record(model.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
+					}
 					f.health.neutral(model)
 					f.upstream.neutral(model, time.Now())
 					if f.latency.isDegraded(model.ID, time.Now()) {
@@ -807,18 +867,22 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				})
 				continue
 			}
-			resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
+			if resp.Body == nil {
+				lease.release()
+			} else {
+				resp.Body = &leasedUpstreamBody{ReadCloser: resp.Body, lease: lease}
+			}
 			if firstByteDuration > 0 && resp != nil && (resp.StatusCode >= http.StatusBadRequest || !isSSEResponse(resp)) {
 				f.latency.record(model.ID, firstByteDuration, configuredFirstByteTimeout, time.Now())
 			}
 			bodyDetail := ""
 			capabilityMismatch := false
-			if resp.StatusCode == http.StatusBadRequest {
+			if !rawResponses && resp.StatusCode == http.StatusBadRequest {
 				bodyDetail = preserveResponseBody(resp)
 				capabilityMismatch = providerHasImage && isModelCapabilityMismatch(resp.StatusCode, bodyDetail)
 			}
 			if shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch {
-				if bodyDetail == "" {
+				if !rawResponses && bodyDetail == "" {
 					bodyDetail = preserveResponseBody(resp)
 				}
 				failureClass := modelFailureForStatus(resp.StatusCode)
@@ -841,7 +905,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 					markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
 				}
 				lastErr = fmt.Errorf("上游 %d", resp.StatusCode)
-				if lastResp != nil {
+				if lastResp != nil && lastResp.Body != nil {
 					lastResp.Body.Close()
 				}
 				lastResp = resp
@@ -869,15 +933,16 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				}, bodyDetail)
 				continue
 			}
-			if resp.StatusCode < http.StatusBadRequest && pre != nil && pre.usage != nil {
+			if !rawResponses && resp.StatusCode < http.StatusBadRequest && pre != nil && pre.usage != nil {
 				pre.usage.markFirstByte(time.Now())
 			}
 
-			if lastResp != nil {
+			if lastResp != nil && lastResp.Body != nil {
 				lastResp.Body.Close()
 			}
+			lastResp = nil
 			if resp.StatusCode < http.StatusBadRequest {
-				if pre == nil || pre.Protocol != "kiro" {
+				if !rawResponses && (pre == nil || pre.Protocol != "kiro") {
 					if providerHasImage {
 						f.imageCaps.observe(model, modelImageSupported, time.Now())
 					}
@@ -955,7 +1020,9 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 	if lastResp != nil && lastModel != nil {
 		route.Model = lastModel
 		bindUsageModel(pre, lastModel)
-		return f.finalizeForwardResponse(req.Context(), lastResp, pre, lastModel, logger, lastContResult, nil)
+		response := lastResp
+		lastResp = nil // Ownership moves to the caller through finalization.
+		return f.finalizeForwardResponse(req.Context(), response, pre, lastModel, logger, lastContResult, nil)
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("模型组 %s 请求失败: %w", route.Group.Name, lastErr)
@@ -1032,6 +1099,22 @@ func clearAvoidanceScopes(store *modelAvoidanceStore, scopes []string, modelID s
 }
 
 func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model *store.Model, logger *TrafficLogger, retryBudget time.Duration) (*http.Response, *converter.ResponsesContinuationResult, error) {
+	if pre != nil && pre.Protocol == "kiro-runtime-responses" {
+		endpoint, err := rawResponsesCandidateURL(model)
+		if err != nil {
+			return nil, nil, err
+		}
+		body, err := prepareRawResponsesBody(pre.Body, pre, model)
+		if err != nil {
+			return nil, nil, err
+		}
+		sessionID := pre.ConversationID
+		if pre.Conv != nil {
+			sessionID = pre.Conv.ConversationID
+		}
+		resp, err := f.sendRawGroupCandidate(ctx, endpoint, body, model, logger, sessionID, pre.usage)
+		return resp, nil, redactRawResponsesEndpointError(err, endpoint)
+	}
 	logger.Info("converter", fmt.Sprintf("开始转换: provider=%s, model_id=%s", model.Provider, model.ModelID))
 	conversionStarted := time.Now()
 	hasToolTurns := pre != nil && hasAssistantToolTurns(pre.Conv)
@@ -1229,6 +1312,17 @@ func (f *Forwarder) sendCandidateRequest(ctx context.Context, url string, body [
 }
 
 func (f *Forwarder) finalizeForwardResponse(ctx context.Context, resp *http.Response, pre *Preflight, model *store.Model, logger *TrafficLogger, contResult *converter.ResponsesContinuationResult, onStreamOutcome func(converter.StreamOutcome), onFirstContent ...func(time.Time, string)) (*http.Response, error) {
+	if pre != nil && pre.Protocol == "kiro-runtime-responses" {
+		endpoint, err := rawResponsesCandidateURL(model)
+		if err != nil {
+			return nil, err
+		}
+		var contentHook func(time.Time, string)
+		if len(onFirstContent) > 0 {
+			contentHook = onFirstContent[0]
+		}
+		return f.finalizeRawResponses(ctx, resp, pre.usage, model, endpoint, nil, onStreamOutcome, contentHook)
+	}
 	if pre != nil && pre.usage != nil {
 		var contentHook func(time.Time, string)
 		if len(onFirstContent) > 0 {
@@ -1400,7 +1494,11 @@ func (f *Forwarder) sendWithRetryBudgetPolicy(ctx context.Context, url string, b
 					Model: statsModelID(m), Metadata: map[string]interface{}{"trace_id": traceID, "attempt": attemptNumber},
 				})
 			} else {
-				logger.Error("forwarder", fmt.Sprintf("请求失败 (attempt %d): %v", attempt, err))
+				loggedErr := err
+				if preserveRawResponse {
+					loggedErr = redactRawResponsesEndpointError(err, url)
+				}
+				logger.Error("forwarder", fmt.Sprintf("请求失败 (attempt %d): %v", attempt, loggedErr))
 			}
 			if !shouldRetryResponsesTransport(m, body, url, attemptState) {
 				return nil, fmt.Errorf("上游请求发送状态不明确，拒绝重放 (%s): %w", requestOperationState(attemptState), lastErr)

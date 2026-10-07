@@ -5,18 +5,20 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"kiro-proxy/converter"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	json "github.com/goccy/go-json"
 )
 
-// ForwardRawResponses forwards a native OpenAI Responses request for a single
-// stage-selected model. It intentionally leaves the request and response
+// ForwardRawResponses forwards a native OpenAI Responses request for a fixed
+// Auto target. It intentionally leaves the request and response
 // protocol untouched apart from the documented local routing fields.
 func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
 	if req == nil {
@@ -25,19 +27,40 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 	if pre == nil {
 		return nil, fmt.Errorf("raw Responses preflight is nil")
 	}
-	if route == nil || route.Model == nil {
+	if route == nil || route.Model == nil && route.Group == nil {
 		return nil, fmt.Errorf("raw Responses route has no selected model")
 	}
-	model := route.Model
 	if route.AutoMode != store.AutoRoutingModeStageFixed && route.AutoMode != store.AutoRoutingModeDutyFixed {
 		return nil, fmt.Errorf("raw Responses requires a fixed Auto route")
 	}
 	bindAutoReasoningEffort(pre, route, nil)
-	if model.Provider != "openai" {
-		return nil, fmt.Errorf("raw Responses only supports provider openai; got %q", model.Provider)
-	}
 	if req.Method != http.MethodPost {
 		return nil, fmt.Errorf("raw Responses requires POST")
+	}
+	if route.Group != nil {
+		// Keep the caller's protocol intact, including direct callers using openai.
+		rawPre := *pre
+		rawPre.Protocol = "kiro-runtime-responses"
+		if rawPre.Body == nil && req.Body != nil {
+			var err error
+			rawPre.Body, err = io.ReadAll(req.Body)
+			if err != nil {
+				return nil, fmt.Errorf("read raw Responses request body: %w", err)
+			}
+		}
+		if rawPre.usage == nil {
+			requestPath := ""
+			if req.URL != nil {
+				requestPath = req.URL.Path
+			}
+			rawPre.usage = newRequestUsageRecorder(f.db, pre.StartTime, nil, requestPath, pre.Protocol)
+			rawPre.usage.setRoute(route)
+		}
+		return f.forwardModelGroup(req, &rawPre, route, logger)
+	}
+	model := route.Model
+	if model.Provider != "openai" {
+		return nil, fmt.Errorf("raw Responses only supports provider openai; got %q", model.Provider)
 	}
 
 	upstreamURL, err := localCompatUpstreamURL(localCompatResponses, model)
@@ -102,21 +125,63 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		usage.finish(http.StatusBadGateway, localCompatUsage{}, "raw Responses upstream returned no response")
 		return nil, fmt.Errorf("raw Responses upstream returned no response")
 	}
+	return f.finalizeRawResponses(req.Context(), resp, usage, model, upstreamURL, lease, nil, f.contentLatencyHook(usage, model, singleModelFirstByteTimeout))
+}
+
+func rawResponsesCandidateURL(model *store.Model) (string, error) {
+	if model == nil || model.Provider != "openai" {
+		return "", fmt.Errorf("raw Responses only supports provider openai")
+	}
+	endpoint, err := localCompatUpstreamURL(localCompatResponses, model)
+	if err != nil {
+		return "", err
+	}
+	if !isOpenAIResponsesUpstream(model, endpoint) {
+		return "", fmt.Errorf("raw Responses requires an OpenAI upstream endpoint ending in /responses")
+	}
+	return endpoint, nil
+}
+
+// A group candidate sends once; the shared scheduler owns member/status
+// failover and its outer header deadline. The single-model sender is unchanged.
+func (f *Forwarder) sendRawGroupCandidate(ctx context.Context, endpoint string, body []byte, model *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
+	operation := newUpstreamRequestOperation()
+	attempt := &upstreamAttemptState{}
+	var identity *upstreamUserAgentTrace
+	if logger != nil {
+		ctx, identity = withUpstreamUserAgentTrace(ctx)
+	}
+	resp, err := f.doRequestWithOperation(ctx, endpoint, body, model, sessionID, operation, attempt, usage)
+	safeErr := redactRawResponsesEndpointError(err, endpoint)
+	if identity != nil {
+		identity.log(logger, model, endpoint, operationRequestID(operation), 1, resp, safeErr)
+	}
+	return resp, safeErr
+}
+
+func (f *Forwarder) finalizeRawResponses(ctx context.Context, resp *http.Response, usage *requestUsageRecorder, model *store.Model, endpoint string, lease *modelLease, onOutcome func(converter.StreamOutcome), contentHook func(time.Time, string)) (*http.Response, error) {
 	if resp.Body == nil {
 		usage.finish(resp.StatusCode, localCompatUsage{}, "upstream response has no body")
-		f.recordRawResponsesStats(model, localCompatUsage{}, resp.StatusCode, "upstream response has no body", req.Context())
-		lease.release()
+		f.recordRawResponsesStats(model, localCompatUsage{}, resp.StatusCode, "upstream response has no body", ctx)
+		if lease != nil {
+			lease.release()
+		}
+		if onOutcome != nil && resp.StatusCode < http.StatusBadRequest {
+			onOutcome(converter.StreamOutcomeMissingTerminal)
+		}
 		return resp, nil
 	}
-
-	usage.wrapResponseForModel(resp, model, upstreamURL, f.contentLatencyHook(usage, model, singleModelFirstByteTimeout))
-	observed := newRawResponsesUsageBody(resp.Body, usage, resp.StatusCode, strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream"))
+	usage.wrapResponseForModel(resp, model, endpoint, contentHook)
+	observed := newRawResponsesUsageBody(resp.Body, usage, resp.StatusCode, isSSEResponse(resp))
 	observed.lease = lease
 	observed.stats = f.stats
 	observed.model = model
-	observed.ctx = req.Context()
+	observed.ctx = ctx
+	if resp.StatusCode < http.StatusBadRequest {
+		observed.onOutcome = onOutcome
+	}
 	resp.Body = observed
-	observed.watchContext(req.Context())
+	observed.watchContext(ctx)
 	return resp, nil
 }
 
@@ -134,6 +199,14 @@ func (f *Forwarder) recordRawResponsesStats(model *store.Model, usage localCompa
 	f.stats.RecordRequestFullWithCredits(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, credits, modelID, isError)
 }
 
+type rawResponsesEndpointError struct {
+	cause   error
+	message string
+}
+
+func (e *rawResponsesEndpointError) Error() string { return e.message }
+func (e *rawResponsesEndpointError) Unwrap() error { return e.cause }
+
 func redactRawResponsesEndpointError(err error, upstreamURL string) error {
 	if err == nil {
 		return nil
@@ -143,6 +216,7 @@ func redactRawResponsesEndpointError(err error, upstreamURL string) error {
 		return err
 	}
 	original := parsed.String()
+	redacted := parsed.Redacted()
 	parsed.User = nil
 	parsed.RawQuery = ""
 	parsed.ForceQuery = false
@@ -150,7 +224,8 @@ func redactRawResponsesEndpointError(err error, upstreamURL string) error {
 	safeURL := parsed.String()
 	message := strings.ReplaceAll(err.Error(), upstreamURL, safeURL)
 	message = strings.ReplaceAll(message, original, safeURL)
-	return fmt.Errorf("%s", message)
+	message = strings.ReplaceAll(message, redacted, safeURL)
+	return &rawResponsesEndpointError{cause: err, message: message}
 }
 
 // stripRawWorkflowMetadata removes only fields owned by the local workflow
@@ -320,6 +395,7 @@ type rawResponsesUsageBody struct {
 	closeOnce   sync.Once
 	closeErr    error
 	stopContext func() bool
+	onOutcome   func(converter.StreamOutcome)
 }
 
 func newRawResponsesUsageBody(body io.ReadCloser, usage *requestUsageRecorder, status int, isSSE bool) *rawResponsesUsageBody {
@@ -463,6 +539,22 @@ func (b *rawResponsesUsageBody) finishEOF() {
 		}
 	} else {
 		mergeLocalCompatUsage(&b.localUsage, localCompatResponses, b.jsonBody)
+		// Group health requires a real terminal response, never just HTTP 200.
+		if b.onOutcome != nil && b.status < http.StatusBadRequest {
+			var response struct {
+				Status string          `json:"status"`
+				Error  json.RawMessage `json:"error"`
+			}
+			if json.Unmarshal(b.jsonBody, &response) == nil {
+				b.terminal = response.Status == "completed" || response.Status == "failed" || response.Status == "incomplete"
+				b.failure = response.Status == "failed" || response.Status == "incomplete" || rawJSONNonEmpty(response.Error)
+			}
+			if b.failure {
+				errorMessage = "raw Responses stream reported failure"
+			} else if !b.terminal {
+				errorMessage = "raw Responses stream ended without a terminal event"
+			}
+		}
 	}
 	b.mu.Unlock()
 	b.finish(errorMessage)
@@ -506,6 +598,20 @@ func (b *rawResponsesUsageBody) finish(errorMessage string) {
 		}
 		if b.lease != nil {
 			b.lease.release()
+		}
+		if b.onOutcome != nil {
+			outcome := converter.StreamOutcomeCompleted
+			switch {
+			case observedFailure || b.status >= http.StatusBadRequest:
+				outcome = converter.StreamOutcomeUpstreamProtocolFailure
+			case clientCanceled:
+				outcome = converter.StreamOutcomeClientCanceled
+			case errorMessage == "raw Responses stream ended without a terminal event":
+				outcome = converter.StreamOutcomeMissingTerminal
+			case errorMessage != "":
+				outcome = converter.StreamOutcomeReadFailure
+			}
+			b.onOutcome(outcome)
 		}
 	})
 }

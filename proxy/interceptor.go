@@ -271,22 +271,37 @@ func (s *Server) setupInterceptor() {
 			return req, errorResponse(req, http.StatusForbidden, msg)
 		}
 
-		s.logger.InfoWithMeta("router", fmt.Sprintf("路由命中: %s → %s (%s)", pre.SourceModel, route.Model.ModelID, route.Model.BaseURL), LogMeta{
-			Model: statsModelID(route.Model),
-			Metadata: map[string]interface{}{
-				"source_model":             pre.SourceModel,
-				"provider":                 route.Model.Provider,
-				"base_url":                 route.Model.BaseURL,
-				"endpoint":                 route.Model.Endpoint,
-				"protocol":                 pre.Protocol,
-				"classifier":               pre.IsClassifier,
-				"conversation_id":          pre.ConversationID,
-				"auto_route_reason":        route.AutoReason,
-				"selected_model_config_id": route.Model.ID,
-			},
-		})
-		s.logAutoRoute(pre, route)
-		pre.usage = newRequestUsageRecorder(s.db, time.Now(), route.Model, req.URL.Path, pre.Protocol)
+		if route.Group != nil {
+			s.logger.InfoWithMeta("router", fmt.Sprintf("路由命中: %s → 分组 %s", pre.SourceModel, route.Group.Name), LogMeta{
+				Metadata: map[string]interface{}{
+					"source_model": pre.SourceModel, "protocol": pre.Protocol,
+					"classifier": pre.IsClassifier, "conversation_id": pre.ConversationID,
+					"auto_route_reason": route.AutoReason,
+					"target_group_id":   route.Group.ID, "target_group_name": route.Group.Name,
+				},
+			})
+		} else {
+			s.logger.InfoWithMeta("router", fmt.Sprintf("路由命中: %s → %s (%s)", pre.SourceModel, route.Model.ModelID, route.Model.BaseURL), LogMeta{
+				Model: statsModelID(route.Model),
+				Metadata: map[string]interface{}{
+					"source_model":             pre.SourceModel,
+					"provider":                 route.Model.Provider,
+					"base_url":                 route.Model.BaseURL,
+					"endpoint":                 route.Model.Endpoint,
+					"protocol":                 pre.Protocol,
+					"classifier":               pre.IsClassifier,
+					"conversation_id":          pre.ConversationID,
+					"auto_route_reason":        route.AutoReason,
+					"selected_model_config_id": route.Model.ID,
+				},
+			})
+			s.logAutoRoute(pre, route)
+		}
+		usageModel := route.Model
+		if route.Group != nil {
+			usageModel = nil
+		}
+		pre.usage = newRequestUsageRecorder(s.db, time.Now(), usageModel, req.URL.Path, pre.Protocol)
 		pre.usage.setRoute(route)
 		pre.usage.setReasoningEffort(resolveReasoningEffort(pre, route.Model))
 
@@ -317,6 +332,10 @@ func (s *Server) setupInterceptor() {
 				"upstream_forward_failed",
 				"模型转发失败："+err.Error(),
 			)
+		}
+		if route.Group != nil {
+			s.router.RecordAutoDispatch(pre.Conv, route)
+			s.logAutoRoute(pre, route)
 		}
 		s.rememberMainModel(pre, route)
 
@@ -512,44 +531,49 @@ func bindAutoReasoningEffort(pre *Preflight, route *router.Route, err error) (*r
 
 // logAutoRoute 只记录结构化选模依据，不将提示正文加入理由。
 func (s *Server) logAutoRoute(pre *Preflight, route *router.Route) {
-	if route.AutoReason == "" || pre.Conv == nil {
+	if route == nil || route.Model == nil || pre == nil || route.AutoReason == "" || pre.Conv == nil {
 		return
 	}
+	metadata := map[string]interface{}{
+		"requested_model":           pre.SourceModel,
+		"auto_route_reason":         route.AutoReason,
+		"selected_model_config_id":  route.Model.ID,
+		"auto_mode":                 route.AutoMode,
+		"workflow_stage":            pre.Conv.WorkflowStage,
+		"workflow_stage_source":     pre.Conv.WorkflowStageSource,
+		"workflow_stage_status":     workflowStageStatus(pre.Conv),
+		"selected_stage":            route.AutoStage,
+		"outbound_model":            route.Model.ModelID,
+		"channel_identity":          route.AutoChannelIdentity,
+		"workflow_metadata_version": pre.Conv.WorkflowMetadataVersion,
+		"workflow_id":               pre.Conv.WorkflowID,
+		"conversation_id":           pre.Conv.ConversationID,
+		"definition_id":             pre.Conv.WorkflowDefinitionID,
+		"definition_revision":       pre.Conv.WorkflowDefinitionRevision,
+		"node_path":                 pre.Conv.WorkflowNodePath,
+		"node_id":                   pre.Conv.WorkflowNodeID,
+		"task_type":                 pre.Conv.WorkflowTaskType,
+		"selected_duty":             route.AutoDuty,
+		"selection_source":          route.AutoSelectionSource,
+		"unknown_reason":            route.AutoUnknownReason,
+		"execution_id":              route.AutoExecutionID,
+		"lock_scope":                route.AutoLockScope,
+		"requested_effort":          pre.Conv.ReasoningEffort,
+		"effective_effort":          resolveReasoningEffort(pre, route.Model),
+		"effort_fixed":              route.AutoEffortFixed,
+		"effort_conflict":           route.AutoEffortFixed && pre.Conv.ReasoningEffort != "" && pre.Conv.ReasoningEffort != route.AutoEffort,
+		"agent_task_type":           pre.Conv.AgentTaskType,
+		"agent_mode":                pre.Conv.AgentMode,
+		"chat_trigger_type":         pre.Conv.ChatTriggerType,
+		"continuation_state_key":    pre.Conv.ContinuationStateKey,
+	}
+	if route.Group != nil {
+		metadata["target_group_id"] = route.Group.ID
+		metadata["target_group_name"] = route.Group.Name
+	}
 	s.logger.InfoWithMeta("auto-routing", "Auto 选模: "+route.AutoReason+" → "+route.Model.ModelID, LogMeta{
-		Model: statsModelID(route.Model),
-		Metadata: map[string]interface{}{
-			"requested_model":           pre.SourceModel,
-			"auto_route_reason":         route.AutoReason,
-			"selected_model_config_id":  route.Model.ID,
-			"auto_mode":                 route.AutoMode,
-			"workflow_stage":            pre.Conv.WorkflowStage,
-			"workflow_stage_source":     pre.Conv.WorkflowStageSource,
-			"workflow_stage_status":     workflowStageStatus(pre.Conv),
-			"selected_stage":            route.AutoStage,
-			"outbound_model":            route.Model.ModelID,
-			"channel_identity":          route.AutoChannelIdentity,
-			"workflow_metadata_version": pre.Conv.WorkflowMetadataVersion,
-			"workflow_id":               pre.Conv.WorkflowID,
-			"conversation_id":           pre.Conv.ConversationID,
-			"definition_id":             pre.Conv.WorkflowDefinitionID,
-			"definition_revision":       pre.Conv.WorkflowDefinitionRevision,
-			"node_path":                 pre.Conv.WorkflowNodePath,
-			"node_id":                   pre.Conv.WorkflowNodeID,
-			"task_type":                 pre.Conv.WorkflowTaskType,
-			"selected_duty":             route.AutoDuty,
-			"selection_source":          route.AutoSelectionSource,
-			"unknown_reason":            route.AutoUnknownReason,
-			"execution_id":              route.AutoExecutionID,
-			"lock_scope":                route.AutoLockScope,
-			"requested_effort":          pre.Conv.ReasoningEffort,
-			"effective_effort":          resolveReasoningEffort(pre, route.Model),
-			"effort_fixed":              route.AutoEffortFixed,
-			"effort_conflict":           route.AutoEffortFixed && pre.Conv.ReasoningEffort != "" && pre.Conv.ReasoningEffort != route.AutoEffort,
-			"agent_task_type":           pre.Conv.AgentTaskType,
-			"agent_mode":                pre.Conv.AgentMode,
-			"chat_trigger_type":         pre.Conv.ChatTriggerType,
-			"continuation_state_key":    pre.Conv.ContinuationStateKey,
-		},
+		Model:    statsModelID(route.Model),
+		Metadata: metadata,
 	})
 }
 

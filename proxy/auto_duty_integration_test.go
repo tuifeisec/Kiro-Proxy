@@ -2,11 +2,68 @@ package proxy
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"kiro-proxy/converter"
 	"kiro-proxy/store"
 )
+
+func TestDutyAutoGroupRecordsActualMemberAfterCapacityDispatch(t *testing.T) {
+	env := newAutoStageIntegrationEnv(t)
+	group := &store.ModelGroup{ID: "duty-group", Name: "Duty GPT group", Enabled: true, MaxAttempts: 2, FirstByteTimeoutMS: 1000,
+		Members: []store.ModelGroupMember{{ModelID: "run", Priority: 0, MaxConcurrency: 1}, {ModelID: "manual", Priority: 1, MaxConcurrency: 1}}}
+	if err := env.db.CreateModelGroup(group); err != nil {
+		t.Fatal(err)
+	}
+	installDutyIntegrationConfig(t, env, group.ID)
+	pre := dutyIntegrationPre("design", "group-execution", "low")
+	route, err := env.server.resolveMainRoute(pre)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Group == nil || route.Group.ID != group.ID || len(route.Candidates) != 2 || route.AutoChannelIdentity != "" {
+		t.Fatalf("group resolved as an actual first member: %+v", route)
+	}
+	if len(env.server.router.GetAutoObservations()) != 0 {
+		t.Fatal("first candidate was observed before dispatch")
+	}
+	lease, ok := env.forward.load.acquire("run", 1)
+	if !ok {
+		t.Fatal("cannot occupy first candidate")
+	}
+	defer lease.release()
+	requests := 0
+	env.forward.clients[""] = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		body, _ := io.ReadAll(req.Body)
+		if !strings.Contains(string(body), `"model":"upstream-manual"`) {
+			t.Fatalf("wrong actual member: %s", body)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Request: req,
+			Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))}, nil
+	})}
+	req := httptest.NewRequest(http.MethodPost, "http://runtime.local/generateAssistantResponse", nil)
+	resp, err := env.forward.Forward(req, pre, route, env.logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	env.server.router.RecordAutoDispatch(pre.Conv, route)
+	env.server.logAutoRoute(pre, route)
+	observations := env.server.router.GetAutoObservations()
+	if requests != 1 || route.Model.ID != "manual" || len(observations) != 1 {
+		t.Fatalf("actual dispatch not recorded: %+v", observations)
+	}
+	observed := observations[0]
+	if observed.TargetGroupID != group.ID || observed.TargetGroupName != group.Name || observed.ModelConfigID != "manual" || observed.OutboundModel != "upstream-manual" || observed.EffectiveEffort != "high" || observed.ChannelIdentity == "" {
+		t.Fatalf("group observation does not describe the actual member: %+v", observed)
+	}
+}
 
 func installDutyIntegrationConfig(t *testing.T, env *autoStageIntegrationEnv, designTarget string) {
 	t.Helper()
