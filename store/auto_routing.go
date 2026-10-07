@@ -608,7 +608,21 @@ func autoNodeIdentity(definitionID, revision, path string) string {
 }
 
 // ValidateAutoRoutingConfig validates references and the selected layout.
-func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model) error {
+func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model, groupSets ...[]ModelGroup) error {
+	var groups []ModelGroup
+	for _, set := range groupSets {
+		groups = append(groups, set...)
+	}
+	validateTarget := func(name, targetID string) error {
+		if strings.TrimSpace(targetID) == "" {
+			return nil
+		}
+		_, err := AutoTargetModels(models, groups, targetID)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		return nil
+	}
 	byID := make(map[string]Model, len(models))
 	for _, model := range models {
 		byID[model.ID] = model
@@ -641,7 +655,7 @@ func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model) error {
 		if config.Enabled && strings.TrimSpace(config.DefaultModelID) == "" {
 			return fmt.Errorf("default_model_id is required when auto routing is enabled")
 		}
-		if err := validateAutoModelTarget(byID, "default_model_id", config.DefaultModelID); err != nil {
+		if err := validateTarget("default_model_id", config.DefaultModelID); err != nil {
 			return err
 		}
 		validDuties := make(map[string]struct{})
@@ -660,7 +674,7 @@ func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model) error {
 			if _, err := normalizeAutoEffort(target.ReasoningEffort); err != nil {
 				return fmt.Errorf("duty_models.%s.%w", duty, err)
 			}
-			if err := validateAutoModelTarget(byID, "duty_models."+duty+".model_id", target.ModelID); err != nil {
+			if err := validateTarget("duty_models."+duty+".model_id", target.ModelID); err != nil {
 				return err
 			}
 		}
@@ -699,7 +713,7 @@ func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model) error {
 			if _, err := normalizeAutoEffort(override.ReasoningEffort); err != nil {
 				return fmt.Errorf("node_overrides[%d].%w", index, err)
 			}
-			if err := validateAutoModelTarget(byID, fmt.Sprintf("node_overrides[%d].model_id", index), override.ModelID); err != nil {
+			if err := validateTarget(fmt.Sprintf("node_overrides[%d].model_id", index), override.ModelID); err != nil {
 				return err
 			}
 		}
@@ -707,6 +721,60 @@ func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model) error {
 	default:
 		return fmt.Errorf("mode must be %q or %q", AutoRoutingModeStageFixed, AutoRoutingModeDutyFixed)
 	}
+}
+
+// AutoTargetModels expands a v2 target through the existing enabled group and
+// fallback membership, preserving order and deduplicating models.
+func AutoTargetModels(models []Model, groups []ModelGroup, targetID string) ([]Model, error) {
+	targetID = strings.TrimSpace(targetID)
+	byModel := make(map[string]Model, len(models))
+	for _, model := range models {
+		byModel[model.ID] = model
+	}
+	byGroup := make(map[string]ModelGroup, len(groups))
+	for _, group := range groups {
+		byGroup[group.ID] = group
+	}
+	model, isModel := byModel[targetID]
+	group, isGroup := byGroup[targetID]
+	if isModel && isGroup {
+		return nil, fmt.Errorf("target %q conflicts between model and group IDs", targetID)
+	}
+	if isModel {
+		if !model.Enabled {
+			return nil, fmt.Errorf("references disabled model %q", targetID)
+		}
+		return []Model{model}, nil
+	}
+	if !isGroup {
+		return nil, fmt.Errorf("references unknown model or group %q", targetID)
+	}
+	if !group.Enabled {
+		return nil, fmt.Errorf("references disabled group %q", targetID)
+	}
+	var result []Model
+	seenGroups, seenModels := map[string]bool{}, map[string]bool{}
+	var collect func(ModelGroup)
+	collect = func(current ModelGroup) {
+		if !current.Enabled || seenGroups[current.ID] {
+			return
+		}
+		seenGroups[current.ID] = true
+		for _, member := range current.Members {
+			if model, ok := byModel[member.ModelID]; ok && model.Enabled && !seenModels[model.ID] {
+				result = append(result, model)
+				seenModels[model.ID] = true
+			}
+		}
+		if fallback, ok := byGroup[current.FallbackGroupID]; ok {
+			collect(fallback)
+		}
+	}
+	collect(group)
+	if len(result) == 0 {
+		return nil, fmt.Errorf("group %q has no enabled candidates", targetID)
+	}
+	return result, nil
 }
 
 func validateAutoModelTarget(byID map[string]Model, name, modelID string) error {

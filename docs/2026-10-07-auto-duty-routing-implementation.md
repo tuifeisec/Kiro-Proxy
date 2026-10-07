@@ -8,7 +8,7 @@
 
 standard 职责键：orchestration、routine_support、investigation、requirements、design、implementation_plan、implementation、iterative_execution、experiment、design_review、code_review、semantic_review、review_synthesis、review_verdict、validation、delivery_audit、operations、pr_lifecycle。
 
-expanded 删除 routine_support/pr_lifecycle，新增 preparation/finalization/pr_submit/pr_feedback，其余保留，共 20 位。启用时默认目标与所有当前布局目标都必须引用启用的实际模型，分组不可作为目标；禁用时允许目标暂未填写。参数必须满足本地 provider 表达能力，不能声称上游一定支持所有等级。
+expanded 删除 routine_support/pr_lifecycle，新增 preparation/finalization/pr_submit/pr_feedback，其余保留，共 20 位。启用时默认目标与所有当前布局目标都必须引用启用的模型或现有模型分组；禁用时允许目标暂未填写。参数必须满足本地 provider 表达能力，不能声称上游一定支持所有等级。
 
 node_bindings 每项包含 definition_id、definition_revision、node_path、duty；node_overrides 每项包含同一稳定身份三字段，以及 model_id、reasoning_effort。稳定身份三元组严格精确匹配；禁止裸 nodeId 通配、显示名称匹配和迭代编号配置键。绑定职责须在当前布局中。重复身份拒绝，不把冲突靠数组顺序静默裁决。
 
@@ -57,6 +57,36 @@ Router.GetAutoObservations() 提供当前代理进程内的有界安全快照；
 内嵌桥接清单必须与最终源码补丁同步。安装源码允许原版、当前版及清单列出的精确旧桥接 hash；旧桥接先在内存逆补丁还原，并核验完整原版 hash 后再应用新补丁，不写中间原版文件。真正替换前备份当前安装的完整旧版本，并按预检时的完整 hash 再次核对；其它修改或 Kiro 版本仍明确拒绝。本轮只维护该源码与清单，不执行安装。
 
 ## 验证与分工
+
+### 现有模型分组接入（2026-10-07 补充）
+
+用户要求 Auto 可以选择“模型 → 分组”里已经建立的整个 GPT 等分组。默认目标、职责目标、稳定节点覆盖共用现有目标选择，保留 v2 的 model_id/default_model_id 字段，允许其引用分组 UUID；模型与分组 ID 冲突时明确拒绝，不能根据表顺序选择。旧单模型配置无需迁移。界面必须区分模型与分组并展示分组名称；停用、无有效成员和不存在的目标不允许保存为非空目标。
+
+分组目标复用现有成员优先级、并发限制、熔断、亲和、尝试上限和后备分组策略，不能把组 ID 替换为首成员 ID。单模型继续保持原有模型与渠道锁。分组执行锁固定逻辑分组及有效等级，组内成员可以按现有调度策略变化；因此选择分组并不承诺整节点始终使用同一渠道。未发生故障或拥塞时沿用现有亲和策略；切换成员须记录实际出站目标。修改职责映射只影响新实例；进行中分组的成员、渠道、请求参数或调度配置变化时明确报错，不静默改写已锁定目标。
+
+职责及节点覆盖的 reasoning_effort 仍是固定值，空字符串表示固定上游默认。默认分组目标使用组级 reasoning_effort，组未设置时使用全部有效候选一致的默认等级，否则为空；不使用首成员推导。固定等级必须能由全部有效候选（包括后备组）的 Provider 表达。前端选项取其等级交集，服务端独立校验。
+
+普通 Kiro 请求和原始 Responses 请求都必须接通整个分组。原始 Responses 仅尝试 OpenAI /responses 兼容候选，保持原始协议与 body 字段，并为每个候选分别改写目标和固定等级；无兼容候选时明确报错，不改走 Chat 协议。调度前只能记录逻辑目标，Auto 日志及观察中的实际 model_config_id/outbound_model/channel_identity 在实际候选确定后记录，同时包含 target_group_id/target_group_name。不得把首候选记录成已经调用的模型。
+
+原始 Responses 的分组发送只在获得响应前按现有 HTTP 状态、网络、容量和健康策略选择成员；不能预读 SSE 判断 response.failed 或缺终态后跨模型重放。200 的失败事件、空流、读取错误和取消保持原始响应交给客户端，只在单次旁路观察中结算。返回最后非 2xx 时也保留完整正文及响应头，不能复用会截断错误正文的日志读取函数。RawResponsesHasImages 必须参与候选图片能力判断；raw input 不走 SDK 的历史图片投影。响应、统计、健康终态和 lease 各只结算一次。
+
+本次维护只修改源码、文档与回归用例，不运行用户未授权的测试、不修改真实配置或 Kiro 安装、不启动或重启程序。验证结果必须区分静态检查、编译和用户运行证据。
+
+### 用户运行日志核对（2026-10-07）
+
+用户自行运行已编译的 desktop,dev 版本。14:16 的桥接安装记录报告完整候选 SHA256 为 8384475aad60356ba18dc0be15b75af37efcfd506987797a5dcad127540e77be，与源码候选一致。14:17–14:24 的实际生成包含 44 条 duty_fixed / v2 路由：主控 orchestration 4 条，调查 investigation 40 条，分别使用 gpt-6.1-sol 与 cn:deepseek-v4.1-flash；有效等级均为 high，lock_scope 均为 execution，unknown_reason 均为空。调查使用一个稳定 step session 实例；主控包含两个用户执行实例。
+
+这一时间段的 44 条前缀审计未报告 prefix_changed=true。已完成响应的上游输入 token / cache_read token 汇总：调查 4,101,541 / 3,954,176（96.41%），主控 129,636 / 89,600（69.12%）。这些是响应 token 口径，不能等同于渠道后台的请求命中率或实际账单节省。仅主控和调查已取得运行证据，其余职责、稳定节点覆盖与工作流冷恢复尚未由本次日志验收。连续调查调用不能仅凭次数判定为重复重试，须核对每轮工具推进与终态。
+
+只读复核补充：44 轮的上游响应均为 200，该窗口没有 warn/error；调查请求里的累计 tool_results/tool_blocks 从 2 增长到 72，其后续前缀审计均为 append，支持工具续轮持续推进的判断。43/44 轮 cache_read 非零。日志未出现重试提示，但缺少统计中的 RetryCount/WireAttemptCount，不能凭这一点承诺完全没有传输重试。88 条请求/响应 detail 的截断是日志 64 KiB 详情上限，不能当成模型输出截断；另有 4 次工具描述裁剪需要与该既有转换行为区分。
+
+### 分组候选构建记录
+
+前端、后端、转发按非重叠范围完成实施及静态检查，修复独立预审发现的 raw HTTP 健康重复结算、取消期间错误响应 lease 遗留、内部重试耗尽吞掉最后错误正文、半开探测取消后未释放，以及观察条目缺少逻辑组身份的问题。新增 Mock 用例源码覆盖这些触发条件，但没有执行。
+
+主代理按用户“修改代码后编译根目录 dev”的指令，备份旧 dev-next 和 frontend/dist 后重建前端，并使用 desktop,dev / CGO_ENABLED=1 / Windows amd64 编译 D:\proxy\kiro-proxy-dev-next.exe；前端和 Go 构建退出码均为 0。二进制为 AMD64、GUI subsystem，内嵌 Models-C1FFvabz.js 与最新前端产物逐字节一致。产物 SHA256：1454d7650e3fddbeb34cd81c9ec78c7b2e6300e4c59059bbb76460f736dfae4f。运行中的 kiro-proxy-dev.exe 未覆盖或停止，没有启动候选程序、运行测试、写真实配置、安装桥接或重启 Kiro。分组真实调用及其它职责由用户运行后继续核对日志；编译成功不代表这些行为已通过运行验收。
+
+修复后由新的独立 Astra/high 只读复审者检查冻结源码和新增 Mock 源码，结论为未发现阻塞交付的问题；上述五项预审问题均有修复代码与对应回归断言。复审未执行 Mock 或真实请求，不替代用户接下来的运行验收。本次没有提交或推送 GitHub。
 
 Mock 用例覆盖18/20布局、严格校验、旧配置迁移事务保全、节点优先级、未知回退、实例/工具锁、effective effort 冲突、raw body、手动与 classifier 不受影响、桥接并行隔离与 v1/v2绑定；本轮按用户限制仅编写/审阅，不执行测试。允许无请求的源码语法/格式静态检查；无实际运行证据时不称测试通过。
 

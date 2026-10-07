@@ -8,6 +8,46 @@ import (
 	"testing"
 )
 
+func TestAutoDutyTargetsAcceptExistingGroupsForBothLayouts(t *testing.T) {
+	models := []Model{{ID: "member", Enabled: true}, {ID: "fallback-member", Enabled: true}, {ID: "disabled", Enabled: false}}
+	groups := []ModelGroup{
+		{ID: "gpt", Enabled: true, FallbackGroupID: "fallback", Members: []ModelGroupMember{{ModelID: "member"}, {ModelID: "disabled"}}},
+		{ID: "fallback", Enabled: true, Members: []ModelGroupMember{{ModelID: "member"}, {ModelID: "fallback-member"}}},
+	}
+	for _, layout := range []string{AutoRoutingLayoutStandard, AutoRoutingLayoutExpanded} {
+		config := AutoRoutingConfig{Version: 2, Mode: AutoRoutingModeDutyFixed, Enabled: true, Layout: layout,
+			DefaultModelID: "gpt", DutyModels: map[string]AutoDutyTarget{},
+			NodeOverrides: []AutoNodeOverride{{DefinitionID: "def", DefinitionRevision: "rev", NodePath: "node", ModelID: "gpt"}}}
+		for _, duty := range AutoDutyNames(layout) {
+			config.DutyModels[duty] = AutoDutyTarget{ModelID: "gpt"}
+		}
+		if err := ValidateAutoRoutingConfig(config, models, groups); err != nil {
+			t.Fatalf("%s group references rejected: %v", layout, err)
+		}
+	}
+	candidates, err := AutoTargetModels(models, groups, "gpt")
+	if err != nil || len(candidates) != 2 || candidates[0].ID != "member" || candidates[1].ID != "fallback-member" {
+		t.Fatalf("enabled fallback expansion = %#v, %v", candidates, err)
+	}
+	for _, item := range []struct {
+		name   string
+		groups []ModelGroup
+		target string
+		want   string
+	}{
+		{"missing", groups, "missing", "unknown"},
+		{"disabled", []ModelGroup{{ID: "gpt", Enabled: false}}, "gpt", "disabled group"},
+		{"empty", []ModelGroup{{ID: "gpt", Enabled: true, Members: []ModelGroupMember{{ModelID: "disabled"}}}}, "gpt", "no enabled candidates"},
+		{"collision", []ModelGroup{{ID: "member", Enabled: true}}, "member", "conflicts"},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			if _, err := AutoTargetModels(models, item.groups, item.target); err == nil || !strings.Contains(err.Error(), item.want) {
+				t.Fatalf("target error = %v, want %q", err, item.want)
+			}
+		})
+	}
+}
+
 func TestParseAutoRoutingConfigDefaultsAndCanonicalizes(t *testing.T) {
 	config, err := ParseAutoRoutingConfig(" \n ")
 	if err != nil {

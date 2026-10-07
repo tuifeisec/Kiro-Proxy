@@ -254,6 +254,49 @@ func apiAutoRoutingModel(id, upstream string) store.Model {
 		APIKey: "test", Endpoint: "/v1/chat/completions", Enabled: true, ImageInputMode: "supported"}
 }
 
+func TestSettingsV2ExistingGroupTargetsSaveReloadAndRejectDisabledAtomically(t *testing.T) {
+	db, server, r := newAutoRoutingAPITestServer(t)
+	model := apiAutoRoutingModel("group-member", "gpt-upstream")
+	if err := db.CreateModel(&model); err != nil {
+		t.Fatal(err)
+	}
+	group := store.ModelGroup{ID: "gpt-group", Name: "GPT", Enabled: true,
+		Members: []store.ModelGroupMember{{ModelID: model.ID, Priority: 1, MaxConcurrency: 2}}}
+	if err := db.CreateModelGroup(&group); err != nil {
+		t.Fatal(err)
+	}
+	status, response := putAutoRoutingSettings(t, server.Handler(), map[string]string{store.AutoRoutingSetting: apiAutoRoutingV2Raw(group.ID, "high")})
+	if status != http.StatusOK {
+		t.Fatalf("group settings rejected: %d %#v", status, response)
+	}
+	stored, err := db.GetSetting(store.AutoRoutingSetting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := store.ParseAutoRoutingConfig(stored)
+	if err != nil || config.DefaultModelID != group.ID || config.DutyModels["implementation"].ModelID != group.ID {
+		t.Fatalf("group IDs were not preserved: %#v, %v", config, err)
+	}
+	if !r.StageRoutingEnabled() || r.AutoModel() == nil {
+		t.Fatal("reload failed to expose group-only Auto")
+	}
+	group.Enabled = false
+	if err := db.UpdateModelGroup(&group); err != nil {
+		t.Fatal(err)
+	}
+	status, response = putAutoRoutingSettings(t, server.Handler(), map[string]string{store.AutoRoutingSetting: apiAutoRoutingV2Raw(group.ID, "low"), "group-save-sibling": "must not save"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("disabled group accepted: %d %#v", status, response)
+	}
+	current, err := db.GetSetting(store.AutoRoutingSetting)
+	if err != nil || current != stored {
+		t.Fatalf("failed save changed previous config: %q %v", current, err)
+	}
+	if sibling, _ := db.GetSetting("group-save-sibling"); sibling != "" {
+		t.Fatalf("failed group save wrote sibling: %q", sibling)
+	}
+}
+
 func apiAutoRoutingV2Raw(modelID, effort string) string {
 	targets := make(map[string]store.AutoDutyTarget)
 	for _, duty := range store.AutoDutyNames(store.AutoRoutingLayoutStandard) {

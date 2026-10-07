@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"kiro-proxy/converter"
 	"kiro-proxy/store"
 	"strings"
@@ -38,6 +39,186 @@ func autoPolicyConfig() store.AutoRoutingConfig {
 		StageModels: store.AutoStageModels{
 			Run: "fast", Plan: "task", Implement: "reasoning", Review: "mode", Finalize: "long",
 		},
+	}
+}
+
+// This fixture is entirely in-memory; dispatch is represented by assigning the
+// selected candidate before RecordAutoDispatch, with no upstream requests.
+func autoGroupPolicyFixture(t *testing.T) (*Router, *converter.ParsedConversation) {
+	t.Helper()
+	models := []store.Model{routerTestModel("first", "First"), routerTestModel("second", "Second"), routerTestModel("backup", "Backup")}
+	for i := range models {
+		models[i].ReasoningEffort = "high"
+		models[i].ImageInputMode = store.ImageInputSupported
+		models[i].ContextWindow = 128000
+		models[i].MaxTokens = 8000
+	}
+	models[2].ContextWindow, models[2].MaxTokens = 32000, 2000
+	groups := []store.ModelGroup{
+		{ID: "gpt", Name: "GPT", Enabled: true, FirstByteTimeoutMS: 10000, MaxAttempts: 3, FallbackGroupID: "fallback",
+			Members: []store.ModelGroupMember{{ModelID: "first", Priority: 1, MaxConcurrency: 2}, {ModelID: "second", Priority: 2, MaxConcurrency: 4}}},
+		{ID: "fallback", Name: "Fallback", Enabled: true, FirstByteTimeoutMS: 20000, MaxAttempts: 2,
+			Members: []store.ModelGroupMember{{ModelID: "backup", Priority: 1, MaxConcurrency: 1}}},
+	}
+	config := store.AutoRoutingConfig{Version: 2, Mode: store.AutoRoutingModeDutyFixed, Layout: store.AutoRoutingLayoutStandard,
+		Enabled: true, DefaultModelID: "gpt", DutyModels: map[string]store.AutoDutyTarget{}}
+	for _, duty := range store.AutoDutyNames(config.Layout) {
+		config.DutyModels[duty] = store.AutoDutyTarget{ModelID: "gpt", ReasoningEffort: "medium"}
+	}
+	r := &Router{models: models, groups: groups, autoConfig: config}
+	if err := ValidateAutoRoutingConfig(config, models, groups); err != nil {
+		t.Fatal(err)
+	}
+	conv := &converter.ParsedConversation{ModelID: "auto", ConversationID: "conversation", WorkflowMetadataVersion: 2,
+		WorkflowTaskType: "implementation", WorkflowExecutionID: "execution-1"}
+	return r, conv
+}
+
+func TestAutoGroupDispatchRetainsStagesAndRecordsOnlyActualCandidate(t *testing.T) {
+	r, conv := autoGroupPolicyFixture(t)
+	route, err := r.ResolveAuto(conv)
+	if err != nil || route.Group == nil || route.Group.ID != "gpt" || len(route.Candidates) != 3 || len(route.Stages) != 2 ||
+		route.CandidateLimits["second"] != 4 || route.CandidateGroups["backup"].ID != "fallback" ||
+		route.AutoEffort != "medium" || !route.AutoEffortFixed || route.AutoChannelIdentity != "" {
+		t.Fatalf("group route = %#v, %v", route, err)
+	}
+	if got := r.GetAutoObservations(); len(got) != 0 {
+		t.Fatalf("candidate recorded before dispatch: %#v", got)
+	}
+	route.Model = route.Candidates[2]
+	r.RecordAutoDispatch(conv, route)
+	got := r.GetAutoObservations()
+	if len(got) != 1 || got[0].TargetGroupID != "gpt" || got[0].TargetGroupName != "GPT" || got[0].ModelConfigID != "backup" ||
+		got[0].OutboundModel != route.Model.ModelID || got[0].ChannelIdentity != autoChannelIdentity(route.Model) {
+		t.Fatalf("actual dispatch observation = %#v", got)
+	}
+	lock := r.autoLocks[autoExecutionLockKey(conv)]
+	if lock.ModelID != "gpt" || lock.GroupID != "gpt" || lock.GroupFingerprint == "" || lock.ChannelIdentity != "" {
+		t.Fatalf("group lock became member lock: %#v", lock)
+	}
+	r.autoConfig.DutyModels["implementation"] = store.AutoDutyTarget{ModelID: "first", ReasoningEffort: "low"}
+	continued, err := r.ResolveAuto(conv)
+	if err != nil || continued.Group == nil || len(continued.Candidates) != 3 || continued.AutoEffort != "medium" || continued.AutoChannelIdentity != "" {
+		t.Fatalf("execution did not restore the group: %#v, %v", continued, err)
+	}
+	conv.WorkflowExecutionID = "execution-2"
+	next, err := r.ResolveAuto(conv)
+	if err != nil || next.Group != nil || next.Model.ID != "first" || next.AutoEffort != "low" {
+		t.Fatalf("new execution did not load mapping: %#v, %v", next, err)
+	}
+}
+
+func TestAutoGroupLocksRejectResourceAndSchedulerChanges(t *testing.T) {
+	mutations := map[string]func(*Router){
+		"member order": func(r *Router) {
+			r.groups[0].Members[0], r.groups[0].Members[1] = r.groups[0].Members[1], r.groups[0].Members[0]
+		},
+		"priority":        func(r *Router) { r.groups[0].Members[0].Priority++ },
+		"limit":           func(r *Router) { r.groups[0].Members[0].MaxConcurrency++ },
+		"attempts":        func(r *Router) { r.groups[0].MaxAttempts++ },
+		"timeout":         func(r *Router) { r.groups[1].FirstByteTimeoutMS++ },
+		"group effort":    func(r *Router) { r.groups[0].ReasoningEffort = "high" },
+		"fallback":        func(r *Router) { r.groups[0].FallbackGroupID = "" },
+		"channel":         func(r *Router) { r.models[1].BaseURL = "https://changed.invalid" },
+		"request tokens":  func(r *Router) { r.models[2].MaxTokens++ },
+		"disabled member": func(r *Router) { r.models[1].Enabled = false },
+		"disabled group":  func(r *Router) { r.groups[0].Enabled = false },
+	}
+	for name, mutate := range mutations {
+		for _, scope := range []string{"execution", "tool_continuation"} {
+			t.Run(name+"/"+scope, func(t *testing.T) {
+				r, conv := autoGroupPolicyFixture(t)
+				if scope == "tool_continuation" {
+					conv.WorkflowExecutionID = ""
+				}
+				if _, err := r.ResolveAuto(conv); err != nil {
+					t.Fatal(err)
+				}
+				mutate(r)
+				conv.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "call"}}
+				if route, err := r.ResolveAuto(conv); route != nil || err == nil {
+					t.Fatalf("changed group accepted: %#v, %v", route, err)
+				}
+			})
+		}
+	}
+}
+
+func TestAutoGroupDefaultsMetadataAndFallbackProviderValidation(t *testing.T) {
+	for _, item := range []struct{ groupEffort, memberEffort, want string }{
+		{"low", "high", "low"}, {"", "high", "high"}, {"", "medium", ""},
+	} {
+		r, conv := autoGroupPolicyFixture(t)
+		r.groups[0].ReasoningEffort = item.groupEffort
+		r.models[2].ReasoningEffort = item.memberEffort
+		conv.WorkflowTaskType = ""
+		route, err := r.ResolveAuto(conv)
+		if err != nil || route.AutoEffort != item.want || !route.AutoEffortFixed {
+			t.Fatalf("default group effort = %#v, %v, want %q", route, err, item.want)
+		}
+	}
+	r, conv := autoGroupPolicyFixture(t)
+	r.autoConfig.DutyModels["implementation"] = store.AutoDutyTarget{ModelID: "gpt", ReasoningEffort: ""}
+	route, err := r.ResolveAuto(conv)
+	if err != nil || route.AutoEffort != "" || !route.AutoEffortFixed {
+		t.Fatalf("empty duty effort=%#v %v", route, err)
+	}
+	r.models[2].ImageInputMode = store.ImageInputUnsupported
+	metadata := r.autoModelLocked()
+	if metadata == nil || metadata.ContextWindow != 32000 || metadata.MaxTokens != 2000 || metadata.ImageInputMode != store.ImageInputUnsupported {
+		t.Fatalf("group-only metadata omitted fallback: %#v", metadata)
+	}
+	r.models[2].Provider = "anthropic"
+	r.autoConfig.DutyModels["implementation"] = store.AutoDutyTarget{ModelID: "gpt", ReasoningEffort: "none"}
+	if err := ValidateAutoRoutingConfig(r.autoConfig, r.models, r.groups); err == nil || !strings.Contains(err.Error(), "backup") {
+		t.Fatalf("fallback provider was not checked: %v", err)
+	}
+}
+
+func TestAutoGroupImageRoutingAllowsCompatibleOrUnknownMembers(t *testing.T) {
+	for _, mode := range []string{store.ImageInputSupported, store.ImageInputAuto, ""} {
+		r, conv := autoGroupPolicyFixture(t)
+		for i := range r.models {
+			r.models[i].ImageInputMode = store.ImageInputUnsupported
+		}
+		r.models[2].ImageInputMode = mode
+		conv.RawResponsesHasImages = true
+		if route, err := r.ResolveAuto(conv); err != nil || route.Group == nil || len(route.Candidates) != 3 {
+			t.Fatalf("mixed image candidates rejected for %q: %#v, %v", mode, route, err)
+		}
+	}
+	r, conv := autoGroupPolicyFixture(t)
+	for i := range r.models {
+		r.models[i].ImageInputMode = store.ImageInputUnsupported
+	}
+	conv.RawResponsesHasImages = true
+	if route, err := r.ResolveAuto(conv); route != nil || err == nil {
+		t.Fatalf("all unsupported accepted: %#v, %v", route, err)
+	}
+}
+
+func TestAutoGroupStableOverrideAndToolSnapshotSurviveMappingChanges(t *testing.T) {
+	r, conv := autoGroupPolicyFixture(t)
+	conv.WorkflowExecutionID = ""
+	conv.WorkflowDefinitionID, conv.WorkflowDefinitionRevision, conv.WorkflowNodePath = "def", "rev", "steps/build"
+	r.autoConfig.NodeOverrides = []store.AutoNodeOverride{{DefinitionID: "def", DefinitionRevision: "rev", NodePath: "steps/build",
+		ModelID: "gpt", ReasoningEffort: ""}}
+	route, err := r.ResolveAuto(conv)
+	if err != nil || route.Group == nil || route.AutoSelectionSource != "node_override" || route.AutoEffort != "" || !route.AutoEffortFixed {
+		t.Fatalf("group override = %#v, %v", route, err)
+	}
+	r.autoConfig.NodeOverrides[0].ModelID = "first"
+	r.autoConfig.NodeOverrides[0].ReasoningEffort = "low"
+	r.autoConfig.Enabled = false
+	r.autoConfigErr = fmt.Errorf("unrelated draft is invalid")
+	conv.CurrentToolResults = []converter.ParsedToolResult{{ToolUseID: "call"}}
+	continued, err := r.ResolveAuto(conv)
+	if err != nil || continued.Group == nil || continued.Group.ID != "gpt" || continued.AutoEffort != "" || len(continued.Candidates) != 3 {
+		t.Fatalf("existing tool group snapshot = %#v, %v", continued, err)
+	}
+	conv.WorkflowNodePath = "steps/other"
+	if next, err := r.ResolveAuto(conv); next != nil || err == nil {
+		t.Fatalf("new boundary ignored invalid config: %#v, %v", next, err)
 	}
 }
 

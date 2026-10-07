@@ -63,7 +63,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if err := router.ValidateAutoRoutingConfig(config, models); err != nil {
+			groups, err := s.db.GetModelGroups()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if err := router.ValidateAutoRoutingConfig(config, models, groups); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}

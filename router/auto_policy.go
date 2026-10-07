@@ -1,6 +1,9 @@
 package router
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"kiro-proxy/converter"
 	"kiro-proxy/store"
@@ -11,22 +14,24 @@ import (
 const autoLockIdleLimit = time.Hour
 
 type autoModelLock struct {
-	ModelID         string
-	LastUsed        time.Time
-	Mode            string
-	Duty            string
-	Effort          string
-	EffortFixed     bool
-	Stage           string
-	WorkflowID      string
-	NodeIdentity    string
-	TaskType        string
-	ExecutionID     string
-	LockScope       string
-	Reason          string
-	SelectionSource string
-	UnknownReason   string
-	ChannelIdentity string
+	ModelID          string
+	LastUsed         time.Time
+	Mode             string
+	Duty             string
+	Effort           string
+	EffortFixed      bool
+	Stage            string
+	WorkflowID       string
+	NodeIdentity     string
+	TaskType         string
+	ExecutionID      string
+	LockScope        string
+	Reason           string
+	SelectionSource  string
+	UnknownReason    string
+	ChannelIdentity  string
+	GroupID          string
+	GroupFingerprint string
 }
 
 type autoSelection struct {
@@ -43,36 +48,38 @@ type autoSelection struct {
 
 // ValidateAutoRoutingConfig validates stored references and the local provider
 // conversion capability. It does not claim that the remote model accepts an effort.
-func ValidateAutoRoutingConfig(config store.AutoRoutingConfig, models []store.Model) error {
-	if err := store.ValidateAutoRoutingConfig(config, models); err != nil {
+func ValidateAutoRoutingConfig(config store.AutoRoutingConfig, models []store.Model, groupSets ...[]store.ModelGroup) error {
+	if err := store.ValidateAutoRoutingConfig(config, models, groupSets...); err != nil {
 		return err
 	}
 	if config.Mode != store.AutoRoutingModeDutyFixed {
 		return nil
 	}
-	byID := make(map[string]store.Model, len(models))
-	for _, model := range models {
-		byID[model.ID] = model
+	var groups []store.ModelGroup
+	for _, set := range groupSets {
+		groups = append(groups, set...)
 	}
 	validateEffort := func(name, modelID, rawEffort string, useModelDefault bool) error {
 		modelID = strings.TrimSpace(modelID)
 		if modelID == "" {
 			return nil
 		}
-		model, ok := byID[modelID]
-		if !ok {
-			return nil // the store validator returns the reference error
+		candidates, err := store.AutoTargetModels(models, groups, modelID)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
 		}
 		effort := rawEffort
 		if useModelDefault {
-			effort = model.ReasoningEffort
+			effort = autoTargetDefaultEffort(modelID, candidates, groups)
 		}
 		normalized, err := converter.NormalizeReasoningEffort(effort)
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
-		if err := converter.ValidateProviderReasoningEffort(model.Provider, normalized); err != nil {
-			return fmt.Errorf("%s for provider %q: %w", name, model.Provider, err)
+		for _, model := range candidates {
+			if err := converter.ValidateProviderReasoningEffort(model.Provider, normalized); err != nil {
+				return fmt.Errorf("%s for model %q provider %q: %w", name, model.ID, model.Provider, err)
+			}
 		}
 		return nil
 	}
@@ -188,14 +195,18 @@ func (r *Router) resolveExistingExecutionLocked(conv *converter.ParsedConversati
 }
 
 func (r *Router) resolveExistingDutyLockLocked(conv *converter.ParsedConversation, lock autoModelLock, key string, now time.Time) (*Route, error) {
-	route, err := r.routeForLockedAutoModel(lock.ModelID, conv.ModelID)
+	route, err := r.routeForAutoDutyTarget(lock.ModelID, conv.ModelID)
 	if err != nil {
 		return nil, fmt.Errorf("auto locked target %q is unavailable: %w", lock.ModelID, err)
 	}
-	if lock.ChannelIdentity != autoChannelIdentity(route.Model) {
+	if lock.GroupID != "" {
+		if route.Group == nil || route.Group.ID != lock.GroupID || lock.GroupFingerprint != r.autoGroupFingerprintLocked(route) {
+			return nil, fmt.Errorf("auto %s group target %q has changed routing configuration; start a new execution before using the updated configuration", lock.LockScope, lock.GroupID)
+		}
+	} else if route.Group != nil || lock.ChannelIdentity != autoChannelIdentity(route.Model) {
 		return nil, fmt.Errorf("auto %s target %q has changed channel identity; start a new execution before using the updated configuration", lock.LockScope, lock.ModelID)
 	}
-	if hasNonEmptyImages(conv) && !modelSupportsImages(route.Model) {
+	if hasNonEmptyImages(conv) && !autoRouteSupportsImages(route) {
 		return nil, fmt.Errorf("auto conversation is locked to model %q, which does not support image input", lock.ModelID)
 	}
 	lock.LastUsed = now
@@ -249,20 +260,26 @@ func (r *Router) resolveDutyAutoLocked(conv *converter.ParsedConversation, selec
 	if selection.ModelID == "" {
 		return nil, fmt.Errorf("auto duty routing has no fixed default target")
 	}
-	route, err := r.routeForLockedAutoModel(selection.ModelID, conv.ModelID)
+	route, err := r.routeForAutoDutyTarget(selection.ModelID, conv.ModelID)
 	if err != nil {
 		return nil, fmt.Errorf("auto routing target %q for %s is unavailable: %w", selection.ModelID, selection.Reason, err)
 	}
 	if selection.UseModelDefault {
-		selection.Effort, err = converter.NormalizeReasoningEffort(route.Model.ReasoningEffort)
+		candidates, candidateErr := store.AutoTargetModels(r.models, r.groups, selection.ModelID)
+		if candidateErr != nil {
+			return nil, candidateErr
+		}
+		selection.Effort, err = converter.NormalizeReasoningEffort(autoTargetDefaultEffort(selection.ModelID, candidates, r.groups))
 		if err != nil {
 			return nil, fmt.Errorf("auto default model %q reasoning_effort is invalid: %w", selection.ModelID, err)
 		}
 	}
-	if err := converter.ValidateProviderReasoningEffort(route.Model.Provider, selection.Effort); err != nil {
-		return nil, fmt.Errorf("auto target %q cannot express reasoning_effort %q: %w", selection.ModelID, selection.Effort, err)
+	for _, candidate := range route.Candidates {
+		if err := converter.ValidateProviderReasoningEffort(candidate.Provider, selection.Effort); err != nil {
+			return nil, fmt.Errorf("auto target %q candidate %q cannot express reasoning_effort %q: %w", selection.ModelID, candidate.ID, selection.Effort, err)
+		}
 	}
-	if hasNonEmptyImages(conv) && !modelSupportsImages(route.Model) {
+	if hasNonEmptyImages(conv) && !autoRouteSupportsImages(route) {
 		return nil, fmt.Errorf("auto routing target %q does not support image input", selection.ModelID)
 	}
 	lockKey, lockScope := toolKey, "tool_continuation"
@@ -270,9 +287,14 @@ func (r *Router) resolveDutyAutoLocked(conv *converter.ParsedConversation, selec
 		lockKey, lockScope = executionKey, "execution"
 	}
 	applyAutoSelection(route, selection, conv.WorkflowExecutionID, lockScope, selection.Effort)
-	route.AutoChannelIdentity = autoChannelIdentity(route.Model)
+	groupID, groupFingerprint := "", ""
+	if route.Group == nil {
+		route.AutoChannelIdentity = autoChannelIdentity(route.Model)
+	} else {
+		groupID, groupFingerprint = route.Group.ID, r.autoGroupFingerprintLocked(route)
+	}
 	if lockKey != "" {
-		r.storeAutoLock(lockKey, autoModelLock{ModelID: route.Model.ID, LastUsed: now, Mode: store.AutoRoutingModeDutyFixed,
+		r.storeAutoLock(lockKey, autoModelLock{ModelID: selection.ModelID, GroupID: groupID, GroupFingerprint: groupFingerprint, LastUsed: now, Mode: store.AutoRoutingModeDutyFixed,
 			Duty: selection.Duty, Effort: selection.Effort, EffortFixed: true, NodeIdentity: conversationNodeIdentity(conv),
 			TaskType:    conv.WorkflowTaskType,
 			ExecutionID: conv.WorkflowExecutionID, LockScope: lockScope, Reason: selection.Reason,
@@ -394,6 +416,103 @@ func (r *Router) routeForLockedAutoModel(modelID, requestedName string) (*Route,
 		return r.routeForModelLocked(model, requestedName), nil
 	}
 	return nil, fmt.Errorf("model %q no longer exists", modelID)
+}
+
+// Caller holds mu.RLock. v2 group targets retain all existing scheduler stages.
+func (r *Router) routeForAutoDutyTarget(targetID, requestedName string) (*Route, error) {
+	for i := range r.groups {
+		if r.groups[i].ID == targetID {
+			if _, err := store.AutoTargetModels(r.models, r.groups, targetID); err != nil {
+				return nil, err
+			}
+			return r.routeForGroupLocked(&r.groups[i], requestedName), nil
+		}
+	}
+	return r.routeForLockedAutoModel(targetID, requestedName)
+}
+
+func autoTargetDefaultEffort(targetID string, candidates []store.Model, groups []store.ModelGroup) string {
+	for _, group := range groups {
+		if group.ID == targetID && strings.TrimSpace(group.ReasoningEffort) != "" {
+			return group.ReasoningEffort
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	effort := strings.ToLower(strings.TrimSpace(candidates[0].ReasoningEffort))
+	for _, candidate := range candidates[1:] {
+		if strings.ToLower(strings.TrimSpace(candidate.ReasoningEffort)) != effort {
+			return ""
+		}
+	}
+	return effort
+}
+
+func autoRouteSupportsImages(route *Route) bool {
+	if route == nil || len(route.Candidates) == 0 {
+		return false
+	}
+	if route.Group == nil {
+		return modelSupportsImages(route.Model)
+	}
+	for _, candidate := range route.Candidates {
+		// Auto/unknown candidates remain eligible for the forwarder's runtime
+		// capability cache; only explicit unsupported input is excluded here.
+		mode, err := store.NormalizeImageInputMode(candidate.ImageInputMode)
+		if err != nil || mode != store.ImageInputUnsupported {
+			return true
+		}
+	}
+	return false
+}
+
+// Group locks fingerprint scheduling configuration and request-relevant model
+// resources, including fallback and disabled members. Credentials only enter
+// the existing channel hash; no raw credential is stored in the lock.
+func (r *Router) autoGroupFingerprintLocked(route *Route) string {
+	if route == nil || route.Group == nil {
+		return ""
+	}
+	var fields []interface{}
+	seen := map[string]bool{}
+	var collect func(*store.ModelGroup)
+	collect = func(group *store.ModelGroup) {
+		if group == nil || seen[group.ID] {
+			return
+		}
+		seen[group.ID] = true
+		fields = append(fields, []interface{}{group.ID, group.Enabled, group.FirstByteTimeoutMS, group.MaxAttempts,
+			group.FallbackGroupID, group.ReasoningEffort, group.Members})
+		for _, member := range group.Members {
+			found := false
+			for i := range r.models {
+				model := &r.models[i]
+				if model.ID == member.ModelID {
+					fields = append(fields, []interface{}{model.ID, model.Enabled, autoChannelIdentity(model),
+						model.ContextWindow, model.MaxTokens, model.ImageInputMode})
+					found = true
+					break
+				}
+			}
+			if !found {
+				fields = append(fields, []interface{}{member.ModelID, "missing"})
+			}
+		}
+		if group.FallbackGroupID != "" {
+			for i := range r.groups {
+				if r.groups[i].ID == group.FallbackGroupID {
+					collect(&r.groups[i])
+					return
+				}
+			}
+			fields = append(fields, []interface{}{group.FallbackGroupID, "missing"})
+		}
+	}
+	collect(route.Group)
+	encoded, _ := json.Marshal(fields)
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:])
 }
 
 func selectLegacyStageTarget(conv *converter.ParsedConversation, config store.AutoRoutingConfig) autoSelection {
@@ -630,11 +749,19 @@ func (r *Router) autoModelLocked() *store.Model {
 			continue
 		}
 		seen[id] = true
-		for i := range r.models {
-			if r.models[i].ID == id && r.models[i].Enabled {
-				candidates = append(candidates, &r.models[i])
-				break
+		var expanded []store.Model
+		if r.autoConfig.Mode == store.AutoRoutingModeDutyFixed {
+			expanded, _ = store.AutoTargetModels(r.models, r.groups, id)
+		} else {
+			for _, model := range r.models {
+				if model.ID == id && model.Enabled {
+					expanded = append(expanded, model)
+				}
 			}
+		}
+		for i := range expanded {
+			candidate := expanded[i]
+			candidates = append(candidates, &candidate)
 		}
 	}
 	if len(candidates) == 0 {

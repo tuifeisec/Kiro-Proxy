@@ -22,6 +22,8 @@ type AutoObservation struct {
 	SelectedDuty       string    `json:"selected_duty"`
 	SelectionSource    string    `json:"selection_source"`
 	UnknownReason      string    `json:"unknown_reason"`
+	TargetGroupID      string    `json:"target_group_id"`
+	TargetGroupName    string    `json:"target_group_name"`
 	ModelConfigID      string    `json:"model_config_id"`
 	OutboundModel      string    `json:"outbound_model"`
 	EffectiveEffort    string    `json:"effective_effort"`
@@ -57,10 +59,25 @@ func (r *Router) GetAutoObservations() []AutoObservation {
 	return result
 }
 
+// RecordAutoDispatch records a group Auto request after forwarding selected the
+// actual candidate in route.Model. Single-model requests are recorded at resolve.
+func (r *Router) RecordAutoDispatch(conv *converter.ParsedConversation, route *Route) {
+	if r == nil || conv == nil || route == nil || route.Model == nil || route.Group == nil || route.AutoMode == "" {
+		return
+	}
+	r.autoMu.Lock()
+	defer r.autoMu.Unlock()
+	route.AutoChannelIdentity = autoChannelIdentity(route.Model)
+	r.recordAutoObservationLocked(conv, route, route.AutoLockScope)
+}
+
 // Caller holds autoMu.
 func (r *Router) recordAutoObservationLocked(conv *converter.ParsedConversation, route *Route, lockScope string) {
 	if conv == nil || route == nil || route.Model == nil {
 		return
+	}
+	if route.Group != nil && route.AutoChannelIdentity == "" {
+		return // The initial model is only a candidate until dispatch.
 	}
 	observation := AutoObservation{
 		DefinitionID:       boundedObservationValue(conv.WorkflowDefinitionID, 1024),
@@ -79,9 +96,14 @@ func (r *Router) recordAutoObservationLocked(conv *converter.ParsedConversation,
 		Count:              1,
 		LastSeen:           time.Now().UTC(),
 	}
+	if route.Group != nil {
+		observation.TargetGroupID = boundedObservationValue(route.Group.ID, 256)
+		observation.TargetGroupName = boundedObservationValue(route.Group.Name, 256)
+	}
 	keyBytes, _ := json.Marshal([]string{observation.DefinitionID, observation.DefinitionRevision, observation.NodePath,
 		observation.NodeID, observation.TaskType, observation.SelectedDuty, observation.SelectionSource, observation.UnknownReason,
-		observation.ModelConfigID, observation.OutboundModel, observation.EffectiveEffort, observation.ChannelIdentity, observation.LockScope})
+		observation.TargetGroupID, observation.TargetGroupName, observation.ModelConfigID, observation.OutboundModel,
+		observation.EffectiveEffort, observation.ChannelIdentity, observation.LockScope})
 	key := string(keyBytes)
 	if r.autoObservations == nil {
 		r.autoObservations = make(map[string]AutoObservation)

@@ -82,7 +82,7 @@ func (r *Router) Reload() {
 		autoConfig, autoConfigErr = store.ParseAutoRoutingConfig(autoConfigRaw)
 	}
 	if autoConfigErr == nil && autoConfig.Enabled {
-		autoConfigErr = ValidateAutoRoutingConfig(autoConfig, models)
+		autoConfigErr = ValidateAutoRoutingConfig(autoConfig, models, groups)
 	}
 
 	r.mu.Lock()
