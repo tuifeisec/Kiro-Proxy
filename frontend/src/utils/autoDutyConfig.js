@@ -298,41 +298,135 @@ export function providerEffortOptions(provider) {
   return options[String(provider || '').toLowerCase()] || ['']
 }
 
-export function validateAutoDutyConfig(config, models) {
+export function resolveAutoTarget(targetId, models = [], groups = []) {
+  const model = (Array.isArray(models) ? models : []).find((item) => item.id === targetId)
+  const group = (Array.isArray(groups) ? groups : []).find((item) => item.id === targetId)
+  if (model && group) return { kind: 'collision', model, group }
+  if (model) return { kind: 'model', model }
+  if (group) return { kind: 'group', group }
+  return { kind: 'missing' }
+}
+
+export function autoTargetGroupCandidates(targetId, models = [], groups = []) {
+  const target = resolveAutoTarget(targetId, models, groups)
+  if (target.kind !== 'group' || target.group.enabled !== true) return []
+
+  const modelById = new Map((Array.isArray(models) ? models : []).map((model) => [model.id, model]))
+  const groupById = new Map((Array.isArray(groups) ? groups : []).map((group) => [group.id, group]))
+  const candidates = []
+  const seenModels = new Set()
+  const seenGroups = new Set()
+  const collect = (group) => {
+    if (group?.enabled !== true || seenGroups.has(group.id)) return
+    seenGroups.add(group.id)
+    const members = [...(group.members || [])].sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0))
+    for (const member of members) {
+      const model = modelById.get(member.model_id)
+      if (model?.enabled === true && !seenModels.has(model.id)) {
+        candidates.push(model)
+        seenModels.add(model.id)
+      }
+    }
+    const fallback = groupById.get(group.fallback_group_id)
+    if (fallback) collect(fallback)
+  }
+  collect(target.group)
+  return candidates
+}
+
+export function autoTargetEffortOptions(targetId, models = [], groups = []) {
+  const target = resolveAutoTarget(targetId, models, groups)
+  if (target.kind === 'model') return providerEffortOptions(target.model.provider)
+  if (target.kind !== 'group') return ['']
+
+  const candidates = autoTargetGroupCandidates(targetId, models, groups)
+  if (!candidates.length) return ['']
+  const optionsByCandidate = candidates.map((model) => new Set(providerEffortOptions(model.provider)))
+  return providerEffortOptions(candidates[0].provider).filter((effort) => (
+    optionsByCandidate.every((options) => options.has(effort))
+  ))
+}
+
+export function autoTargetDefaultEffort(targetId, models = [], groups = []) {
+  const target = resolveAutoTarget(targetId, models, groups)
+  if (target.kind === 'model') return String(target.model.reasoning_effort || '').trim().toLowerCase()
+  if (target.kind !== 'group') return ''
+  const configuredEffort = String(target.group.reasoning_effort || '').trim()
+  if (configuredEffort) return configuredEffort.toLowerCase()
+
+  const candidates = autoTargetGroupCandidates(targetId, models, groups)
+  if (!candidates.length) return ''
+  const effort = String(candidates[0].reasoning_effort || '').trim().toLowerCase()
+  return candidates.every((model) => String(model.reasoning_effort || '').trim().toLowerCase() === effort)
+    ? effort
+    : ''
+}
+
+export function isAutoTargetSelectable(targetId, models = [], groups = []) {
+  const target = resolveAutoTarget(targetId, models, groups)
+  if (target.kind === 'model') return target.model.enabled === true
+  if (target.kind === 'group') return target.group.enabled === true && autoTargetGroupCandidates(targetId, models, groups).length > 0
+  return false
+}
+
+export function validateAutoDutyConfig(config, models, groups = []) {
   const errors = []
   const dutyKeys = DUTY_KEYS[config.layout] || []
   if (config.node_bindings.some((item) => !dutyKeys.includes(item.duty))) errors.push('节点职责绑定不属于当前布局，需先明确迁移或删除。')
-  const modelById = new Map(models.map((model) => [model.id, model]))
-  const targets = [{ label: '默认固定目标', target: { model_id: config.default_model_id, reasoning_effort: '' } }]
+
+  const validateTarget = (label, id, configuredEffort, required, useDefaultEffort = false) => {
+    if (!id) {
+      if (required) errors.push(`启用 Auto 路由时，${label}必须选择已启用的模型或有效分组。`)
+      return
+    }
+    const resolved = resolveAutoTarget(id, models, groups)
+    if (resolved.kind === 'collision') {
+      errors.push(`${label}的 ID 同时属于模型配置和分组，不能作为目标。`)
+      return
+    }
+    if (resolved.kind === 'missing') {
+      errors.push(`${label}必须引用已启用的模型配置或分组；当前配置不存在，已保留原值。`)
+      return
+    }
+
+    let candidates
+    if (resolved.kind === 'model') {
+      if (resolved.model.enabled !== true) {
+        errors.push(`${label}必须引用已启用的模型配置；当前配置已停用，已保留原值。`)
+        return
+      }
+      candidates = [resolved.model]
+    } else {
+      if (resolved.group.enabled !== true) {
+        errors.push(`${label}必须引用已启用的分组；当前分组已停用，已保留原值。`)
+        return
+      }
+      candidates = autoTargetGroupCandidates(id, models, groups)
+      if (!candidates.length) {
+        errors.push(`${label}必须引用至少包含一个已启用候选模型的分组；当前分组没有有效候选，已保留原值。`)
+        return
+      }
+    }
+
+    const effort = useDefaultEffort ? autoTargetDefaultEffort(id, models, groups) : configuredEffort
+    const allowed = autoTargetEffortOptions(id, models, groups)
+    if (effort && !allowed.includes(String(effort).trim().toLowerCase())) {
+      const providers = [...new Set(candidates.map((model) => model.provider || '未知'))].join('/')
+      errors.push(`${label}的思考等级不受本地 ${providers} Provider 表达。`)
+    }
+  }
+
+  validateTarget('默认固定目标', config.default_model_id, '', config.enabled, true)
+  const targets = []
   for (const duty of AUTO_DUTY_LAYOUTS[config.layout] || []) {
     targets.push({ label: `${duty.label}目标`, target: config.duty_models[duty.key] })
   }
   for (const { label, target } of targets) {
     const id = target?.model_id || ''
-    const required = config.enabled
-    if (!id) {
-      if (required) errors.push(`启用 Auto 路由时，${label}必须选择已启用的模型。`)
-      continue
-    }
-    const model = modelById.get(id)
-    if (!model || model.enabled !== true) {
-      errors.push(`${label}必须引用已启用的模型配置。`)
-      continue
-    }
-    if (target.reasoning_effort && !providerEffortOptions(model.provider).includes(target.reasoning_effort)) {
-      errors.push(`${label}的思考等级不受本地 ${model.provider || '未知'} Provider 表达。`)
-    }
+    validateTarget(label, id, target?.reasoning_effort || '', config.enabled)
   }
   for (const [index, item] of config.node_overrides.entries()) {
-    if (!item.model_id) {
-      if (config.enabled) errors.push(`启用 Auto 路由时，节点覆盖 ${index + 1} 必须选择已启用的模型。`)
-      continue
-    }
-    const model = modelById.get(item.model_id)
-    if (!model || model.enabled !== true) errors.push(`节点覆盖 ${index + 1} 必须引用已启用的模型配置。`)
-    else if (item.reasoning_effort && !providerEffortOptions(model.provider).includes(item.reasoning_effort)) {
-      errors.push(`节点覆盖 ${index + 1} 的思考等级不受本地 ${model.provider || '未知'} Provider 表达。`)
-    }
+    validateTarget(`节点覆盖 ${index + 1}`, item.model_id || '', item.reasoning_effort || '', config.enabled)
   }
   return errors
 }
@@ -409,7 +503,8 @@ export function observationRecordKey(observation) {
     observation.definition_id, observation.definition_revision, observation.node_path,
     observation.node_id, observation.task_type, observation.selected_duty,
     observation.selection_source, observation.unknown_reason, observation.model_config_id,
-    observation.outbound_model, observation.effective_effort, observation.channel_identity,
+    observation.outbound_model, observation.target_group_id, observation.target_group_name,
+    observation.effective_effort, observation.channel_identity,
     observation.lock_scope,
   ])
 }

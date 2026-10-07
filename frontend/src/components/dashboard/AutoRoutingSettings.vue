@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { get } from '../../api/http.js'
-import { getModels } from '../../api/models.js'
+import { getModelGroups, getModels } from '../../api/models.js'
 import { getSettings, updateSettings } from '../../api/settings.js'
 import { useToast } from '../../composables/useToast.js'
 import {
@@ -10,19 +10,24 @@ import {
   AUTO_DUTY_LAYOUT_LABELS,
   AUTO_DUTY_OPTIONS,
   AUTO_ROUTING_SETTINGS_KEY,
+  autoTargetDefaultEffort,
+  autoTargetEffortOptions,
+  autoTargetGroupCandidates,
   applyDutyForLayout,
   emptyAutoDutyConfig,
+  isAutoTargetSelectable,
   layoutMergeConflicts,
   migrateAutoDutyConfig,
   nodeIdentityComplete,
   observationIdentity,
   observationRecordKey,
   parseAutoDutyConfig,
-  providerEffortOptions,
+  resolveAutoTarget,
   validateAutoDutyConfig,
 } from '../../utils/autoDutyConfig.js'
 
 const models = ref([])
+const groups = ref([])
 const config = ref(emptyAutoDutyConfig())
 const snapshot = ref(null)
 const rawConfig = ref('')
@@ -45,6 +50,15 @@ const { showToast } = useToast()
 const emit = defineEmits(['busy', 'dirty', 'saved', 'cancel'])
 
 const enabledModels = computed(() => models.value.filter((model) => model.enabled === true))
+const selectableModels = computed(() => enabledModels.value.filter((model) => (
+  resolveAutoTarget(model.id, models.value, groups.value).kind === 'model'
+)))
+const enabledGroups = computed(() => groups.value.filter((group) => (
+  group.enabled === true &&
+  resolveAutoTarget(group.id, models.value, groups.value).kind === 'group' &&
+  autoTargetGroupCandidates(group.id, models.value, groups.value).length > 0
+)))
+const availableTargetCount = computed(() => selectableModels.value.length + enabledGroups.value.length)
 const modelById = computed(() => new Map(models.value.map((model) => [model.id, model])))
 const duties = computed(() => AUTO_DUTY_LAYOUTS[config.value.layout])
 const migrationMappings = computed(() => {
@@ -62,7 +76,7 @@ const migrationPreview = computed(() => migrationMappings.value.map(([stage, dut
   const label = AUTO_DUTY_LAYOUTS[layout].find((item) => item.key === duty)?.label || duty
   return `${stage} → ${label}：${legacyData.value?.stage_models?.[stage] || '留空'}`
 }))
-const formErrors = computed(() => validateAutoDutyConfig(config.value, models.value))
+const formErrors = computed(() => validateAutoDutyConfig(config.value, models.value, groups.value))
 const canSave = computed(() => (
   !loading.value && !saving.value && !loadError.value && !configError.value &&
   (!legacyData.value || migrationActive.value) && formErrors.value.length === 0 &&
@@ -91,20 +105,49 @@ watch(dirty, (value) => emit('dirty', value), { immediate: true })
 
 function modelIdentity(model) {
   if (!model) return '模型不存在'
-  return `${model.model_id || model.id} · ${model.id} · ${model.provider || 'openai'}`
+  return `模型：${model.model_id || model.id} · ${model.id} · ${model.provider || 'openai'}`
+}
+
+function groupIdentity(group) {
+  if (!group) return '分组不存在'
+  return `分组：${group.name || group.id} · ${group.id}`
+}
+
+function targetIdentity(targetId) {
+  const target = resolveAutoTarget(targetId, models.value, groups.value)
+  if (target.kind === 'model') return modelIdentity(target.model)
+  if (target.kind === 'group') return groupIdentity(target.group)
+  if (target.kind === 'collision') return `${targetId}（模型/分组 ID 冲突）`
+  return `${targetId}（配置不存在）`
 }
 
 function targetTitle(target) {
-  return target?.model_id ? modelIdentity(modelById.value.get(target.model_id)) : '未配置'
+  return target?.model_id ? targetIdentity(target.model_id) : '未配置'
 }
 
 function optionsFor(currentId) {
-  const options = enabledModels.value.map((model) => ({ id: model.id, label: modelIdentity(model), disabled: false }))
+  const options = selectableModels.value
+    .map((model) => ({ id: model.id, label: modelIdentity(model), disabled: false }))
+  for (const group of enabledGroups.value) {
+    if (resolveAutoTarget(group.id, models.value, groups.value).kind === 'group') {
+      options.push({ id: group.id, label: groupIdentity(group), disabled: false })
+    }
+  }
   if (currentId && !options.some((option) => option.id === currentId)) {
-    const existing = modelById.value.get(currentId)
+    const target = resolveAutoTarget(currentId, models.value, groups.value)
+    let reason = '配置不存在，保留现有值'
+    if (target.kind === 'collision') reason = '模型/分组 ID 冲突，保留现有值'
+    else if (target.kind === 'model') reason = '模型已停用，保留现有值'
+    else if (target.kind === 'group') {
+      reason = target.group.enabled !== true
+        ? '分组已停用，保留现有值'
+        : autoTargetGroupCandidates(currentId, models.value, groups.value).length === 0
+          ? '分组没有启用候选，保留现有值'
+          : '分组不可用，保留现有值'
+    }
     options.unshift({
       id: currentId,
-      label: `${modelIdentity(existing)}（${existing ? '已停用，保留现有值' : '配置不存在，保留现有值'}）`,
+      label: `${targetIdentity(currentId)}（${reason}）`,
       disabled: true,
     })
   }
@@ -112,15 +155,14 @@ function optionsFor(currentId) {
 }
 
 function effortOptions(modelId, currentEffort) {
-  const model = modelById.value.get(modelId)
-  const allowed = providerEffortOptions(model?.provider)
+  const allowed = autoTargetEffortOptions(modelId, models.value, groups.value)
   if (currentEffort && !allowed.includes(currentEffort)) return [...allowed, currentEffort]
   return allowed
 }
 
 function changeTarget(target, modelId) {
   target.model_id = modelId
-  target.reasoning_effort = modelById.value.get(modelId)?.reasoning_effort || ''
+  target.reasoning_effort = autoTargetDefaultEffort(modelId, models.value, groups.value)
 }
 
 function updateConfigTarget(target, modelId) {
@@ -178,11 +220,11 @@ function beginMigration() {
 }
 
 function fillUnconfiguredFromDefault() {
-  const defaultModel = modelById.value.get(config.value.default_model_id)
-  if (!defaultModel) return
+  const defaultTargetId = config.value.default_model_id
+  if (!isAutoTargetSelectable(defaultTargetId, models.value, groups.value)) return
   for (const duty of duties.value) {
     const target = config.value.duty_models[duty.key]
-    if (!target.model_id) changeTarget(target, defaultModel.id)
+    if (!target.model_id) changeTarget(target, defaultTargetId)
   }
 }
 
@@ -193,7 +235,7 @@ function setObservedDuty(observation, duty) {
 function setObservedModel(observation, modelId) {
   selectedNodeModels.value[observationIdentity(observation)] = {
     model_id: modelId,
-    reasoning_effort: modelById.value.get(modelId)?.reasoning_effort || '',
+    reasoning_effort: autoTargetDefaultEffort(modelId, models.value, groups.value),
   }
 }
 
@@ -207,8 +249,19 @@ function stableObservationLabel(observation) {
 }
 
 function observedTargetLabel(observation) {
+  if (observation.target_group_id) {
+    const group = groups.value.find((item) => item.id === observation.target_group_id)
+    const name = group?.name || observation.target_group_name || observation.target_group_id
+    const model = modelById.value.get(observation.model_config_id)
+    const actual = model
+      ? `，实际成员 ${model.model_id || model.id}`
+      : observation.outbound_model
+        ? `，实际出站 ${observation.outbound_model}`
+        : ''
+    return `分组：${name} · ${observation.target_group_id}${actual}`
+  }
   const model = modelById.value.get(observation.model_config_id)
-  if (model) return `${model.model_id || model.id} · ${model.id} · ${model.provider || 'openai'}`
+  if (model) return modelIdentity(model)
   return observation.outbound_model || observation.model_config_id || '未知'
 }
 
@@ -258,8 +311,9 @@ async function load() {
   loadError.value = ''
   observationsError.value = ''
   try {
-    const [modelsData, settings] = await Promise.all([getModels(), getSettings()])
+    const [modelsData, groupsData, settings] = await Promise.all([getModels(), getModelGroups(), getSettings()])
     models.value = Array.isArray(modelsData) ? modelsData : []
+    groups.value = Array.isArray(groupsData) ? groupsData : []
     rawConfig.value = settings?.[AUTO_ROUTING_SETTINGS_KEY] ?? ''
     try {
       const parsed = parseAutoDutyConfig(rawConfig.value)
@@ -404,7 +458,7 @@ onMounted(load)
 
             <section class="rounded-lg border border-line-2 p-3">
               <h4 class="mb-2 text-[12px] font-semibold text-ink">固定默认目标</h4>
-              <label for="auto-duty-default" class="mb-1 block text-[11px] text-ink-3">未匹配职责时使用此模型配置</label>
+              <label for="auto-duty-default" class="mb-1 block text-[11px] text-ink-3">未匹配职责时使用此模型或分组</label>
               <select id="auto-duty-default" :value="config.default_model_id" class="ui-control-h ui-control w-full px-2.5 text-[12px] text-ink" @change="config.default_model_id = $event.target.value">
                 <option value="">未配置</option>
                 <option v-for="option in optionsFor(config.default_model_id)" :key="option.id" :value="option.id" :disabled="option.disabled">{{ option.label }}</option>
@@ -413,14 +467,14 @@ onMounted(load)
 
             <section class="rounded-lg border border-line-2 p-3">
               <h4 class="mb-1 text-[12px] font-semibold text-ink">职责固定目标（{{ duties.length }}）</h4>
-              <p class="mb-3 text-[11px] leading-4 text-ink-4">目标由模型配置 UUID 和独立思考等级组成。共享同一 UUID 不会把职责合并成轮询分组。</p>
+              <p class="mb-3 text-[11px] leading-4 text-ink-4">目标由模型或分组 UUID 和独立思考等级组成；选择分组时沿用其成员与后备组调度。</p>
               <div class="space-y-2">
                 <div v-for="duty in duties" :key="duty.key" class="grid gap-2 rounded-md border border-line-2 px-2.5 py-2 sm:grid-cols-[minmax(130px,0.8fr)_minmax(180px,1.5fr)_130px]">
                   <div class="min-w-0">
                     <div class="text-[11px] font-medium text-ink-2">{{ duty.label }}</div>
                     <div class="mt-0.5 truncate font-mono text-[9px] leading-4 text-ink-4" :title="duty.nodes.join(', ')">{{ duty.nodes.join(' · ') }}</div>
                   </div>
-                  <select :value="config.duty_models[duty.key].model_id" class="ui-control-h ui-control min-w-0 px-2 text-[11px] text-ink" :aria-label="`${duty.label}模型配置`" @change="updateConfigTarget(config.duty_models[duty.key], $event.target.value)">
+                  <select :value="config.duty_models[duty.key].model_id" class="ui-control-h ui-control min-w-0 px-2 text-[11px] text-ink" :aria-label="`${duty.label}模型或分组`" @change="updateConfigTarget(config.duty_models[duty.key], $event.target.value)">
                     <option value="">未配置</option>
                     <option v-for="option in optionsFor(config.duty_models[duty.key].model_id)" :key="option.id" :value="option.id" :disabled="option.disabled">{{ option.label }}</option>
                   </select>
@@ -429,7 +483,7 @@ onMounted(load)
                   </select>
                 </div>
               </div>
-              <p v-if="enabledModels.length === 0" class="mt-2 text-[11px] text-warning-fg">当前没有已启用模型可供选择。</p>
+              <p v-if="availableTargetCount === 0" class="mt-2 text-[11px] text-warning-fg">当前没有已启用模型或有效分组可供选择。</p>
               <p class="mt-3 text-[10px] leading-4 text-ink-4">思考等级能力按本地 Provider 规则校验；OpenAI/Codex 的 xhigh、max 是否受上游具体模型支持仍由上游决定。留空表示固定使用上游默认等级。</p>
             </section>
 
@@ -446,7 +500,7 @@ onMounted(load)
                   <div class="mt-1 text-ink-3">task_type={{ observation.task_type || '空' }} · source={{ observation.selection_source || '空' }} · target={{ observedTargetLabel(observation) }} · effort={{ observation.effective_effort || '上游默认' }} · {{ observation.count || 0 }} 次</div>
                   <div v-if="nodeIdentityComplete(observation)" class="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_110px_auto_auto]">
                     <select :value="selectedNodeDuties[observationIdentity(observation)] || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedDuty(observation, $event.target.value)"><option value="">选择职责</option><option v-for="duty in duties" :key="duty.key" :value="duty.key">{{ duty.label }}</option></select>
-                    <select :value="selectedNodeModels[observationIdentity(observation)]?.model_id || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedModel(observation, $event.target.value)"><option value="">选择覆盖模型</option><option v-for="model in enabledModels" :key="model.id" :value="model.id">{{ modelIdentity(model) }}</option></select>
+                    <select :value="selectedNodeModels[observationIdentity(observation)]?.model_id || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedModel(observation, $event.target.value)"><option value="">选择覆盖模型或分组</option><option v-for="option in optionsFor(selectedNodeModels[observationIdentity(observation)]?.model_id)" :key="option.id" :value="option.id" :disabled="option.disabled">{{ option.label }}</option></select>
                     <select :value="selectedNodeModels[observationIdentity(observation)]?.reasoning_effort || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedEffort(observation, $event.target.value)"><option v-for="effort in effortOptions(selectedNodeModels[observationIdentity(observation)]?.model_id, selectedNodeModels[observationIdentity(observation)]?.reasoning_effort)" :key="effort" :value="effort">{{ describeEffort(effort) }}</option></select>
                     <button type="button" class="rounded border border-warning-tint-line bg-surface px-2 text-[10px] text-ink-2" @click="addNodeBinding(observation)">绑定职责</button>
                     <button type="button" class="rounded border border-warning-tint-line bg-surface px-2 text-[10px] text-ink-2" @click="addNodeOverride(observation)">固定覆盖</button>
@@ -459,7 +513,7 @@ onMounted(load)
                   <div class="mt-1">task_type={{ observation.task_type || '空' }} · target={{ observedTargetLabel(observation) }} · effort={{ observation.effective_effort || '上游默认' }} · channel={{ observation.channel_identity || '未知' }} · {{ observation.count || 0 }} 次 · 最近 {{ observation.last_seen || '未知' }}</div>
                   <div v-if="nodeIdentityComplete(observation)" class="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_110px_auto_auto]">
                     <select :value="selectedNodeDuties[observationIdentity(observation)] || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedDuty(observation, $event.target.value)"><option value="">选择职责</option><option v-for="duty in duties" :key="duty.key" :value="duty.key">{{ duty.label }}</option></select>
-                    <select :value="selectedNodeModels[observationIdentity(observation)]?.model_id || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedModel(observation, $event.target.value)"><option value="">选择覆盖模型</option><option v-for="model in enabledModels" :key="model.id" :value="model.id">{{ modelIdentity(model) }}</option></select>
+                    <select :value="selectedNodeModels[observationIdentity(observation)]?.model_id || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedModel(observation, $event.target.value)"><option value="">选择覆盖模型或分组</option><option v-for="option in optionsFor(selectedNodeModels[observationIdentity(observation)]?.model_id)" :key="option.id" :value="option.id" :disabled="option.disabled">{{ option.label }}</option></select>
                     <select :value="selectedNodeModels[observationIdentity(observation)]?.reasoning_effort || ''" class="ui-control-h ui-control px-2 text-[10px] text-ink" @change="setObservedEffort(observation, $event.target.value)"><option v-for="effort in effortOptions(selectedNodeModels[observationIdentity(observation)]?.model_id, selectedNodeModels[observationIdentity(observation)]?.reasoning_effort)" :key="effort" :value="effort">{{ describeEffort(effort) }}</option></select>
                     <button type="button" class="rounded border border-line-2 bg-surface px-2 text-[10px] text-ink-2" @click="addNodeBinding(observation)">绑定职责</button>
                     <button type="button" class="rounded border border-line-2 bg-surface px-2 text-[10px] text-ink-2" @click="addNodeOverride(observation)">固定覆盖</button>

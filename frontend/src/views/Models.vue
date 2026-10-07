@@ -613,6 +613,7 @@ onBeforeUnmount(() => {
 
           <AutoModelRow
             :models="models"
+            :groups="groups"
             :refresh-token="autoSummaryRefreshToken"
             @configure="openAutoSettings"
           />
@@ -688,7 +689,7 @@ onBeforeUnmount(() => {
       ref="autoSettingsDialog"
       :visible="showAutoSettings"
       title="Auto 模型配置"
-      description="为 Auto 的 18/20 个职责分别配置固定模型与思考等级，并管理稳定节点绑定。"
+      description="为 Auto 的 18/20 个职责配置固定模型或分组与思考等级，并管理稳定节点绑定。"
       :busy="autoSettingsBusy"
       :dirty="autoSettingsDirty"
       @close="closeAutoSettings"

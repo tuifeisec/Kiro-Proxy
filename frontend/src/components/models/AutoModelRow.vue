@@ -5,11 +5,15 @@ import {
   AUTO_DUTY_LAYOUTS,
   AUTO_DUTY_LAYOUT_LABELS,
   AUTO_ROUTING_SETTINGS_KEY,
+  autoTargetDefaultEffort,
+  autoTargetGroupCandidates,
   parseAutoDutyConfig,
+  resolveAutoTarget,
 } from '../../utils/autoDutyConfig.js'
 
 const props = defineProps({
   models: { type: Array, default: () => [] },
+  groups: { type: Array, default: () => [] },
   refreshToken: { type: Number, default: 0 },
 })
 
@@ -20,7 +24,6 @@ const readError = ref('')
 const loading = ref(false)
 let readSequence = 0
 
-const modelById = computed(() => new Map(props.models.map((model) => [model.id, model])))
 const duties = computed(() => summary.value ? AUTO_DUTY_LAYOUTS[summary.value.layout] || [] : [])
 const configuredDutyCount = computed(() => duties.value.filter((duty) => summary.value?.duty_models?.[duty.key]?.model_id).length)
 const targetIds = computed(() => {
@@ -32,21 +35,23 @@ const targetIds = computed(() => {
   ].filter(Boolean))]
 })
 const targetRates = computed(() => targetIds.value.map((id) => {
-  const model = modelById.value.get(id)
-  if (!model) return `${id}（配置不存在）`
-  return `${model.model_id || id} · ${model.provider || 'openai'}：${formatPrice(model.input_price)} / ${formatPrice(model.output_price)}`
+  const target = resolveAutoTarget(id, props.models, props.groups)
+  if (target.kind === 'collision') return `${id}（模型/分组 ID 冲突）`
+  if (target.kind === 'missing') return `${id}（配置不存在）`
+  if (target.kind === 'model') return modelRate(target.model)
+  const candidates = autoTargetGroupCandidates(id, props.models, props.groups)
+  const prices = candidates.length ? candidates.map((model) => modelRate(model, true)).join('、') : '无已启用候选成员'
+  return `分组：${target.group.name || id} · ${id}（成员价格：${prices}）`
 }))
 const dutyTargetSummary = computed(() => duties.value.map((duty) => {
   const target = summary.value?.duty_models?.[duty.key]
   if (!target?.model_id) return `${duty.label}：未配置`
-  const model = modelById.value.get(target.model_id)
-  return `${duty.label}：${model ? `${model.model_id || model.id} · ${model.id} · ${model.provider || 'openai'}` : target.model_id} / ${target.reasoning_effort || '上游默认'}`
+  return `${duty.label}：${targetIdentity(target.model_id)} / ${target.reasoning_effort || '上游默认'}`
 }).join('；'))
 const defaultTargetSummary = computed(() => {
   const id = summary.value?.default_model_id
   if (!id) return '默认目标：未配置'
-  const model = modelById.value.get(id)
-  return `默认目标：${model ? `${model.model_id || id} · ${model.provider || 'openai'} / ${model.reasoning_effort || '上游默认'}` : `${id}（配置不存在）`}`
+  return `默认目标：${targetIdentity(id)} / ${autoTargetDefaultEffort(id, props.models, props.groups) || '上游默认'}`
 })
 const routingLabel = computed(() => {
   if (legacyConfig.value) return '旧 Auto 配置待迁移'
@@ -61,6 +66,21 @@ function formatPrice(value) {
   if (!Number.isFinite(num) || num === 0) return '$0'
   if (num < 0.001) return `$${num.toFixed(5).replace(/0+$/, '')}`
   return `$${num.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`
+}
+
+function modelRate(model, includeConfigID = false) {
+  const identity = includeConfigID
+    ? `${model.name || model.model_id || model.id} · ${model.model_id || model.id} · ${model.id}`
+    : model.model_id || model.id
+  return `${identity} · ${model.provider || 'openai'}：${formatPrice(model.input_price)} / ${formatPrice(model.output_price)}`
+}
+
+function targetIdentity(id) {
+  const target = resolveAutoTarget(id, props.models, props.groups)
+  if (target.kind === 'model') return `模型：${target.model.model_id || id} · ${id} · ${target.model.provider || 'openai'}`
+  if (target.kind === 'group') return `分组：${target.group.name || id} · ${id}`
+  if (target.kind === 'collision') return `${id}（模型/分组 ID 冲突）`
+  return `${id}（配置不存在）`
 }
 
 async function loadSummary() {
@@ -116,7 +136,7 @@ watch(() => props.refreshToken, loadSummary, { immediate: true })
       </div>
 
       <div class="min-w-0 px-2 text-[11px] leading-4">
-        <div class="font-medium text-ink-3">按实际固定模型计价</div>
+        <div class="font-medium text-ink-3">按实际模型计价，分组列出候选</div>
         <div v-if="loading" class="mt-1 text-ink-4">读取中...</div>
         <div v-else-if="readError" class="mt-1 truncate text-danger" :title="readError">读取失败</div>
         <div v-else-if="legacyConfig" class="mt-1 text-ink-4">迁移后显示职责目标</div>
