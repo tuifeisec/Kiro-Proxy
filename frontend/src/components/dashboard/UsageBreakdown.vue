@@ -217,37 +217,34 @@ function cacheHitRate(row) {
     <div v-if="rows.length === 0 && !loading" class="py-12 text-center text-[13px] text-ink-3">该时间段无数据</div>
 
     <div v-else class="overflow-x-auto px-3 pb-3 pt-2">
-      <table class="w-full min-w-[820px] text-[12px]">
+      <table class="usage-table w-full table-auto text-[12px]">
         <thead>
           <tr class="border-b border-line-2 text-left text-ink-3">
-            <th class="py-1.5 pr-3 font-medium">模型</th>
-            <th class="py-1.5 pr-3 text-right font-medium">请求数</th>
-            <th class="py-1.5 pr-3 text-right font-medium">错误</th>
-            <th class="py-1.5 pr-3 text-right font-medium">输入 Token</th>
-            <th class="py-1.5 pr-3 text-right font-medium">输出 Token</th>
-            <th class="py-1.5 pr-3 text-right font-medium">缓存命中</th>
-            <th class="py-1.5 pr-3 text-right font-medium">费用（USD）</th>
-            <th class="py-1.5 pr-3 text-right font-medium">平均 tok/s</th>
-            <th class="py-1.5 text-right font-medium">命中率</th>
+            <th class="model-column font-medium">模型</th>
+            <th class="compact-column text-right font-medium">请求数</th>
+            <th class="compact-column text-right font-medium">错误</th>
+            <th class="compact-column text-right font-medium">输入 Token</th>
+            <th class="compact-column text-right font-medium">输出 Token</th>
+            <th class="compact-column text-right font-medium">缓存命中</th>
+            <th class="compact-column text-right font-medium">费用（USD）</th>
+            <th class="compact-column text-right font-medium">平均 tok/s</th>
+            <th class="compact-column text-right font-medium">命中率</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="m in byModel" :key="m.model_id" class="border-b border-line-2 last:border-b-0 hover:bg-hover">
-            <td class="py-1.5 pr-3 font-medium text-ink">{{ m.model_id }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ m.requests }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums" :class="m.errors > 0 ? 'text-danger' : 'text-ink-4'">{{ m.errors }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ formatTokens(m.input_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ formatTokens(m.output_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-success">{{ formatTokens(m.cache_hit_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-warning">{{ formatUsd(m.cost_usd) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">
-              <div>{{ formatTokenRate(averageTokenRate(m)) }}</div>
-              <div class="text-[10px] text-ink-4">{{ formatTokens(m.generation_speed_samples) }} 个样本</div>
-            </td>
-            <td class="py-1.5 text-right tabular-nums">
-              <div class="flex items-center justify-end gap-2">
-                <span class="text-ink-2">{{ cacheHitRate(m).toFixed(1) }}%</span>
-                <span class="h-1.5 w-10 overflow-hidden rounded-full bg-hover-strong"><span class="block h-full rounded-full bg-success" :style="{ width: `${Math.min(100, cacheHitRate(m))}%` }"></span></span>
+            <td class="model-column font-medium text-ink" :title="m.model_id"><span class="model-name">{{ m.model_id }}</span></td>
+            <td class="compact-column text-right tabular-nums text-ink-2">{{ m.requests }}</td>
+            <td class="compact-column text-right tabular-nums" :class="m.errors > 0 ? 'text-danger' : 'text-ink-4'">{{ m.errors }}</td>
+            <td class="compact-column text-right tabular-nums text-ink-2">{{ formatTokens(m.input_tokens) }}</td>
+            <td class="compact-column text-right tabular-nums text-ink-2">{{ formatTokens(m.output_tokens) }}</td>
+            <td class="compact-column text-right tabular-nums text-success">{{ formatTokens(m.cache_hit_tokens) }}</td>
+            <td class="compact-column text-right tabular-nums text-warning">{{ formatUsd(m.cost_usd) }}</td>
+            <td class="compact-column text-right tabular-nums text-ink-2">{{ formatTokenRate(averageTokenRate(m)) }}</td>
+            <td class="compact-column text-right tabular-nums">
+              <div class="flex items-center justify-end gap-1">
+                <span class="cache-rate-value text-ink-2">{{ cacheHitRate(m).toFixed(1) }}%</span>
+                <span class="cache-rate-bar h-1.5 w-10 overflow-hidden rounded-full bg-hover-strong"><span class="block h-full rounded-full bg-success" :style="{ width: `${Math.min(100, cacheHitRate(m))}%` }"></span></span>
               </div>
             </td>
           </tr>
@@ -256,7 +253,41 @@ function cacheHitRate(row) {
     </div>
     <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 pb-3 text-[11px] text-ink-4">
       <span>范围：{{ range.start }} ~ {{ range.end }}</span>
-      <span>全范围平均 {{ formatTokenRate(speedSummary.samples > 0 ? speedSummary.sum / speedSummary.samples : null) }} tok/s · {{ formatTokens(speedSummary.samples) }} 个有效样本；新版本开始累计，旧记录未知为 —；按单次观测速度算术平均</span>
+      <span :title="'按当前范围内有效的单次输出速度进行算术平均；没有有效记录时显示 —'">全范围平均 {{ formatTokenRate(speedSummary.samples > 0 ? speedSummary.sum / speedSummary.samples : null) }} tok/s</span>
     </div>
   </div>
 </template>
+
+<style scoped>
+.usage-table th,
+.usage-table td {
+  padding: 6px 4px;
+}
+
+.usage-table .compact-column {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.usage-table .model-column {
+  max-width: 0;
+}
+
+.usage-table .model-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cache-rate-value {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cache-rate-bar {
+  flex: 0 1 2.5rem;
+  min-width: 0;
+}
+</style>

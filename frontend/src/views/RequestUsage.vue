@@ -411,21 +411,21 @@ onBeforeUnmount(() => {
           <div v-if="loading" class="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden bg-primary-ring" aria-hidden="true">
             <div class="h-full w-1/3 bg-primary ui-progress-indeterminate"></div>
           </div>
-          <table class="w-full min-w-[1240px] text-[12px]">
+          <table class="request-table w-full table-auto text-[12px]">
             <thead class="sticky top-0 z-10 bg-surface">
               <tr class="border-b border-line-2 text-left text-ink-3">
-                <th class="py-2 pl-3 pr-3 font-medium">时间</th>
-                <th class="py-2 pr-3 font-medium">模型 / 提供商</th>
-                <th class="py-2 pr-3 font-medium">端点</th>
-                <th class="py-2 pr-3 font-medium">状态</th>
-                <th class="py-2 pr-3 text-right font-medium">Tokens</th>
-                <th class="py-2 pr-3 text-right font-medium">费用（USD）</th>
-                <th class="py-2 pr-3 text-right font-medium">首字</th>
-                <th class="py-2 pr-3 text-right font-medium">总耗时</th>
-                <th class="py-2 pr-3 text-right font-medium" title="输出 Token ÷ 首次至末次内容间隔；代理观测值，数据未知或不完整时显示 —">输出 tok/s</th>
-                <th class="py-2 pr-3 font-medium">推理</th>
-                <th class="py-2 pr-3 font-medium">档位</th>
-                <th class="py-2 pr-3 font-medium">异常</th>
+                <th class="font-medium">时间</th>
+                <th class="font-medium">模型 / 提供商</th>
+                <th class="font-medium">端点</th>
+                <th class="fit-column font-medium">状态</th>
+                <th class="fit-column text-right font-medium">Tokens</th>
+                <th class="fit-column text-right font-medium">费用（USD）</th>
+                <th class="fit-column text-right font-medium">首字</th>
+                <th class="fit-column text-right font-medium">总耗时</th>
+                <th class="fit-column text-right font-medium" title="输出 Token ÷ 首次至末次内容间隔；代理观测值，数据未知或不完整时显示 —">输出 tok/s</th>
+                <th class="fit-column font-medium">推理</th>
+                <th class="fit-column font-medium">档位</th>
+                <th class="font-medium">异常</th>
               </tr>
             </thead>
             <tbody>
@@ -439,25 +439,25 @@ onBeforeUnmount(() => {
                 @keydown.enter.prevent="openDetail(item)"
                 @keydown.space.prevent="openDetail(item)"
               >
-                <td class="whitespace-nowrap py-2 pl-3 pr-3 font-mono text-[11px] text-ink-2">{{ formatTime(item.created_at) }}</td>
-                <td class="max-w-[220px] py-2 pr-3">
+                <td class="font-mono text-[11px] text-ink-2" :title="formatTime(item.created_at)">{{ formatTime(item.created_at) }}</td>
+                <td class="max-w-0" :title="item.model_id || 'unknown'">
                   <div class="truncate font-medium text-ink">{{ item.model_id || 'unknown' }}</div>
-                  <div class="mt-0.5 truncate text-[10px] text-ink-4">{{ item.provider || '—' }}</div>
+                  <div class="mt-0.5 truncate text-[10px] text-ink-4" :title="item.provider || '—'">{{ item.provider || '—' }}</div>
                 </td>
-                <td class="max-w-[220px] truncate py-2 pr-3 font-mono text-[10px] text-ink-3">{{ item.endpoint || item.request_path || '—' }}</td>
-                <td class="py-2 pr-3"><span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="item.success ? 'bg-success-tint text-success-fg' : 'bg-danger-tint text-danger-fg'" :aria-label="item.success ? '请求成功' : '请求异常'"><span class="h-1.5 w-1.5 rounded-full" :class="item.success ? 'bg-brand' : 'bg-danger'" aria-hidden="true"></span>{{ item.status_code || 'ERR' }}</span></td>
-                <td class="py-2 pr-3 text-right tabular-nums">
+                <td class="max-w-0 font-mono text-[10px] text-ink-3" :title="item.endpoint || item.request_path || '—'"><div class="truncate">{{ item.endpoint || item.request_path || '—' }}</div></td>
+                <td class="fit-column"><span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="item.success ? 'bg-success-tint text-success-fg' : 'bg-danger-tint text-danger-fg'" :aria-label="item.success ? '请求成功' : '请求异常'"><span class="h-1.5 w-1.5 rounded-full" :class="item.success ? 'bg-brand' : 'bg-danger'" aria-hidden="true"></span>{{ item.status_code || 'ERR' }}</span></td>
+                <td class="fit-column text-right tabular-nums">
                   <span class="inline-flex cursor-help items-center gap-1 whitespace-nowrap" @mouseenter="showTooltip('tokens', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip"><span class="text-primary-fg">↓{{ formatNum(regularInputTokens(item)) }}</span><span class="text-accent">↑{{ formatNum(item.output_tokens) }}</span><span class="text-success">缓存{{ formatNum(cacheTokens(item)) }}</span></span>
                 </td>
-                <td class="py-2 pr-3 text-right tabular-nums text-warning">
+                <td class="fit-column text-right tabular-nums text-warning">
                   <span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('cost', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatUsd(totalCostUsd(item)) }}</span>
                 </td>
-                <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('timing', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.first_byte_ms) }}</span></td>
-                <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('total', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.duration_ms) }}</span></td>
-                <td class="whitespace-nowrap py-2 pr-3 text-right font-mono tabular-nums text-ink-2">{{ formatTokenRate(item.tokens_per_second) }}</td>
-                <td class="py-2 pr-3">{{ item.reasoning_effort || 'Default' }}</td>
-                <td class="py-2 pr-3">{{ item.service_tier || 'Standard' }}</td>
-                <td class="max-w-[220px] truncate py-2 pr-3 text-[11px] text-danger" :title="item.error_message">{{ item.error_message || '—' }}</td>
+                <td class="fit-column text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('timing', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.first_byte_ms) }}</span></td>
+                <td class="fit-column text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('total', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.duration_ms) }}</span></td>
+                <td class="fit-column whitespace-nowrap text-right font-mono tabular-nums text-ink-2">{{ formatTokenRate(item.tokens_per_second) }}</td>
+                <td class="fit-column whitespace-nowrap" :title="item.reasoning_effort || 'Default'">{{ item.reasoning_effort || 'Default' }}</td>
+                <td class="fit-column whitespace-nowrap" :title="item.service_tier || 'Standard'">{{ item.service_tier || 'Standard' }}</td>
+                <td class="max-w-0 text-[11px] text-danger" :title="item.error_message"><div class="truncate">{{ item.error_message || '—' }}</div></td>
               </tr>
             </tbody>
           </table>
@@ -626,6 +626,16 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.request-table th,
+.request-table td {
+  padding: 6px 4px;
+}
+
+.request-table .fit-column {
+  width: 1%;
+  white-space: nowrap;
+}
+
 /* tooltip 出入场：根元素淡入淡出（Transition 据此识别时长），内层负责轻微位移；
    两者属性均不与内联 transform 定位冲突，时长与缓动已对齐全局令牌
    （--dur-fast + --ease-out-quart / --ease-in-quart）。 */
