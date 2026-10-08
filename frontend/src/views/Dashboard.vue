@@ -17,7 +17,7 @@ import IconArrowRight from '../components/icons/IconArrowRight.vue'
 import IconMore from '../components/icons/IconMore.vue'
 import { useToast } from '../composables/useToast.js'
 import { statsDaysAgo } from '../utils/date.js'
-import { formatCredits, formatTokens } from '../utils/format.js'
+import { formatTokens, formatUsd } from '../utils/format.js'
 import { getProxyAccessMode, updateProxyAccessMode } from '../api/settings.js'
 
 const { stats, loading, error, clearStats, refresh } = useStats()
@@ -42,7 +42,7 @@ const rangeSummary = ref({
   output_tokens: 0,
   cache_read_tokens: 0,
   cache_write_tokens: 0,
-  credits: 0,
+  cost_usd: 0,
 })
 const proxyAccess = ref({ mode: 'local', host: '127.0.0.1' })
 const proxyAccessLoading = ref(false)
@@ -135,7 +135,7 @@ function smoothStat(source) {
 const smoothTotalRequests = smoothStat(() => Number(displayedStats.value.total_requests || 0))
 const smoothTotalTokens = smoothStat(() => Number(displayedStats.value.total_tokens || 0))
 const smoothCacheHitRate = smoothStat(cacheHitRate)
-const smoothCredits = smoothStat(() => Number(displayedStats.value.credits || 0))
+const smoothCostUsd = smoothStat(() => Number(displayedStats.value.cost_usd || 0))
 
 const cards = computed(() => [
   {
@@ -161,9 +161,9 @@ const cards = computed(() => [
     tone: 'purple',
   },
   {
-    label: '本地估算 Credits',
-    value: formatCredits(smoothCredits.value),
-    sub: '按配置费用 ÷ 0.04 USD/Credit',
+    label: '费用（USD）',
+    value: formatUsd(smoothCostUsd.value),
+    sub: `按渠道配置单价计算 · ${selectedRangeLabel.value}`,
     icon: IconArrowRight,
     tone: 'amber',
   },
@@ -449,7 +449,7 @@ async function confirmClearStats() {
           </div>
           <div class="min-w-0">
             <h2 class="text-base font-semibold text-ink">确认清空统计？</h2>
-            <p class="mt-1 text-xs leading-5 text-ink-3">此操作会清空请求、Token、Credits 和用量明细。清空后历史统计无法恢复。</p>
+            <p class="mt-1 text-xs leading-5 text-ink-3">此操作会清空请求、Token、费用统计和用量明细。清空后历史统计无法恢复。</p>
           </div>
           <button class="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-4 transition hover:bg-hover hover:text-ink-2" aria-label="关闭确认窗口" :disabled="clearStatsBusy" @click="closeClearStatsModal">×</button>
         </div>

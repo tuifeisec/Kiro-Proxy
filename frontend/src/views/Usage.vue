@@ -9,7 +9,7 @@ import IconWifi from '../components/icons/IconWifi.vue'
 import IconArrowRight from '../components/icons/IconArrowRight.vue'
 import IconRefresh from '../components/icons/IconRefresh.vue'
 import { statsDaysAgo } from '../utils/date.js'
-import { formatCredits, formatTokens as formatNum } from '../utils/format.js'
+import { formatTokens as formatNum, formatUsd } from '../utils/format.js'
 
 const { rows, loading, error, range, load } = useDailyStats()
 
@@ -139,9 +139,9 @@ const totals = computed(() => rows.value.reduce((acc, row) => {
   acc.output += Number(row.output_tokens || 0)
   acc.cacheRead += cacheRead(row)
   acc.cacheWrite += cacheWrite(row)
-  acc.credits += Number(row.credits || 0)
+  acc.costUsd += Number(row.cost_usd || 0)
   return acc
-}, { requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, credits: 0 }))
+}, { requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 }))
 
 const totalTokens = computed(() => totals.value.input + totals.value.output)
 const cacheHitRate = computed(() => totals.value.input ? (Math.min(totals.value.cacheRead, totals.value.input) / totals.value.input) * 100 : 0)
@@ -155,13 +155,13 @@ function smoothStat(source) {
 const smoothRequests = smoothStat(() => totals.value.requests)
 const smoothTotalTokens = smoothStat(totalTokens)
 const smoothCacheHitRate = smoothStat(cacheHitRate)
-const smoothCredits = smoothStat(() => totals.value.credits)
+const smoothCostUsd = smoothStat(() => totals.value.costUsd)
 
 const summaryCards = computed(() => [
   { label: '总请求数', value: Math.round(smoothRequests.value).toLocaleString(), sub: `错误 ${totals.value.errors} · 错误率 ${errorRate.value.toFixed(2)}%`, icon: IconUsage, tone: 'blue' },
   { label: '总 Token', value: formatNum(Math.round(smoothTotalTokens.value)), sub: `输入 ${formatNum(totals.value.input)} · 输出 ${formatNum(totals.value.output)}`, icon: IconDashboard, tone: 'green' },
   { label: '缓存命中', value: smoothCacheHitRate.value ? smoothCacheHitRate.value.toFixed(1) + '%' : '—', sub: `命中 ${formatNum(totals.value.cacheRead)} · 写入 ${formatNum(totals.value.cacheWrite)}`, icon: IconWifi, tone: 'purple' },
-  { label: '本地估算 Credits', value: formatCredits(smoothCredits.value), sub: '按配置费用 ÷ 0.04 USD/Credit', icon: IconArrowRight, tone: 'amber' },
+  { label: '费用（USD）', value: formatUsd(smoothCostUsd.value), sub: '按渠道配置单价计算', icon: IconArrowRight, tone: 'amber' },
 ])
 
 const toneMap = {
@@ -175,14 +175,14 @@ const dailyRows = computed(() => {
   const map = new Map()
   for (const row of rows.value) {
     const date = row.date || '—'
-    const cur = map.get(date) || { date, requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, credits: 0, models: new Set() }
+    const cur = map.get(date) || { date, requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, models: new Set() }
     cur.requests += Number(row.requests || 0)
     cur.errors += Number(row.errors || 0)
     cur.input += Number(row.input_tokens || 0)
     cur.output += Number(row.output_tokens || 0)
     cur.cacheRead += cacheRead(row)
     cur.cacheWrite += cacheWrite(row)
-    cur.credits += Number(row.credits || 0)
+    cur.costUsd += Number(row.cost_usd || 0)
     if (row.model_id) cur.models.add(row.model_id)
     map.set(date, cur)
   }
@@ -193,14 +193,14 @@ const modelRows = computed(() => {
   const map = new Map()
   for (const row of rows.value) {
     const model = row.model_id || 'unknown'
-    const cur = map.get(model) || { model, requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, credits: 0, days: new Set() }
+    const cur = map.get(model) || { model, requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, days: new Set() }
     cur.requests += Number(row.requests || 0)
     cur.errors += Number(row.errors || 0)
     cur.input += Number(row.input_tokens || 0)
     cur.output += Number(row.output_tokens || 0)
     cur.cacheRead += cacheRead(row)
     cur.cacheWrite += cacheWrite(row)
-    cur.credits += Number(row.credits || 0)
+    cur.costUsd += Number(row.cost_usd || 0)
     if (row.date) cur.days.add(row.date)
     map.set(model, cur)
   }
@@ -217,7 +217,7 @@ const selectedDateRows = computed(() => rows.value
     output: Number(row.output_tokens || 0),
     cacheRead: cacheRead(row),
     cacheWrite: cacheWrite(row),
-    credits: Number(row.credits || 0),
+    costUsd: Number(row.cost_usd || 0),
   }))
   .sort((a, b) => (b.input + b.output) - (a.input + a.output)))
 
@@ -244,7 +244,6 @@ function logMetaLine(entry) {
   const tokens = Number(entry.input_tokens || 0) + Number(entry.output_tokens || 0)
   if (tokens) parts.push(`tokens=${formatNum(tokens)}`)
   if (entry.cache_read_tokens) parts.push(`cache=${formatNum(entry.cache_read_tokens)}`)
-  if (entry.credits) parts.push(formatCredits(entry.credits))
   return parts.join(' · ')
 }
 
@@ -279,7 +278,7 @@ onBeforeUnmount(() => {
       <header class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-[22px] font-semibold tracking-tight text-ink">用量明细</h1>
-          <p class="mt-0.5 text-[12px] text-ink-3">查看每日、模型维度的请求量、Token、缓存命中和本地估算 Credits。</p>
+          <p class="mt-0.5 text-[12px] text-ink-3">查看每日、模型维度的请求量、Token、缓存命中和费用（USD）。</p>
         </div>
         <div class="inline-flex items-center gap-1 ui-card p-1">
           <button
@@ -347,7 +346,7 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
-                <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
+                <th class="py-2 pr-3 text-right font-medium">费用（USD）</th>
                 <th class="py-2 pr-3 text-right font-medium">命中率</th>
               </tr>
             </thead>
@@ -369,7 +368,7 @@ onBeforeUnmount(() => {
                 <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.input) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.output) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-success">{{ formatNum(row.cacheRead) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatCredits(row.credits) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatUsd(row.costUsd) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full bg-success-tint px-2 py-0.5 text-[11px] text-success">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
               </tr>
             </tbody>
@@ -400,7 +399,7 @@ onBeforeUnmount(() => {
                   <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
                   <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                   <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
-                  <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
+                  <th class="py-2 pr-3 text-right font-medium">费用（USD）</th>
                   <th class="py-2 pr-3 text-right font-medium">命中率</th>
                 </tr>
               </thead>
@@ -412,7 +411,7 @@ onBeforeUnmount(() => {
                   <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.input) }}</td>
                   <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.output) }}</td>
                   <td class="py-2 pr-3 text-right tabular-nums text-success">{{ formatNum(row.cacheRead) }}</td>
-                  <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatCredits(row.credits) }}</td>
+                  <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatUsd(row.costUsd) }}</td>
                   <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full bg-success-tint px-2 py-0.5 text-[11px] text-success">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
                 </tr>
               </tbody>
@@ -475,7 +474,7 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 text-right font-medium">输入 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">输出 Token</th>
                 <th class="py-2 pr-3 text-right font-medium">缓存命中</th>
-                <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
+                <th class="py-2 pr-3 text-right font-medium">费用（USD）</th>
                 <th class="py-2 pr-3 text-right font-medium">命中率</th>
               </tr>
             </thead>
@@ -488,7 +487,7 @@ onBeforeUnmount(() => {
                 <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.input) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-ink-2">{{ formatNum(row.output) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums text-success">{{ formatNum(row.cacheRead) }}</td>
-                <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatCredits(row.credits) }}</td>
+                <td class="py-2 pr-3 text-right tabular-nums text-warning">{{ formatUsd(row.costUsd) }}</td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="rounded-full bg-success-tint px-2 py-0.5 text-[11px] text-success">{{ rowCacheHitRate(row).toFixed(1) }}%</span></td>
               </tr>
             </tbody>

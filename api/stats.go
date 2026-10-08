@@ -5,11 +5,31 @@
 package api
 
 import (
+	"kiro-proxy/billing"
 	"kiro-proxy/converter"
 	"kiro-proxy/store"
 	"net/http"
 	"time"
 )
+
+type statsResponse struct {
+	store.StatsSnapshot
+	CostUSD      float64 `json:"cost_usd"`
+	TodayCostUSD float64 `json:"today_cost_usd"`
+}
+
+type dailyStatsResponse struct {
+	store.DailyModelStats
+	CostUSD float64 `json:"cost_usd"`
+}
+
+func newStatsResponse(snapshot store.StatsSnapshot) statsResponse {
+	return statsResponse{
+		StatsSnapshot: snapshot,
+		CostUSD:       snapshot.Credits * billing.CreditUSD,
+		TodayCostUSD:  snapshot.TodayCredits * billing.CreditUSD,
+	}
+}
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
@@ -17,7 +37,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeOK(w, s.stats.Snapshot())
+		writeOK(w, newStatsResponse(s.stats.Snapshot()))
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -42,13 +62,20 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			endDate = store.StatsDay(time.Now())
 		}
 		daily := s.stats.GetDailyStats(startDate, endDate)
+		dailyWithUSD := make([]dailyStatsResponse, 0, len(daily))
+		for _, row := range daily {
+			dailyWithUSD = append(dailyWithUSD, dailyStatsResponse{
+				DailyModelStats: row,
+				CostUSD:         row.Credits * billing.CreditUSD,
+			})
+		}
 		writeOK(w, map[string]interface{}{
-			"daily": daily,
+			"daily": dailyWithUSD,
 			"start": startDate,
 			"end":   endDate,
 		})
 		return
 	}
 
-	writeOK(w, s.stats.Snapshot())
+	writeOK(w, newStatsResponse(s.stats.Snapshot()))
 }

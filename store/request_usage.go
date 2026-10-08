@@ -71,6 +71,7 @@ type RequestUsageSummary struct {
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	CacheWriteTokens    int64   `json:"cache_write_tokens"`
 	Credits             float64 `json:"credits"`
+	CostUSD             float64 `json:"cost_usd"`
 	AverageDuration     int64   `json:"average_duration_ms"`
 	AverageFirstByte    int64   `json:"average_first_byte_ms"`
 	AverageFirstContent int64   `json:"average_first_content_ms"`
@@ -273,13 +274,15 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 				ELSE input_tokens
 			END), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
-			COALESCE(SUM(credits), 0), CAST(COALESCE(AVG(duration_ms), 0) AS INTEGER),
+			COALESCE(SUM(credits), 0), COALESCE(SUM(input_cost), 0) + COALESCE(SUM(output_cost), 0) +
+				COALESCE(SUM(cache_read_cost), 0) + COALESCE(SUM(cache_write_cost), 0),
+			CAST(COALESCE(AVG(duration_ms), 0) AS INTEGER),
 			CAST(COALESCE(AVG(CASE WHEN first_byte_ms > 0 THEN first_byte_ms END), 0) AS INTEGER),
 			CAST(COALESCE(AVG(CASE WHEN content_measured != 0 AND content_measurement_complete != 0 THEN first_content_ms END), 0) AS INTEGER),
 			COALESCE(SUM(CASE WHEN content_measured != 0 AND content_measurement_complete != 0 THEN 1 ELSE 0 END), 0)
 		FROM request_usage`+where, args...).Scan(&summary.Requests, &summary.Errors,
 		&summary.InputTokens, &summary.OutputTokens, &summary.CacheReadTokens,
-		&summary.CacheWriteTokens, &summary.Credits, &summary.AverageDuration, &summary.AverageFirstByte,
+		&summary.CacheWriteTokens, &summary.Credits, &summary.CostUSD, &summary.AverageDuration, &summary.AverageFirstByte,
 		&summary.AverageFirstContent, &summary.ContentSamples)
 	if err != nil {
 		return RequestUsagePage{}, fmt.Errorf("查询请求统计汇总失败: %w", err)

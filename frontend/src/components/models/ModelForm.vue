@@ -750,7 +750,7 @@ async function handleExchangeOAuth() {
               <h3 class="text-sm font-semibold text-ink">价格配置 <span class="text-xs font-normal text-ink-3">（USD / 百万 Token）</span></h3>
               <button type="button" class="text-xs font-medium text-primary-fg hover:underline" @click="applyDefaultPrices(form.provider)">⟳ 恢复当前 Provider 默认价格</button>
             </div>
-            <p class="mb-2.5 text-[11px] leading-4 text-ink-4">默认单价仅用于预填，请按实际渠道价格填写。积分按本地估算费用 ÷ 0.04 USD/Credit 计算。</p>
+            <p class="mb-2.5 text-[11px] leading-4 text-ink-4">默认单价仅用于预填，请按实际渠道价格填写。用量费用按请求 Token、单价和费用倍率计算，以 USD 显示。</p>
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-5">
               <div>
                 <label class="mb-1.5 block text-xs font-medium text-ink">输入价格</label>

@@ -193,7 +193,7 @@ onMounted(load)
 
         <div class="mt-3 rounded-lg bg-surface-2 px-3 py-2 text-[12px] leading-5 text-ink-3">
           <p><span class="font-medium text-ink-2">分类说明：</span>chat 为咨询、解释和对话；do 为执行请求（如修改代码或文件）；spec 为明确要求规格、需求或设计文档。confidence 是模型对分类的信心值，不作为额外分类阈值。</p>
-          <p class="mt-1">费用按输入 Token 估算，Credits = USD ÷ 0.04。</p>
+          <p class="mt-1">费用按输入 Token 和配置单价计算，以 USD 显示。</p>
           <p class="mt-1">
             <a class="text-primary underline-offset-2 hover:underline" href="https://docs.typesafe.ai/api" target="_blank" rel="noopener noreferrer">官方 API 文档</a>
             <span class="px-1 text-ink-4">·</span>

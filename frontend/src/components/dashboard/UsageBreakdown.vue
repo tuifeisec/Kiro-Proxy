@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDailyStats } from '../../composables/useStats.js'
 import IconRefresh from '../icons/IconRefresh.vue'
 import { ALL_STATS_START_DATE, statsDaysAgo } from '../../utils/date.js'
-import { formatCredits, formatTokens } from '../../utils/format.js'
+import { formatTokens, formatUsd } from '../../utils/format.js'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -122,7 +122,7 @@ const byModel = computed(() => {
       output_tokens: 0,
       cache_write_tokens: 0,
       cache_hit_tokens: 0,
-      credits: 0,
+      cost_usd: 0,
     }
     cur.requests += r.requests
     cur.errors += r.errors
@@ -130,7 +130,7 @@ const byModel = computed(() => {
     cur.output_tokens += r.output_tokens
     cur.cache_write_tokens += cacheWriteTokens(r)
     cur.cache_hit_tokens += cacheHitTokens(r)
-    cur.credits += Number(r.credits || 0)
+    cur.cost_usd += Number(r.cost_usd || 0)
     map.set(r.model_id, cur)
   }
   return Array.from(map.values()).sort((a, b) => (b.input_tokens + b.output_tokens) - (a.input_tokens + a.output_tokens))
@@ -143,7 +143,7 @@ const summary = computed(() => byModel.value.reduce((total, row) => {
   total.output_tokens += Number(row.output_tokens || 0)
   total.cache_read_tokens += Number(row.cache_hit_tokens || 0)
   total.cache_write_tokens += Number(row.cache_write_tokens || 0)
-  total.credits += Number(row.credits || 0)
+  total.cost_usd += Number(row.cost_usd || 0)
   return total
 }, {
   total_requests: 0,
@@ -152,7 +152,7 @@ const summary = computed(() => byModel.value.reduce((total, row) => {
   output_tokens: 0,
   cache_read_tokens: 0,
   cache_write_tokens: 0,
-  credits: 0,
+  cost_usd: 0,
 }))
 
 watch(summary, (value) => {
@@ -176,7 +176,7 @@ function cacheHitRate(row) {
     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line-2 px-3 py-2">
       <div class="min-w-0">
         <h3 class="text-[14px] font-semibold text-ink">用量明细</h3>
-        <p class="mt-0.5 text-[12px] text-ink-3">按模型聚合 Token、本地估算 Credits 和缓存命中</p>
+        <p class="mt-0.5 text-[12px] text-ink-3">按模型聚合 Token、费用（USD）和缓存命中</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <template v-if="!isAllRange">
@@ -210,7 +210,7 @@ function cacheHitRate(row) {
             <th class="py-1.5 pr-3 text-right font-medium">输入 Token</th>
             <th class="py-1.5 pr-3 text-right font-medium">输出 Token</th>
             <th class="py-1.5 pr-3 text-right font-medium">缓存命中</th>
-            <th class="py-1.5 pr-3 text-right font-medium">估算 Credits</th>
+            <th class="py-1.5 pr-3 text-right font-medium">费用（USD）</th>
             <th class="py-1.5 text-right font-medium">命中率</th>
           </tr>
         </thead>
@@ -222,7 +222,7 @@ function cacheHitRate(row) {
             <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ formatTokens(m.input_tokens) }}</td>
             <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ formatTokens(m.output_tokens) }}</td>
             <td class="py-1.5 pr-3 text-right tabular-nums text-success">{{ formatTokens(m.cache_hit_tokens) }}</td>
-            <td class="py-1.5 pr-3 text-right tabular-nums text-warning">{{ formatCredits(m.credits) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-warning">{{ formatUsd(m.cost_usd) }}</td>
             <td class="py-1.5 text-right tabular-nums">
               <div class="flex items-center justify-end gap-2">
                 <span class="text-ink-2">{{ cacheHitRate(m).toFixed(1) }}%</span>

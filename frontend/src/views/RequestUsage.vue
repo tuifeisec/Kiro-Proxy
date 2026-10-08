@@ -6,7 +6,7 @@ import IconSearch from '../components/icons/IconSearch.vue'
 import IconCopy from '../components/icons/IconCopy.vue'
 import { useToast } from '../composables/useToast.js'
 import { statsDaysAgo } from '../utils/date.js'
-import { formatCredits, formatNum, formatUsd } from '../utils/format.js'
+import { formatNum, formatUsd } from '../utils/format.js'
 
 const items = ref([])
 const summary = ref({})
@@ -281,7 +281,7 @@ const cards = computed(() => [
   { label: '请求数', value: formatNum(summary.value.requests), sub: `异常 ${formatNum(summary.value.errors)}`, tone: 'blue' },
   { label: '输入 Token', value: formatNum(summaryInputTokens.value), sub: `不含缓存 · 缓存读取 ${formatNum(summary.value.cache_read_tokens)}`, tone: 'cyan' },
   { label: '输出 Token', value: formatNum(summary.value.output_tokens), sub: `缓存写入 ${formatNum(summary.value.cache_write_tokens)}`, tone: 'violet' },
-  { label: '本地估算 Credits', value: formatCredits(summary.value.credits), sub: `首字 ${formatDuration(summary.value.average_first_byte_ms)} · 首内容 ${formatMeasuredDuration(summary.value.average_first_content_ms, Number(summary.value.content_samples || 0) > 0)} · 耗时 ${formatDuration(summary.value.average_duration_ms)}`, tone: 'amber' },
+  { label: '费用（USD）', value: formatUsd(summary.value.cost_usd), sub: `首字 ${formatDuration(summary.value.average_first_byte_ms)} · 首内容 ${formatMeasuredDuration(summary.value.average_first_content_ms, Number(summary.value.content_samples || 0) > 0)} · 耗时 ${formatDuration(summary.value.average_duration_ms)}`, tone: 'amber' },
 ])
 
 function contentMeasurementStatus(item) {
@@ -340,7 +340,7 @@ onBeforeUnmount(() => {
       <header class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-[22px] font-semibold tracking-tight text-ink">请求统计</h1>
-          <p class="mt-0.5 text-[12px] text-ink-3">逐条记录上游请求指标，不保存请求内容和返回内容。</p>
+          <p class="mt-0.5 text-[12px] text-ink-3">按请求记录和渠道配置单价计算费用（USD），并记录各请求指标；不保存请求内容和返回内容。</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 ui-card p-1.5">
           <span class="px-1 text-[11px] font-medium text-ink-3">时间范围</span>
@@ -419,7 +419,7 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 font-medium">端点</th>
                 <th class="py-2 pr-3 font-medium">状态</th>
                 <th class="py-2 pr-3 text-right font-medium">Tokens</th>
-                <th class="py-2 pr-3 text-right font-medium">估算 Credits</th>
+                <th class="py-2 pr-3 text-right font-medium">费用（USD）</th>
                 <th class="py-2 pr-3 text-right font-medium">首字</th>
                 <th class="py-2 pr-3 text-right font-medium">总耗时</th>
                 <th class="py-2 pr-3 font-medium">推理</th>
@@ -449,7 +449,7 @@ onBeforeUnmount(() => {
                   <span class="inline-flex cursor-help items-center gap-1 whitespace-nowrap" @mouseenter="showTooltip('tokens', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip"><span class="text-primary-fg">↓{{ formatNum(regularInputTokens(item)) }}</span><span class="text-accent">↑{{ formatNum(item.output_tokens) }}</span><span class="text-success">缓存{{ formatNum(cacheTokens(item)) }}</span></span>
                 </td>
                 <td class="py-2 pr-3 text-right tabular-nums text-warning">
-                  <span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('cost', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatCredits(item.credits) }}</span>
+                  <span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('cost', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatUsd(totalCostUsd(item)) }}</span>
                 </td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('timing', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.first_byte_ms) }}</span></td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('total', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.duration_ms) }}</span></td>
@@ -505,7 +505,6 @@ onBeforeUnmount(() => {
             <div class="flex justify-between"><span>缓存写入费用（USD）</span><span class="font-medium text-white">{{ formatUsd(tooltip.item.cache_write_cost) }}</span></div>
           </div>
           <div class="mt-2 flex justify-between border-t border-[#334155] pt-2"><span>费用合计（USD）</span><span class="font-semibold text-[#22d3ee]">{{ formatUsd(totalCostUsd(tooltip.item)) }}</span></div>
-          <div class="mt-1 flex justify-between"><span>本地估算 Credits</span><span class="font-semibold text-[#22d3ee]">{{ formatCredits(tooltip.item.credits) }}</span></div>
         </template>
         <template v-else>
           <div class="mb-2 text-[14px] font-semibold">{{ tooltip.type === 'total' ? '总耗时明细' : '首字耗时明细' }}</div>
@@ -571,14 +570,14 @@ onBeforeUnmount(() => {
             </section>
 
             <section class="border-b border-line-2 px-4 py-4">
-              <h3 class="mb-3 text-[13px] font-semibold text-ink">Token 与估算积分</h3>
+              <h3 class="mb-3 text-[13px] font-semibold text-ink">Token 与费用（USD）</h3>
               <dl class="grid grid-cols-2 gap-x-5 gap-y-2.5 text-[12px]">
                 <div><dt class="text-ink-4">普通输入</dt><dd class="mt-0.5 font-medium tabular-nums text-primary-fg">{{ formatNum(regularInputTokens(selectedItem)) }}</dd></div>
                 <div><dt class="text-ink-4">输出</dt><dd class="mt-0.5 font-medium tabular-nums text-accent">{{ formatNum(selectedItem.output_tokens) }}</dd></div>
                 <div><dt class="text-ink-4">缓存读取</dt><dd class="mt-0.5 font-medium tabular-nums text-success">{{ formatNum(selectedItem.cache_read_tokens) }}</dd></div>
                 <div><dt class="text-ink-4">缓存写入</dt><dd class="mt-0.5 font-medium tabular-nums text-success">{{ formatNum(selectedItem.cache_write_tokens) }}</dd></div>
                 <div><dt class="text-ink-4">总 Token</dt><dd class="mt-0.5 font-semibold tabular-nums text-ink">{{ formatNum(totalTokens(selectedItem)) }}</dd></div>
-                <div><dt class="text-ink-4">本地估算 Credits</dt><dd class="mt-0.5 font-semibold tabular-nums text-warning">{{ formatCredits(selectedItem.credits) }}</dd></div>
+                <div><dt class="text-ink-4">费用（USD）</dt><dd class="mt-0.5 font-semibold tabular-nums text-warning">{{ formatUsd(totalCostUsd(selectedItem)) }}</dd></div>
               </dl>
             </section>
 
