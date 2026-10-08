@@ -152,6 +152,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("/api/service/status", s.handleServiceStatus)
 	mux.HandleFunc("/api/logs", s.handleLogs)
+	mux.HandleFunc("/api/auto-routing/history", s.handleAutoNodeHistory)
 	mux.HandleFunc("/api/proxy-mode", s.handleProxyMode)
 	mux.HandleFunc("/api/proxy-access-mode", s.handleProxyAccessMode)
 	mux.HandleFunc("/api/log-detail", s.handleLogDetail)
