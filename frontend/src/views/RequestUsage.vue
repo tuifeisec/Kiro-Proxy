@@ -453,7 +453,7 @@ onBeforeUnmount(() => {
                 @keydown.enter.prevent="openDetail(item)"
                 @keydown.space.prevent="openDetail(item)"
               >
-                <td class="font-mono text-[11px] text-ink-2" :title="formatTime(item.created_at)">{{ formatTime(item.created_at) }}</td>
+                <td class="whitespace-nowrap font-mono text-[11px] text-ink-2" :title="formatTime(item.created_at)">{{ formatTime(item.created_at) }}</td>
                 <td class="max-w-0" :title="item.model_id || 'unknown'">
                   <div class="truncate font-medium text-ink">{{ item.model_id || 'unknown' }}</div>
                   <div class="mt-0.5 truncate text-[10px] text-ink-4" :title="item.provider || '—'">{{ item.provider || '—' }}</div>
