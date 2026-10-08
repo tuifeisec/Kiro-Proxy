@@ -20,3 +20,10 @@ export function formatNum(value) {
 export function formatUsd(n) {
   return `$${Number(n || 0).toFixed(6)}`
 }
+
+export function formatTokenRate(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  const number = Number(value)
+  if (!Number.isFinite(number) || number < 0) return '—'
+  return number.toFixed(2)
+}

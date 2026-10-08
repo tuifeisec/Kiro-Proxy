@@ -6,7 +6,7 @@ import IconSearch from '../components/icons/IconSearch.vue'
 import IconCopy from '../components/icons/IconCopy.vue'
 import { useToast } from '../composables/useToast.js'
 import { statsDaysAgo } from '../utils/date.js'
-import { formatNum, formatUsd } from '../utils/format.js'
+import { formatNum, formatTokenRate, formatUsd } from '../utils/format.js'
 
 const items = ref([])
 const summary = ref({})
@@ -411,7 +411,7 @@ onBeforeUnmount(() => {
           <div v-if="loading" class="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden bg-primary-ring" aria-hidden="true">
             <div class="h-full w-1/3 bg-primary ui-progress-indeterminate"></div>
           </div>
-          <table class="w-full min-w-[1160px] text-[12px]">
+          <table class="w-full min-w-[1240px] text-[12px]">
             <thead class="sticky top-0 z-10 bg-surface">
               <tr class="border-b border-line-2 text-left text-ink-3">
                 <th class="py-2 pl-3 pr-3 font-medium">时间</th>
@@ -422,6 +422,7 @@ onBeforeUnmount(() => {
                 <th class="py-2 pr-3 text-right font-medium">费用（USD）</th>
                 <th class="py-2 pr-3 text-right font-medium">首字</th>
                 <th class="py-2 pr-3 text-right font-medium">总耗时</th>
+                <th class="py-2 pr-3 text-right font-medium" title="输出 Token ÷ 首次至末次内容间隔；代理观测值，数据未知或不完整时显示 —">输出 tok/s</th>
                 <th class="py-2 pr-3 font-medium">推理</th>
                 <th class="py-2 pr-3 font-medium">档位</th>
                 <th class="py-2 pr-3 font-medium">异常</th>
@@ -453,6 +454,7 @@ onBeforeUnmount(() => {
                 </td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('timing', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.first_byte_ms) }}</span></td>
                 <td class="py-2 pr-3 text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('total', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.duration_ms) }}</span></td>
+                <td class="whitespace-nowrap py-2 pr-3 text-right font-mono tabular-nums text-ink-2">{{ formatTokenRate(item.tokens_per_second) }}</td>
                 <td class="py-2 pr-3">{{ item.reasoning_effort || 'Default' }}</td>
                 <td class="py-2 pr-3">{{ item.service_tier || 'Standard' }}</td>
                 <td class="max-w-[220px] truncate py-2 pr-3 text-[11px] text-danger" :title="item.error_message">{{ item.error_message || '—' }}</td>
@@ -578,7 +580,9 @@ onBeforeUnmount(() => {
                 <div><dt class="text-ink-4">缓存写入</dt><dd class="mt-0.5 font-medium tabular-nums text-success">{{ formatNum(selectedItem.cache_write_tokens) }}</dd></div>
                 <div><dt class="text-ink-4">总 Token</dt><dd class="mt-0.5 font-semibold tabular-nums text-ink">{{ formatNum(totalTokens(selectedItem)) }}</dd></div>
                 <div><dt class="text-ink-4">费用（USD）</dt><dd class="mt-0.5 font-semibold tabular-nums text-warning">{{ formatUsd(totalCostUsd(selectedItem)) }}</dd></div>
+                <div><dt class="text-ink-4">输出速度</dt><dd class="mt-0.5 font-semibold tabular-nums text-ink">{{ formatTokenRate(selectedItem.tokens_per_second) }} tok/s</dd></div>
               </dl>
+              <p class="mt-2 text-[11px] leading-4 text-ink-4">按输出 Token 与首次至末次内容的观测区间计算，表示代理观测到的速度；旧记录或无完整区间时显示 —。</p>
             </section>
 
             <section class="border-b border-line-2 px-4 py-4">
@@ -595,6 +599,7 @@ onBeforeUnmount(() => {
                 <dt class="text-ink-3">首字耗时</dt><dd class="font-medium tabular-nums text-primary-fg">{{ formatDuration(selectedItem.first_byte_ms) }}</dd>
                 <dt class="text-ink-3">首事件耗时</dt><dd class="tabular-nums text-ink-2">{{ formatDuration(selectedItem.first_event_ms) }}</dd>
                 <dt class="text-ink-3">首内容耗时</dt><dd class="tabular-nums text-ink-2">{{ formatMeasuredDuration(selectedItem.first_content_ms, selectedItem.content_measured) }}</dd>
+                <dt class="text-ink-3">末次内容耗时</dt><dd class="tabular-nums text-ink-2">{{ formatMeasuredDuration(selectedItem.last_content_ms, selectedItem.content_measured && Number(selectedItem.last_content_ms) > 0) }}</dd>
                 <dt class="text-ink-3">内容类型</dt><dd class="text-ink-2">{{ contentMeasurementStatus(selectedItem) }}</dd>
                 <dt class="text-ink-3">最大内容间隔</dt><dd class="tabular-nums text-ink-2">{{ formatMeasuredDuration(selectedItem.max_content_gap_ms, selectedItem.content_measured) }}</dd>
                 <dt class="text-ink-3">底层尝试</dt><dd class="tabular-nums text-ink-2">{{ selectedItem.wire_attempt_count ? selectedItem.wire_attempt_count : '—' }}<span v-if="selectedItem.transport_fallback_count" class="text-warning"> · 回退 {{ selectedItem.transport_fallback_count }}</span></dd>

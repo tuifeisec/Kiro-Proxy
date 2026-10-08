@@ -38,6 +38,7 @@ const (
 type contentMetricSnapshot struct {
 	firstEventAt        time.Time
 	firstContentAt      time.Time
+	lastContentAt       time.Time
 	firstContentType    string
 	maxContentGap       time.Duration
 	contentMeasured     bool
@@ -303,6 +304,7 @@ func (m *contentMetrics) snapshot() contentMetricSnapshot {
 	return contentMetricSnapshot{
 		firstEventAt:        m.firstEventAt,
 		firstContentAt:      m.firstContentAt,
+		lastContentAt:       m.lastContentAt,
 		firstContentType:    m.firstContentType,
 		maxContentGap:       m.maxContentGap,
 		contentMeasured:     m.contentMeasured,

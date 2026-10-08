@@ -24,7 +24,8 @@ func (db *DB) UpsertDailyStats(ds *DailyModelStats) error {
 // QueryDailyStats 查询指定日期范围的统计数据
 func (db *DB) QueryDailyStats(startDate, endDate string) ([]DailyModelStats, error) {
 	rows, err := db.conn.Query(`
-		SELECT date, model_id, requests, errors, input_tokens, output_tokens, cache_read, cache_write, credits
+		SELECT date, model_id, requests, errors, input_tokens, output_tokens, cache_read, cache_write, credits,
+			generation_speed_sum, generation_speed_samples
 		FROM daily_stats
 		WHERE date >= ? AND date <= ?
 		ORDER BY date DESC, model_id ASC
@@ -38,7 +39,8 @@ func (db *DB) QueryDailyStats(startDate, endDate string) ([]DailyModelStats, err
 	for rows.Next() {
 		var ds DailyModelStats
 		if err := rows.Scan(&ds.Date, &ds.ModelID, &ds.Requests, &ds.Errors,
-			&ds.InputTokens, &ds.OutputTokens, &ds.CacheRead, &ds.CacheWrite, &ds.Credits); err != nil {
+			&ds.InputTokens, &ds.OutputTokens, &ds.CacheRead, &ds.CacheWrite, &ds.Credits,
+			&ds.GenerationSpeedSum, &ds.GenerationSpeedSamples); err != nil {
 			return nil, err
 		}
 		results = append(results, ds)
@@ -50,4 +52,23 @@ func (db *DB) QueryDailyStats(startDate, endDate string) ([]DailyModelStats, err
 func (db *DB) ClearDailyStats() error {
 	_, err := db.conn.Exec(`DELETE FROM daily_stats`)
 	return err
+}
+
+// ClearUsageStats 在同一事务中清空请求明细和按日模型统计。
+func (db *DB) ClearUsageStats() error {
+	if db == nil {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM request_usage`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM daily_stats`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

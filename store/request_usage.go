@@ -9,58 +9,60 @@ import (
 
 // RequestUsage 是单次上游请求的结构化统计，不保存请求或响应正文。
 type RequestUsage struct {
-	ID                         int64   `json:"id"`
-	RequestDate                string  `json:"request_date"`
-	CreatedAt                  string  `json:"created_at"`
-	ModelID                    string  `json:"model_id"`
-	Provider                   string  `json:"provider"`
-	Endpoint                   string  `json:"endpoint"`
-	RequestPath                string  `json:"request_path"`
-	Protocol                   string  `json:"protocol"`
-	StatusCode                 int     `json:"status_code"`
-	Success                    bool    `json:"success"`
-	InputTokens                int     `json:"input_tokens"`
-	OutputTokens               int     `json:"output_tokens"`
-	CacheReadTokens            int     `json:"cache_read_tokens"`
-	CacheWriteTokens           int     `json:"cache_write_tokens"`
-	FirstByteMS                int64   `json:"first_byte_ms"`
-	FirstEventMS               int64   `json:"first_event_ms"`
-	FirstContentMS             int64   `json:"first_content_ms"`
-	FirstContentType           string  `json:"first_content_type"`
-	MaxContentGapMS            int64   `json:"max_content_gap_ms"`
-	ContentMeasured            bool    `json:"content_measured"`
-	ContentMeasurementComplete bool    `json:"content_measurement_complete"`
-	DurationMS                 int64   `json:"duration_ms"`
-	Credits                    float64 `json:"credits"`
-	InputCost                  float64 `json:"input_cost"`
-	OutputCost                 float64 `json:"output_cost"`
-	CacheReadCost              float64 `json:"cache_read_cost"`
-	CacheWriteCost             float64 `json:"cache_write_cost"`
-	ConversionMS               int64   `json:"conversion_ms"`
-	AuditMS                    int64   `json:"audit_ms"`
-	SessionReadMS              int64   `json:"session_read_ms"`
-	AuthMS                     int64   `json:"auth_ms"`
-	DNSMS                      int64   `json:"dns_ms"`
-	ConnectMS                  int64   `json:"connect_ms"`
-	TLSMS                      int64   `json:"tls_ms"`
-	RequestSendMS              int64   `json:"request_send_ms"`
-	UpstreamWaitMS             int64   `json:"upstream_wait_ms"`
-	ResponseHeaderMS           int64   `json:"response_header_ms"`
-	StreamWaitMS               int64   `json:"stream_wait_ms"`
-	RetryCount                 int     `json:"retry_count"`
-	ReusedConnection           bool    `json:"reused_connection"`
-	WireAttemptCount           int     `json:"wire_attempt_count"`
-	TransportFallbackCount     int     `json:"transport_fallback_count"`
-	ReasoningEffort            string  `json:"reasoning_effort,omitempty"`
-	ServiceTier                string  `json:"service_tier,omitempty"`
-	RequestedModel             string  `json:"requested_model,omitempty"`
-	RouteGroupID               string  `json:"route_group_id,omitempty"`
-	SelectedModelConfigID      string  `json:"selected_model_config_id,omitempty"`
-	FailoverCount              int     `json:"failover_count"`
-	DispatchReason             string  `json:"dispatch_reason,omitempty"`
-	FailoverReason             string  `json:"failover_reason,omitempty"`
-	CapacityWaitMS             int64   `json:"capacity_wait_ms"`
-	ErrorMessage               string  `json:"error_message,omitempty"`
+	ID                         int64    `json:"id"`
+	RequestDate                string   `json:"request_date"`
+	CreatedAt                  string   `json:"created_at"`
+	ModelID                    string   `json:"model_id"`
+	Provider                   string   `json:"provider"`
+	Endpoint                   string   `json:"endpoint"`
+	RequestPath                string   `json:"request_path"`
+	Protocol                   string   `json:"protocol"`
+	StatusCode                 int      `json:"status_code"`
+	Success                    bool     `json:"success"`
+	InputTokens                int      `json:"input_tokens"`
+	OutputTokens               int      `json:"output_tokens"`
+	CacheReadTokens            int      `json:"cache_read_tokens"`
+	CacheWriteTokens           int      `json:"cache_write_tokens"`
+	FirstByteMS                int64    `json:"first_byte_ms"`
+	FirstEventMS               int64    `json:"first_event_ms"`
+	FirstContentMS             int64    `json:"first_content_ms"`
+	LastContentMS              int64    `json:"last_content_ms"`
+	TokensPerSecond            *float64 `json:"tokens_per_second"`
+	FirstContentType           string   `json:"first_content_type"`
+	MaxContentGapMS            int64    `json:"max_content_gap_ms"`
+	ContentMeasured            bool     `json:"content_measured"`
+	ContentMeasurementComplete bool     `json:"content_measurement_complete"`
+	DurationMS                 int64    `json:"duration_ms"`
+	Credits                    float64  `json:"credits"`
+	InputCost                  float64  `json:"input_cost"`
+	OutputCost                 float64  `json:"output_cost"`
+	CacheReadCost              float64  `json:"cache_read_cost"`
+	CacheWriteCost             float64  `json:"cache_write_cost"`
+	ConversionMS               int64    `json:"conversion_ms"`
+	AuditMS                    int64    `json:"audit_ms"`
+	SessionReadMS              int64    `json:"session_read_ms"`
+	AuthMS                     int64    `json:"auth_ms"`
+	DNSMS                      int64    `json:"dns_ms"`
+	ConnectMS                  int64    `json:"connect_ms"`
+	TLSMS                      int64    `json:"tls_ms"`
+	RequestSendMS              int64    `json:"request_send_ms"`
+	UpstreamWaitMS             int64    `json:"upstream_wait_ms"`
+	ResponseHeaderMS           int64    `json:"response_header_ms"`
+	StreamWaitMS               int64    `json:"stream_wait_ms"`
+	RetryCount                 int      `json:"retry_count"`
+	ReusedConnection           bool     `json:"reused_connection"`
+	WireAttemptCount           int      `json:"wire_attempt_count"`
+	TransportFallbackCount     int      `json:"transport_fallback_count"`
+	ReasoningEffort            string   `json:"reasoning_effort,omitempty"`
+	ServiceTier                string   `json:"service_tier,omitempty"`
+	RequestedModel             string   `json:"requested_model,omitempty"`
+	RouteGroupID               string   `json:"route_group_id,omitempty"`
+	SelectedModelConfigID      string   `json:"selected_model_config_id,omitempty"`
+	FailoverCount              int      `json:"failover_count"`
+	DispatchReason             string   `json:"dispatch_reason,omitempty"`
+	FailoverReason             string   `json:"failover_reason,omitempty"`
+	CapacityWaitMS             int64    `json:"capacity_wait_ms"`
+	ErrorMessage               string   `json:"error_message,omitempty"`
 }
 
 type RequestUsageSummary struct {
@@ -99,6 +101,15 @@ type RequestUsagePage struct {
 
 const requestUsageRetentionDays = 7
 
+func (item RequestUsage) calculateTokensPerSecond() *float64 {
+	if !item.Success || item.OutputTokens <= 0 || !item.ContentMeasured || !item.ContentMeasurementComplete ||
+		item.FirstContentMS < 0 || item.LastContentMS <= item.FirstContentMS || item.LastContentMS > item.DurationMS {
+		return nil
+	}
+	rate := float64(item.OutputTokens) * 1000 / float64(item.LastContentMS-item.FirstContentMS)
+	return &rate
+}
+
 // cleanupExpiredRequestUsage 保留当前自然日及之前 6 个自然日的数据，每天最多执行一次。
 func (db *DB) cleanupExpiredRequestUsage(now time.Time) error {
 	if db == nil {
@@ -134,36 +145,51 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 	if item.RequestDate == "" {
 		item.RequestDate = statsDay(now)
 	}
-	_, err := db.conn.Exec(`
-		INSERT INTO request_usage (
-			request_date, created_at, model_id, provider, endpoint, request_path, protocol,
-			status_code, success, input_tokens, output_tokens, cache_read_tokens,
-			cache_write_tokens, first_byte_ms, first_event_ms, first_content_ms, first_content_type,
-			max_content_gap_ms, content_measured, content_measurement_complete, duration_ms, credits, input_cost, output_cost,
-			cache_read_cost, cache_write_cost, conversion_ms, audit_ms, session_read_ms, auth_ms, dns_ms, connect_ms,
-			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
-			retry_count, reused_connection, wire_attempt_count, transport_fallback_count, reasoning_effort, service_tier, requested_model,
-			route_group_id, selected_model_config_id, failover_count, dispatch_reason,
-			failover_reason, capacity_wait_ms, error_message
-		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-			, ?, ?, ?, ?, ?
-		)
-	`, item.RequestDate, item.CreatedAt, item.ModelID, item.Provider, item.Endpoint,
+	args := []any{
+		item.RequestDate, item.CreatedAt, item.ModelID, item.Provider, item.Endpoint,
 		item.RequestPath, item.Protocol, item.StatusCode, boolToInt(item.Success),
 		item.InputTokens, item.OutputTokens, item.CacheReadTokens, item.CacheWriteTokens,
-		item.FirstByteMS, item.FirstEventMS, item.FirstContentMS, item.FirstContentType,
+		item.FirstByteMS, item.FirstEventMS, item.FirstContentMS, item.LastContentMS, item.FirstContentType,
 		item.MaxContentGapMS, boolToInt(item.ContentMeasured), boolToInt(item.ContentMeasurementComplete),
 		item.DurationMS, item.Credits, item.InputCost, item.OutputCost,
 		item.CacheReadCost, item.CacheWriteCost, item.ConversionMS, item.AuditMS, item.SessionReadMS, item.AuthMS, item.DNSMS,
 		item.ConnectMS, item.TLSMS, item.RequestSendMS, item.UpstreamWaitMS,
 		item.ResponseHeaderMS, item.StreamWaitMS, item.RetryCount, boolToInt(item.ReusedConnection), item.WireAttemptCount, item.TransportFallbackCount, item.ReasoningEffort,
 		item.ServiceTier, item.RequestedModel, item.RouteGroupID, item.SelectedModelConfigID,
-		item.FailoverCount, item.DispatchReason, item.FailoverReason, item.CapacityWaitMS, item.ErrorMessage)
-	return err
+		item.FailoverCount, item.DispatchReason, item.FailoverReason, item.CapacityWaitMS, item.ErrorMessage,
+	}
+	query := `
+		INSERT INTO request_usage (
+			request_date, created_at, model_id, provider, endpoint, request_path, protocol,
+			status_code, success, input_tokens, output_tokens, cache_read_tokens,
+			cache_write_tokens, first_byte_ms, first_event_ms, first_content_ms, last_content_ms, first_content_type,
+			max_content_gap_ms, content_measured, content_measurement_complete, duration_ms, credits, input_cost, output_cost,
+			cache_read_cost, cache_write_cost, conversion_ms, audit_ms, session_read_ms, auth_ms, dns_ms, connect_ms,
+			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
+			retry_count, reused_connection, wire_attempt_count, transport_fallback_count, reasoning_effort, service_tier, requested_model,
+			route_group_id, selected_model_config_id, failover_count, dispatch_reason,
+			failover_reason, capacity_wait_ms, error_message
+		) VALUES (` + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + `)`
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(query, args...); err != nil {
+		return err
+	}
+	if speed := item.calculateTokensPerSecond(); speed != nil && item.ModelID != "" {
+		if _, err := tx.Exec(`
+			INSERT INTO daily_stats (date, model_id, generation_speed_sum, generation_speed_samples)
+			VALUES (?, ?, ?, 1)
+			ON CONFLICT(date, model_id) DO UPDATE SET
+				generation_speed_sum = generation_speed_sum + excluded.generation_speed_sum,
+				generation_speed_samples = generation_speed_samples + excluded.generation_speed_samples
+		`, item.RequestDate, item.ModelID, *speed); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ClearRequestUsage 清空所有单次请求统计。
@@ -222,7 +248,7 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 	rows, err := db.conn.Query(`
 		SELECT id, request_date, created_at, model_id, provider, endpoint, request_path,
 			protocol, status_code, success, input_tokens, output_tokens, cache_read_tokens,
-			cache_write_tokens, first_byte_ms, first_event_ms, first_content_ms, first_content_type,
+			cache_write_tokens, first_byte_ms, first_event_ms, first_content_ms, last_content_ms, first_content_type,
 			max_content_gap_ms, content_measured, content_measurement_complete, duration_ms, credits, input_cost, output_cost,
 			cache_read_cost, cache_write_cost, conversion_ms, audit_ms, session_read_ms, auth_ms, dns_ms, connect_ms,
 			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
@@ -242,7 +268,7 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 		if err := rows.Scan(&item.ID, &item.RequestDate, &item.CreatedAt, &item.ModelID,
 			&item.Provider, &item.Endpoint, &item.RequestPath, &item.Protocol, &item.StatusCode,
 			&success, &item.InputTokens, &item.OutputTokens, &item.CacheReadTokens,
-			&item.CacheWriteTokens, &item.FirstByteMS, &item.FirstEventMS, &item.FirstContentMS, &item.FirstContentType,
+			&item.CacheWriteTokens, &item.FirstByteMS, &item.FirstEventMS, &item.FirstContentMS, &item.LastContentMS, &item.FirstContentType,
 			&item.MaxContentGapMS, &contentMeasured, &measurementComplete, &item.DurationMS, &item.Credits,
 			&item.InputCost, &item.OutputCost, &item.CacheReadCost, &item.CacheWriteCost,
 			&item.ConversionMS, &item.AuditMS, &item.SessionReadMS, &item.AuthMS, &item.DNSMS, &item.ConnectMS, &item.TLSMS,
@@ -256,6 +282,7 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 		item.ReusedConnection = reusedConnection != 0
 		item.ContentMeasured = contentMeasured != 0
 		item.ContentMeasurementComplete = measurementComplete != 0
+		item.TokensPerSecond = item.calculateTokensPerSecond()
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

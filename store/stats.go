@@ -44,15 +44,17 @@ type Stats struct {
 
 // DailyModelStats 单日单模型的统计
 type DailyModelStats struct {
-	Date         string  `json:"date"`
-	ModelID      string  `json:"model_id"`
-	Requests     int64   `json:"requests"`
-	Errors       int64   `json:"errors"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	CacheRead    int64   `json:"cache_read_tokens"`
-	CacheWrite   int64   `json:"cache_write_tokens"`
-	Credits      float64 `json:"credits"`
+	Date                   string  `json:"date"`
+	ModelID                string  `json:"model_id"`
+	Requests               int64   `json:"requests"`
+	Errors                 int64   `json:"errors"`
+	InputTokens            int64   `json:"input_tokens"`
+	OutputTokens           int64   `json:"output_tokens"`
+	CacheRead              int64   `json:"cache_read_tokens"`
+	CacheWrite             int64   `json:"cache_write_tokens"`
+	Credits                float64 `json:"credits"`
+	GenerationSpeedSum     float64 `json:"generation_speed_sum"`
+	GenerationSpeedSamples int64   `json:"generation_speed_samples"`
 }
 
 // NewStats 创建统计实例，从数据库恢复历史累计值
@@ -154,8 +156,8 @@ func (s *Stats) Flush() {
 	defer s.flushMu.Unlock()
 	revision := s.revision.Load()
 	if s.pendingClear.Load() {
-		if err := errors.Join(s.db.ClearDailyStats(), s.db.ClearRequestUsage()); err != nil {
-			log.Printf("[stats] 清空日统计重试失败，将在下次周期重试: %v", err)
+		if err := s.db.ClearUsageStats(); err != nil {
+			log.Printf("[stats] 清空用量统计重试失败，将在下次周期重试: %v", err)
 			return
 		}
 		s.pendingClear.Store(false)
@@ -251,7 +253,8 @@ func (s *Stats) flushDailyStats() error {
 	snapshot := make(map[string]*DailyModelStats, len(s.dailyStats))
 	for k, v := range s.dailyStats {
 		if v.Requests == 0 && v.Errors == 0 && v.InputTokens == 0 &&
-			v.OutputTokens == 0 && v.CacheRead == 0 && v.CacheWrite == 0 && v.Credits == 0 {
+			v.OutputTokens == 0 && v.CacheRead == 0 && v.CacheWrite == 0 && v.Credits == 0 &&
+			v.GenerationSpeedSum == 0 && v.GenerationSpeedSamples == 0 {
 			// 清理非今日的空条目，避免 map 无限增长
 			if v.Date != today {
 				delete(s.dailyStats, k)
@@ -375,10 +378,7 @@ func (s *Stats) Clear() error {
 			return err
 		}
 	}
-	if err := s.db.ClearDailyStats(); err != nil {
-		return err
-	}
-	if err := s.db.ClearRequestUsage(); err != nil {
+	if err := s.db.ClearUsageStats(); err != nil {
 		return err
 	}
 	s.pendingClear.Store(false)
@@ -416,12 +416,16 @@ func (s *Stats) GetDailyStats(startDate, endDate string) []DailyModelStats {
 		cur.CacheRead += row.CacheRead
 		cur.CacheWrite += row.CacheWrite
 		cur.Credits += row.Credits
+		cur.GenerationSpeedSum += row.GenerationSpeedSum
+		cur.GenerationSpeedSamples += row.GenerationSpeedSamples
 	}
 	s.dailyMu.Unlock()
 
 	results := make([]DailyModelStats, 0, len(merged))
 	for _, row := range merged {
-		if row.Requests == 0 && row.Errors == 0 && row.InputTokens == 0 && row.OutputTokens == 0 && row.CacheRead == 0 && row.CacheWrite == 0 && row.Credits == 0 {
+		if row.Requests == 0 && row.Errors == 0 && row.InputTokens == 0 && row.OutputTokens == 0 &&
+			row.CacheRead == 0 && row.CacheWrite == 0 && row.Credits == 0 &&
+			row.GenerationSpeedSum == 0 && row.GenerationSpeedSamples == 0 {
 			continue
 		}
 		results = append(results, *row)
@@ -448,6 +452,8 @@ func (s *Stats) TodayStats() DailyModelStats {
 		total.CacheRead += row.CacheRead
 		total.CacheWrite += row.CacheWrite
 		total.Credits += row.Credits
+		total.GenerationSpeedSum += row.GenerationSpeedSum
+		total.GenerationSpeedSamples += row.GenerationSpeedSamples
 	}
 	return total
 }

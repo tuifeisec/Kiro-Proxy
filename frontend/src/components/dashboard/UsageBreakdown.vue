@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDailyStats } from '../../composables/useStats.js'
 import IconRefresh from '../icons/IconRefresh.vue'
 import { ALL_STATS_START_DATE, statsDaysAgo } from '../../utils/date.js'
-import { formatTokens, formatUsd } from '../../utils/format.js'
+import { formatTokenRate, formatTokens, formatUsd } from '../../utils/format.js'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -123,6 +123,8 @@ const byModel = computed(() => {
       cache_write_tokens: 0,
       cache_hit_tokens: 0,
       cost_usd: 0,
+      generation_speed_sum: 0,
+      generation_speed_samples: 0,
     }
     cur.requests += r.requests
     cur.errors += r.errors
@@ -131,6 +133,8 @@ const byModel = computed(() => {
     cur.cache_write_tokens += cacheWriteTokens(r)
     cur.cache_hit_tokens += cacheHitTokens(r)
     cur.cost_usd += Number(r.cost_usd || 0)
+    cur.generation_speed_sum += Number(r.generation_speed_sum ?? 0)
+    cur.generation_speed_samples += Number(r.generation_speed_samples ?? 0)
     map.set(r.model_id, cur)
   }
   return Array.from(map.values()).sort((a, b) => (b.input_tokens + b.output_tokens) - (a.input_tokens + a.output_tokens))
@@ -154,6 +158,18 @@ const summary = computed(() => byModel.value.reduce((total, row) => {
   cache_write_tokens: 0,
   cost_usd: 0,
 }))
+
+const speedSummary = computed(() => byModel.value.reduce((total, row) => {
+  total.sum += row.generation_speed_sum
+  total.samples += row.generation_speed_samples
+  return total
+}, { sum: 0, samples: 0 }))
+
+function averageTokenRate(row) {
+  return row.generation_speed_samples > 0
+    ? row.generation_speed_sum / row.generation_speed_samples
+    : null
+}
 
 watch(summary, (value) => {
   emit('summary', {
@@ -201,7 +217,7 @@ function cacheHitRate(row) {
     <div v-if="rows.length === 0 && !loading" class="py-12 text-center text-[13px] text-ink-3">该时间段无数据</div>
 
     <div v-else class="overflow-x-auto px-3 pb-3 pt-2">
-      <table class="w-full min-w-[720px] text-[12px]">
+      <table class="w-full min-w-[820px] text-[12px]">
         <thead>
           <tr class="border-b border-line-2 text-left text-ink-3">
             <th class="py-1.5 pr-3 font-medium">模型</th>
@@ -211,6 +227,7 @@ function cacheHitRate(row) {
             <th class="py-1.5 pr-3 text-right font-medium">输出 Token</th>
             <th class="py-1.5 pr-3 text-right font-medium">缓存命中</th>
             <th class="py-1.5 pr-3 text-right font-medium">费用（USD）</th>
+            <th class="py-1.5 pr-3 text-right font-medium">平均 tok/s</th>
             <th class="py-1.5 text-right font-medium">命中率</th>
           </tr>
         </thead>
@@ -223,6 +240,10 @@ function cacheHitRate(row) {
             <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">{{ formatTokens(m.output_tokens) }}</td>
             <td class="py-1.5 pr-3 text-right tabular-nums text-success">{{ formatTokens(m.cache_hit_tokens) }}</td>
             <td class="py-1.5 pr-3 text-right tabular-nums text-warning">{{ formatUsd(m.cost_usd) }}</td>
+            <td class="py-1.5 pr-3 text-right tabular-nums text-ink-2">
+              <div>{{ formatTokenRate(averageTokenRate(m)) }}</div>
+              <div class="text-[10px] text-ink-4">{{ formatTokens(m.generation_speed_samples) }} 个样本</div>
+            </td>
             <td class="py-1.5 text-right tabular-nums">
               <div class="flex items-center justify-end gap-2">
                 <span class="text-ink-2">{{ cacheHitRate(m).toFixed(1) }}%</span>
@@ -232,7 +253,10 @@ function cacheHitRate(row) {
           </tr>
         </tbody>
       </table>
-      <div class="mt-2 text-[11px] text-ink-4">范围：{{ range.start }} ~ {{ range.end }}</div>
+    </div>
+    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 pb-3 text-[11px] text-ink-4">
+      <span>范围：{{ range.start }} ~ {{ range.end }}</span>
+      <span>全范围平均 {{ formatTokenRate(speedSummary.samples > 0 ? speedSummary.sum / speedSummary.samples : null) }} tok/s · {{ formatTokens(speedSummary.samples) }} 个有效样本；新版本开始累计，旧记录未知为 —；按单次观测速度算术平均</span>
     </div>
   </div>
 </template>

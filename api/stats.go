@@ -20,7 +20,8 @@ type statsResponse struct {
 
 type dailyStatsResponse struct {
 	store.DailyModelStats
-	CostUSD float64 `json:"cost_usd"`
+	CostUSD                float64  `json:"cost_usd"`
+	AverageTokensPerSecond *float64 `json:"average_tokens_per_second"`
 }
 
 func newStatsResponse(snapshot store.StatsSnapshot) statsResponse {
@@ -64,10 +65,15 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		daily := s.stats.GetDailyStats(startDate, endDate)
 		dailyWithUSD := make([]dailyStatsResponse, 0, len(daily))
 		for _, row := range daily {
-			dailyWithUSD = append(dailyWithUSD, dailyStatsResponse{
+			response := dailyStatsResponse{
 				DailyModelStats: row,
 				CostUSD:         row.Credits * billing.CreditUSD,
-			})
+			}
+			if row.GenerationSpeedSamples > 0 {
+				averageTokensPerSecond := row.GenerationSpeedSum / float64(row.GenerationSpeedSamples)
+				response.AverageTokensPerSecond = &averageTokensPerSecond
+			}
+			dailyWithUSD = append(dailyWithUSD, response)
 		}
 		writeOK(w, map[string]interface{}{
 			"daily": dailyWithUSD,

@@ -426,6 +426,7 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 			r.item.ContentMeasured = snapshot.contentMeasured
 			r.item.FirstEventMS = elapsedMetricMS(r.start, snapshot.firstEventAt)
 			r.item.FirstContentMS = elapsedMetricMS(r.start, snapshot.firstContentAt)
+			r.item.LastContentMS = elapsedMetricMS(r.start, snapshot.lastContentAt)
 			r.item.FirstContentType = snapshot.firstContentType
 			r.item.MaxContentGapMS = durationMetricMS(snapshot.maxContentGap)
 		}

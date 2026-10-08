@@ -74,6 +74,8 @@ func (db *DB) migrate() error {
 		{"models", "service_tier", "TEXT NOT NULL DEFAULT ''"},
 		{"models", "image_input_mode", "TEXT NOT NULL DEFAULT 'auto'"},
 		{"daily_stats", "credits", "REAL NOT NULL DEFAULT 0"},
+		{"daily_stats", "generation_speed_sum", "REAL NOT NULL DEFAULT 0"},
+		{"daily_stats", "generation_speed_samples", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "credits", "REAL NOT NULL DEFAULT 0"},
 		{"request_usage", "input_cost", "REAL NOT NULL DEFAULT 0"},
 		{"request_usage", "output_cost", "REAL NOT NULL DEFAULT 0"},
@@ -82,6 +84,7 @@ func (db *DB) migrate() error {
 		{"request_usage", "conversion_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "first_event_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "first_content_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "last_content_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "first_content_type", "TEXT NOT NULL DEFAULT ''"},
 		{"request_usage", "max_content_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "content_measured", "INTEGER NOT NULL DEFAULT 0"},
@@ -241,6 +244,8 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     cache_read    INTEGER NOT NULL DEFAULT 0,
     cache_write   INTEGER NOT NULL DEFAULT 0,
     credits       REAL NOT NULL DEFAULT 0,
+    generation_speed_sum REAL NOT NULL DEFAULT 0,
+    generation_speed_samples INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, model_id)
 );
 
@@ -286,6 +291,7 @@ CREATE TABLE IF NOT EXISTS request_usage (
 	dispatch_reason     TEXT NOT NULL DEFAULT '',
 	failover_reason     TEXT NOT NULL DEFAULT '',
 	capacity_wait_ms    INTEGER NOT NULL DEFAULT 0,
+    last_content_ms    INTEGER NOT NULL DEFAULT 0,
     error_message      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_usage_date_id ON request_usage(request_date, id DESC);
