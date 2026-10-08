@@ -413,11 +413,11 @@ onBeforeUnmount(() => {
           </div>
           <table class="request-table w-full table-auto text-[12px]">
             <colgroup>
-              <col style="width: 8%" />
+              <col style="width: 10%" />
               <col style="width: 12%" />
-              <col style="width: 9%" />
+              <col style="width: 8%" />
               <col style="width: 6%" />
-              <col style="width: 19%" />
+              <col style="width: 18%" />
               <col style="width: 8%" />
               <col style="width: 7%" />
               <col style="width: 7%" />
@@ -651,6 +651,17 @@ onBeforeUnmount(() => {
 
 .request-table th {
   white-space: nowrap;
+}
+
+.request-table th:first-child,
+.request-table td:first-child {
+  padding-left: 12px;
+  padding-right: 8px;
+}
+
+.request-table th:last-child,
+.request-table td:last-child {
+  padding-right: 12px;
 }
 
 /* tooltip 出入场：根元素淡入淡出（Transition 据此识别时长），内层负责轻微位移；
