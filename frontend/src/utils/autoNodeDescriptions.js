@@ -142,53 +142,55 @@ export const AUTO_DUTY_DESCRIPTIONS = {
 }
 
 const AUTO_NODE_USAGE = {
-  run: '主控入口，协调用户任务、工作流步骤和最终答复。',
-  prepare: '准备后续步骤所需的工作环境、输入或材料。',
-  'protect-baseline': '在修改前识别并保护已有基线或用户状态。',
-  setup: '完成任务要求的环境或项目初始化准备。',
-  'design-file-gate': '检查设计类文件是否满足进入后续步骤的条件。',
-  cleanup: '整理任务过程产生的临时状态或交付材料。',
-  finalize: '汇总完成情况、交付结果和仍未解决的事项。',
-  baseline: '先记录问题相关的现状和对照证据，供调查比较。',
-  investigate: '围绕问题继续收集证据并分析可能原因。',
-  requirements: '明确任务需求、限制和可验收条件。',
-  design: '形成技术设计和关键实现取舍。',
-  'design-draft': '产出设计的初稿，供后续评审或修订。',
-  'design-fix': '根据反馈修订已有设计，关注修订项是否闭合。',
-  'native-design': '处理名称标记为 native 的设计路径；具体边界以工作流定义为准。',
-  plan: '拆分实施步骤并安排先后顺序。',
-  'implementation-plan': '形成面向实现的步骤、依赖和验收安排。',
-  'audit-plan': '检查计划是否覆盖需求、依赖和验证步骤。',
-  code: '实施代码修改并说明相应变更。',
-  implement: '执行实现步骤，产出代码或其他实现结果。',
-  repair: '针对已定位的问题实施修复。',
-  'memory-code': '处理名称标记为 memory 的代码实现路径。',
-  'native-code': '处理名称标记为 native 的代码实现路径。',
-  'native-code-verify': '核对 native 代码实现结果及其对应要求。',
-  'native-implementation': '处理名称标记为 native 的实现步骤。',
-  work: '围绕持续目标推进当前待办并记录结果。',
-  iterate: '依据上一轮结果继续下一轮目标或清单执行。',
-  experiment: '执行围绕指定假设或变量的实验步骤。',
-  'design-review': '审查设计的完整性、可行性和风险。',
-  'design-recheck': '在设计修订后重新核对先前问题和验收条件。',
-  review: '执行代码审查并报告有证据的问题。',
-  'review-fable': '名称为 review-fable 的审查变体入口；变体名标识节点路径，不指定模型。',
-  'review-gpt': '名称为 review-gpt 的审查变体入口；变体名标识节点路径，不指定模型。',
-  'review-opus': '名称为 review-opus 的审查变体入口；变体名标识节点路径，不指定模型。',
-  'implementation-review': '从实现是否满足需求与方案的角度审查变更。',
-  'independent-review': '以独立审查路径检查变更并单独记录问题。',
-  'fidelity-review': '对照原始要求或材料检查内容保真度。',
-  'logic-review': '检查推理、条件和步骤之间的逻辑一致性。',
-  'memory-review': '检查涉及 memory 的实现或状态语义。',
-  'native-review': '审查名称标记为 native 的实现路径。',
-  'native-semantic-review': '检查 native 路径中的语义是否符合要求。',
-  aggregate: '归并多份审查意见，整理问题清单并保留证据。',
-  'code-aggregate': '汇总代码审查结果并形成审查裁决所需材料。',
-  validate: '按验收条件执行或核对实际验证步骤。',
-  'final-audit': '在交付前核对产物、差异、验证和未解决事项。',
-  'restart-and-verify': '按运维步骤检查重启后的运行状态与健康结果。',
-  submit: '处理 PR 提交流程并记录提交后的状态。',
-  respond: '逐项处理 PR 反馈并记录答复、修复或待决事项。',
+  run: '工作流或 Agent 的通用入口。已有定义中可由 wf-planner、wf-coder、semantic_reviewer 或 vibe 使用；名称本身不能区分主控、规划、编码或审查任务，需按定义或明确 task_type 确认。',
+  prepare: '创建产物目录并记录基线等机械准备。',
+  'protect-baseline': '机械保护基线并保留已有改动。',
+  setup: '准备本次产物目录、输入或基线；具体操作依所属定义。',
+  'startup-check': '启动检查方向节点（名称参考）；不同工作流中的具体对象和范围，以完整定义或任务声明确认。',
+  'design-file-gate': '只读核验设计文件存在、类型与非空条件。',
+  cleanup: '审查通过后清理所属工作流创建的指定临时协作文件。',
+  finalize: '汇总收尾情况和交付结果；可写范围取决于所属定义。',
+  baseline: '只读核对既有输入与源码，建立前置基线认识。',
+  investigate: '只读调查业务源码并整理证据报告；自定义范围以所属定义为准。',
+  'investigate-wasm': 'WASM方向调查节点（名称参考）；具体对象和边界待工作流定义确认。',
+  requirements: '整理任务需求与约束。',
+  design: '建立或修订技术设计、保真规格；具体执行者以所属定义为准。',
+  'design-draft': '检查代码并编写或修订技术设计。',
+  'design-fix': '修订既有设计。',
+  'native-design': '设计原生能力优先的改造。',
+  plan: '调查约束、整理信息并形成实施计划；具体内容依所属定义。',
+  'implementation-plan': '编写针对实施的计划。',
+  'audit-plan': '只读调查并形成具体实施计划。',
+  code: '按所属工作流约束直接修改目标源码。',
+  implement: '实施计划、修改代码并执行该任务要求的验证。',
+  repair: '实施已调查并定位的问题修复。',
+  'memory-code': '直接排查并修复 memory 相关故障。',
+  'native-code': '直接实施原生能力优先的源码改动。',
+  'native-code-verify': '实施已证明等价的原生 API 替换并记录验证。',
+  'native-implementation': '实施原生能力优先的改造。',
+  work: '按目标自主推进工作，并以具体证据核对完成状态。',
+  iterate: '建立或推进 checklist，并按 recipe 处理未完成项。',
+  experiment: '提出并应用实验、运行 benchmark，再按结果保留或回滚。',
+  'design-review': '对需求与设计进行独立审查。',
+  'design-recheck': '独立复核设计修订。',
+  review: '执行独立代码或语义审查。',
+  'review-fable': '独立代码审查，不读取另一份报告。',
+  'review-gpt': '独立代码审查，不读取另一份报告。',
+  'review-opus': '独立语义审查，不读取另一份审查文件。',
+  'implementation-review': '独立审查实施改动。',
+  'independent-review': '对真实代码增量执行独立审查。',
+  'fidelity-review': '独立审查实现是否满足保真要求。',
+  'logic-review': '独立审查实现与原有算法、行为的等价性。',
+  'memory-review': '独立审查 memory 故障修复。',
+  'native-review': '独立审查原生能力优先的实施。',
+  'native-semantic-review': '审查 native 数据获取和等价替换的语义。',
+  aggregate: '合并多份审查并整理最终 issues-only 报告。',
+  'code-aggregate': '合并代码审查、核对计划完成度并输出 verdict。',
+  validate: '执行验收、端到端或 build/test 检查并报告；该节点不修代码。',
+  'final-audit': '只读交付稽核，核对产物与验证证据。',
+  'restart-and-verify': '按所属定义执行本地服务重启及运行验证；属于运维步骤。',
+  submit: '发布或复用 PR 并记录 PR 身份。',
+  respond: '处理 PR 反馈；PR 合并或关闭后收尾。',
 }
 
 export function getAutoDutyDescription(dutyKey) {
@@ -202,4 +204,126 @@ export function getAutoNodeReference(nodeId) {
   return Object.hasOwn(AUTO_NODE_USAGE, key)
     ? { nodeId: key, usage: AUTO_NODE_USAGE[key] }
     : null
+}
+
+// Identity entries cite observed task logs; they do not claim a complete workflow definition.
+const AUTO_NODE_IDENTITY_USAGE = Object.freeze({
+  '["content://862b0f8a6ce5c2a6d503a1d10a05dbf444fe1e26d0ea77c0d97b9789da33dce0","0","startup-check"]': {
+    usage: '在已观察任务中准备项目启动、核对启动步骤和服务健康状态，整理可复核启动结果。',
+    evidenceLabel: '关联任务日志参考（未取得完整工作流定义）',
+    known: true,
+  },
+  '["content://d544cb57bd704a816bf07c592ed03e5dfbecac76dccb8436666f1b344f850655","0","investigate-wasm"]': {
+    usage: '在已观察任务中调查 WASM 版本相关实现与调用逻辑，整理源码分析结果。',
+    evidenceLabel: '关联任务日志参考（未取得完整工作流定义）',
+    known: true,
+  },
+  '["content://0891b432898a3eed11221d7c03ef8206a5f56f38eeecbf85ad884815b1b696d6","0","investigate-wasm"]': {
+    usage: '在已观察的“WASM 配置只读调查”任务中梳理相关配置与实现，具体节点职责和可写范围仍以工作流定义为准。',
+    evidenceLabel: '关联工作流标题与会话任务日志参考（未取得完整节点定义）',
+    known: true,
+  },
+})
+
+const AUTO_ROUTE_REASON_DESCRIPTIONS = Object.freeze({
+  task_type_unavailable: '客户端没有提供可用于职责选择的 task_type。',
+  stable_identity_unavailable: '请求缺少完整稳定节点身份，无法匹配节点绑定或覆盖。',
+  metadata_v1: '请求只携带 v1 私有元数据；duty_fixed 按固定默认目标处理。',
+  duty_target_missing: '已解析出职责，但该职责尚未配置固定目标。',
+  expanded_routine_support_node_unknown: 'expanded 布局无法根据该节点名把 routine_support 细分为 preparation 或 finalization。',
+  expanded_pr_lifecycle_node_unknown: 'expanded 布局无法根据该节点名把 pr_lifecycle 细分为 pr_submit 或 pr_feedback。',
+  task_type_outside_layout: '客户端声明的 task_type 不属于当前职责布局。',
+  legacy_node_identity_unavailable: '旧版阶段路由缺少可用的节点身份。',
+  legacy_stage_unavailable: '旧版阶段路由没有提供阶段信息。',
+  legacy_node_unknown: '旧版阶段路由提供了节点身份，但名称无法映射到已知阶段。',
+})
+
+function readOwnString(record, key) {
+  if (record === null || typeof record !== 'object' || !Object.hasOwn(record, key)) return ''
+  const value = record[key]
+  return typeof value === 'string' ? value : ''
+}
+
+function readCompleteStableIdentity(record) {
+  const definitionId = readOwnString(record, 'definition_id')
+  const definitionRevision = readOwnString(record, 'definition_revision')
+  const nodePath = readOwnString(record, 'node_path')
+  if (
+    definitionId === '' ||
+    definitionRevision === '' ||
+    nodePath === ''
+  ) {
+    return null
+  }
+  return JSON.stringify([definitionId, definitionRevision, nodePath])
+}
+
+export function getAutoNodeDescription(record) {
+  const nodeId = readOwnString(record, 'node_id')
+  const nodePath = readOwnString(record, 'node_path')
+  const displayNodeId = nodeId || nodePath
+  const identityKey = readCompleteStableIdentity(record)
+  if (identityKey && Object.hasOwn(AUTO_NODE_IDENTITY_USAGE, identityKey)) {
+    const identityUsage = AUTO_NODE_IDENTITY_USAGE[identityKey]
+    return {
+      nodeId: displayNodeId,
+      usage: identityUsage.usage,
+      evidenceLabel: identityUsage.evidenceLabel,
+      known: identityUsage.known,
+    }
+  }
+
+  const taskType = readOwnString(record, 'task_type')
+    .replace(/^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+|[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+$/g, '')
+    .toLowerCase()
+  if (taskType !== '' && Object.hasOwn(AUTO_DUTY_DESCRIPTIONS, taskType)) {
+    return {
+      nodeId: displayNodeId,
+      usage: AUTO_DUTY_DESCRIPTIONS[taskType].purpose,
+      evidenceLabel: '请求携带的 task_type 职责参考；声明、映射或继承来源未区分，不代表实际路由。',
+      known: true,
+    }
+  }
+
+  const reference = nodeId
+    ? getAutoNodeReference(nodeId)
+    : getAutoNodeReference(nodePath)
+  if (reference) {
+    return {
+      nodeId: displayNodeId,
+      usage: reference.usage,
+      evidenceLabel: nodeId
+        ? identityKey
+          ? '按 node_id 名称参考；完整稳定身份未命中定义用途，名称不证明实际路由。'
+          : '按 node_id 名称参考；名称不证明工作流定义或实际路由。'
+        : '按完整 node_path 字符串精确匹配名称参考；没有截取路径叶段，也不证明工作流定义身份或实际路由。',
+      known: true,
+    }
+  }
+
+  const workflowName = readOwnString(record, 'workflow_name')
+  if (workflowName) {
+    return {
+      nodeId: displayNodeId,
+      usage: `已观察工作流“${workflowName}”中的${displayNodeId ? `“${displayNodeId}”节点` : '请求上下文'}；独立职责和可写范围待节点定义确认。`,
+      evidenceLabel: '同会话、workflowId 与 nodeId 精确关联的日志标题；标题不是节点职责定义。',
+      known: true,
+    }
+  }
+
+  return {
+    nodeId: displayNodeId,
+    usage: '用途待确认：未取得工作流定义或明确 task_type 的用途依据。请核对 node_id、task_type、definition_id、definition_revision 和 node_path；节点名称本身不能证明实际职责。',
+    evidenceLabel: identityKey
+      ? '完整稳定身份未命中已证实条目，且没有可用的明确 task_type 或 node_id 名称参考。'
+      : '没有可用的完整稳定身份、明确 task_type 或 node_id 名称参考。',
+    known: false,
+  }
+}
+
+export function describeAutoRouteReason(reason) {
+  if (typeof reason !== 'string' || reason.trim() === '') return ''
+  return Object.hasOwn(AUTO_ROUTE_REASON_DESCRIPTIONS, reason)
+    ? AUTO_ROUTE_REASON_DESCRIPTIONS[reason]
+    : '未识别的路由原因，需查看原始码'
 }

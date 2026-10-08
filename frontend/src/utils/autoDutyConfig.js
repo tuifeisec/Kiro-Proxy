@@ -369,41 +369,52 @@ export function isAutoTargetSelectable(targetId, models = [], groups = []) {
   return false
 }
 
-export function validateAutoDutyConfig(config, models, groups = []) {
-  const errors = []
+export function autoDutyValidationIssues(config, models, groups = []) {
+  const issues = []
+  const issueKey = (scope, category, targetId = '', effort = '') => (
+    JSON.stringify([scope, category, String(targetId ?? ''), String(effort ?? '').trim().toLowerCase()])
+  )
+  const addIssue = (scope, category, targetId, effort, message) => {
+    issues.push({ key: issueKey(scope, category, targetId, effort), message })
+  }
   const dutyKeys = DUTY_KEYS[config.layout] || []
-  if (config.node_bindings.some((item) => !dutyKeys.includes(item.duty))) errors.push('节点职责绑定不属于当前布局，需先明确迁移或删除。')
+  if (config.node_bindings.some((item) => !dutyKeys.includes(item.duty))) {
+    addIssue('node_bindings', 'duty_outside_layout', '', '', '节点职责绑定不属于当前布局，需先明确迁移或删除。')
+  }
 
-  const validateTarget = (label, id, configuredEffort, required, useDefaultEffort = false) => {
+  const validateTarget = (scope, label, id, configuredEffort, required, useDefaultEffort = false) => {
+    const addTargetIssue = (category, message, effort = configuredEffort) => {
+      addIssue(scope, category, id, effort, message)
+    }
     if (!id) {
-      if (required) errors.push(`启用 Auto 路由时，${label}必须选择已启用的模型或有效分组。`)
+      if (required) addTargetIssue('target_required', `启用 Auto 路由时，${label}必须选择已启用的模型或有效分组。`)
       return
     }
     const resolved = resolveAutoTarget(id, models, groups)
     if (resolved.kind === 'collision') {
-      errors.push(`${label}的 ID 同时属于模型配置和分组，不能作为目标。`)
+      addTargetIssue('target_id_collision', `${label}的 ID 同时属于模型配置和分组，不能作为目标。`)
       return
     }
     if (resolved.kind === 'missing') {
-      errors.push(`${label}必须引用已启用的模型配置或分组；当前配置不存在，已保留原值。`)
+      addTargetIssue('target_missing', `${label}必须引用已启用的模型配置或分组；当前配置不存在，已保留原值。`)
       return
     }
 
     let candidates
     if (resolved.kind === 'model') {
       if (resolved.model.enabled !== true) {
-        errors.push(`${label}必须引用已启用的模型配置；当前配置已停用，已保留原值。`)
+        addTargetIssue('model_disabled', `${label}必须引用已启用的模型配置；当前配置已停用，已保留原值。`)
         return
       }
       candidates = [resolved.model]
     } else {
       if (resolved.group.enabled !== true) {
-        errors.push(`${label}必须引用已启用的分组；当前分组已停用，已保留原值。`)
+        addTargetIssue('group_disabled', `${label}必须引用已启用的分组；当前分组已停用，已保留原值。`)
         return
       }
       candidates = autoTargetGroupCandidates(id, models, groups)
       if (!candidates.length) {
-        errors.push(`${label}必须引用至少包含一个已启用候选模型的分组；当前分组没有有效候选，已保留原值。`)
+        addTargetIssue('group_without_enabled_candidates', `${label}必须引用至少包含一个已启用候选模型的分组；当前分组没有有效候选，已保留原值。`)
         return
       }
     }
@@ -412,23 +423,27 @@ export function validateAutoDutyConfig(config, models, groups = []) {
     const allowed = autoTargetEffortOptions(id, models, groups)
     if (effort && !allowed.includes(String(effort).trim().toLowerCase())) {
       const providers = [...new Set(candidates.map((model) => model.provider || '未知'))].join('/')
-      errors.push(`${label}的思考等级不受本地 ${providers} Provider 表达。`)
+      addTargetIssue('effort_unsupported', `${label}的思考等级不受本地 ${providers} Provider 表达。`, effort)
     }
   }
 
-  validateTarget('默认固定目标', config.default_model_id, '', config.enabled, true)
+  validateTarget('default', '默认固定目标', config.default_model_id, '', config.enabled, true)
   const targets = []
   for (const duty of AUTO_DUTY_LAYOUTS[config.layout] || []) {
-    targets.push({ label: `${duty.label}目标`, target: config.duty_models[duty.key] })
+    targets.push({ scope: `duty:${duty.key}`, label: `${duty.label}目标`, target: config.duty_models[duty.key] })
   }
-  for (const { label, target } of targets) {
+  for (const { scope, label, target } of targets) {
     const id = target?.model_id || ''
-    validateTarget(label, id, target?.reasoning_effort || '', config.enabled)
+    validateTarget(scope, label, id, target?.reasoning_effort || '', config.enabled)
   }
   for (const [index, item] of config.node_overrides.entries()) {
-    validateTarget(`节点覆盖 ${index + 1}`, item.model_id || '', item.reasoning_effort || '', config.enabled)
+    validateTarget(`node:${identityKey(item)}`, `节点覆盖 ${index + 1}`, item.model_id || '', item.reasoning_effort || '', config.enabled)
   }
-  return errors
+  return issues
+}
+
+export function validateAutoDutyConfig(config, models, groups = []) {
+  return autoDutyValidationIssues(config, models, groups).map(({ message }) => message)
 }
 
 export function nodeIdentityComplete(observation) {
