@@ -218,6 +218,17 @@ function cacheHitRate(row) {
 
     <div v-else class="overflow-x-auto px-3 pb-3 pt-2">
       <table class="usage-table w-full table-auto text-[12px]">
+        <colgroup>
+          <col style="width: 15%" />
+          <col style="width: 8%" />
+          <col style="width: 6%" />
+          <col style="width: 12%" />
+          <col style="width: 12%" />
+          <col style="width: 12%" />
+          <col style="width: 12%" />
+          <col style="width: 11%" />
+          <col style="width: 12%" />
+        </colgroup>
         <thead>
           <tr class="border-b border-line-2 text-left text-ink-3">
             <th class="model-column font-medium">模型</th>
@@ -264,8 +275,11 @@ function cacheHitRate(row) {
   padding: 6px 4px;
 }
 
+.usage-table th {
+  white-space: nowrap;
+}
+
 .usage-table .compact-column {
-  width: 1%;
   white-space: nowrap;
 }
 

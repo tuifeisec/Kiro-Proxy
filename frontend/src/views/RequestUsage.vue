@@ -412,6 +412,20 @@ onBeforeUnmount(() => {
             <div class="h-full w-1/3 bg-primary ui-progress-indeterminate"></div>
           </div>
           <table class="request-table w-full table-auto text-[12px]">
+            <colgroup>
+              <col style="width: 8%" />
+              <col style="width: 12%" />
+              <col style="width: 9%" />
+              <col style="width: 6%" />
+              <col style="width: 19%" />
+              <col style="width: 8%" />
+              <col style="width: 7%" />
+              <col style="width: 7%" />
+              <col style="width: 8%" />
+              <col style="width: 6%" />
+              <col style="width: 6%" />
+              <col style="width: 4%" />
+            </colgroup>
             <thead class="sticky top-0 z-10 bg-surface">
               <tr class="border-b border-line-2 text-left text-ink-3">
                 <th class="font-medium">时间</th>
@@ -632,7 +646,10 @@ onBeforeUnmount(() => {
 }
 
 .request-table .fit-column {
-  width: 1%;
+  white-space: nowrap;
+}
+
+.request-table th {
   white-space: nowrap;
 }
 
