@@ -429,7 +429,7 @@ onBeforeUnmount(() => {
             <thead class="sticky top-0 z-10 bg-surface">
               <tr class="border-b border-line-2 text-left text-ink-3">
                 <th class="font-medium">时间</th>
-                <th class="font-medium">模型 / 提供商</th>
+                <th class="font-medium">模型</th>
                 <th class="font-medium">端点</th>
                 <th class="fit-column font-medium">状态</th>
                 <th class="fit-column text-right font-medium">Tokens</th>
@@ -456,7 +456,6 @@ onBeforeUnmount(() => {
                 <td class="whitespace-nowrap font-mono text-[11px] text-ink-2" :title="formatTime(item.created_at)">{{ formatTime(item.created_at) }}</td>
                 <td class="max-w-0" :title="item.model_id || 'unknown'">
                   <div class="truncate font-medium text-ink">{{ item.model_id || 'unknown' }}</div>
-                  <div class="mt-0.5 truncate text-[10px] text-ink-4" :title="item.provider || '—'">{{ item.provider || '—' }}</div>
                 </td>
                 <td class="max-w-0 font-mono text-[10px] text-ink-3" :title="item.endpoint || item.request_path || '—'"><div class="truncate">{{ item.endpoint || item.request_path || '—' }}</div></td>
                 <td class="fit-column"><span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="item.success ? 'bg-success-tint text-success-fg' : 'bg-danger-tint text-danger-fg'" :aria-label="item.success ? '请求成功' : '请求异常'"><span class="h-1.5 w-1.5 rounded-full" :class="item.success ? 'bg-brand' : 'bg-danger'" aria-hidden="true"></span>{{ item.status_code || 'ERR' }}</span></td>
