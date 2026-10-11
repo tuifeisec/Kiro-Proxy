@@ -25,7 +25,7 @@ func (db *DB) UpsertDailyStats(ds *DailyModelStats) error {
 func (db *DB) QueryDailyStats(startDate, endDate string) ([]DailyModelStats, error) {
 	rows, err := db.conn.Query(`
 		SELECT date, model_id, requests, errors, input_tokens, output_tokens, cache_read, cache_write, credits,
-			generation_speed_sum, generation_speed_samples
+			generation_speed_v2_sum, generation_speed_v2_samples
 		FROM daily_stats
 		WHERE date >= ? AND date <= ?
 		ORDER BY date DESC, model_id ASC

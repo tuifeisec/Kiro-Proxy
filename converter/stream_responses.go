@@ -10,7 +10,7 @@
 //
 // 设计要点：
 //   - 直接复用 event_frame.go 的高性能帧构建器，避免中间 chat SSE 的解析/再序列化
-//   - 单 goroutine 读 SSE、写 pipe，零额外拷贝
+//   - 单 goroutine 按完整 SSE 事件读取并写 pipe
 //   - 工具调用同时按 item_id / call_id 建立索引，兼容不同上游的事件字段差异
 //   - 结尾补 metadata + contextUsage + metering 三帧（Kiro IDE 判定响应完成所需）
 
@@ -202,37 +202,26 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 	if !c.write(InitialResponseFrame("")) {
 		return
 	}
-	var currentEventType string
 	var readErr error
 
 	for {
-		line, err := reader.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
-
-		if len(line) > 0 {
-			if len(line) > 6 && line[0] == 'e' && line[:6] == "event:" {
-				currentEventType = strings.TrimSpace(line[6:])
-			} else if len(line) > 5 && line[0] == 'd' && line[:5] == "data:" {
-				data := strings.TrimSpace(line[5:])
-				if data != "" && data != "[DONE]" {
-					c.handleEvent(currentEventType, data)
-				}
-				currentEventType = ""
+		eventType, data, err := readSSEEvent(reader)
+		if err != nil {
+			readErr = err
+			if err != io.EOF {
+				log.Printf("[stream_responses] 读取错误: %v", err)
 			}
+			break
+		}
+		data = strings.TrimSpace(data)
+		if data != "" && data != "[DONE]" {
+			c.handleEvent(eventType, data)
 		}
 		c.mu.Lock()
 		writeFailed := c.writeFailed
 		terminal := c.outcome != StreamOutcomePending
 		c.mu.Unlock()
 		if writeFailed || terminal {
-			break
-		}
-
-		if err != nil {
-			readErr = err
-			if err != io.EOF {
-				log.Printf("[stream_responses] 读取错误: %v", err)
-			}
 			break
 		}
 	}

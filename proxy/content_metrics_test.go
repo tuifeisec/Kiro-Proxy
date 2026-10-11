@@ -69,6 +69,7 @@ func TestContentMetricsDoneOnlyRecordsEventWithoutContent(t *testing.T) {
 func TestContentMetricsRecognizesToolAndIgnoresMetadata(t *testing.T) {
 	body := "event: message\ndata: {\"id\":\"m1\",\"choices\":[]}\n\n" +
 		"event: message\ndata: {\"id\":\"m1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\"}]}}]}\n\n" +
+		"event: message\ndata: {\"id\":\"m1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n" +
 		"event: message\ndata: {\"id\":\"m1\",\"choices\":[],\"usage\":{\"total_tokens\":1}}\n\n"
 	_, snapshot := readContentMetrics(t, contentMetricProtocolChat, body, 5)
 	if !snapshot.contentMeasured || snapshot.firstContentType != contentMetricTool {
@@ -178,7 +179,7 @@ func TestContentMetricsClassifyTextReasoningAndToolsForEachProtocol(t *testing.T
 		{"responses tool", contentMetricProtocolResponses, "response.function_call_arguments.delta", `{"delta":"{"}`, contentMetricTool},
 		{"chat text", contentMetricProtocolChat, "", `{"choices":[{"delta":{"content":"x"}}]}`, contentMetricText},
 		{"chat reasoning", contentMetricProtocolChat, "", `{"choices":[{"delta":{"reasoning_content":"x"}}]}`, contentMetricReasoning},
-		{"chat tool", contentMetricProtocolChat, "", `{"choices":[{"delta":{"tool_calls":[{"index":0}]}}]}`, contentMetricTool},
+		{"chat tool", contentMetricProtocolChat, "", `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]}}]}`, contentMetricTool},
 		{"anthropic text", contentMetricProtocolAnthropic, "content_block_delta", `{"delta":{"type":"text_delta","text":"x"}}`, contentMetricText},
 		{"anthropic reasoning", contentMetricProtocolAnthropic, "content_block_delta", `{"delta":{"type":"thinking_delta","thinking":"x"}}`, contentMetricReasoning},
 		{"anthropic tool", contentMetricProtocolAnthropic, "content_block_delta", `{"delta":{"type":"input_json_delta","partial_json":"{"}}`, contentMetricTool},

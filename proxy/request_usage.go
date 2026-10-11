@@ -19,20 +19,21 @@ import (
 
 // requestUsageRecorder 只记录请求指标，不接触或保存请求、响应正文。
 type requestUsageRecorder struct {
-	db         *store.DB
-	item       store.RequestUsage
-	model      *store.Model
-	start      time.Time
-	firstByte  atomic.Int64
-	itemMu     sync.Mutex
-	traceMu    sync.Mutex
-	trace      requestTraceMetrics
-	errorMu    sync.Mutex
-	readError  string
-	contentMu  sync.Mutex
-	content    *contentMetrics
-	once       sync.Once
-	autoReason string
+	db              *store.DB
+	item            store.RequestUsage
+	model           *store.Model
+	start           time.Time
+	firstByte       atomic.Int64
+	itemMu          sync.Mutex
+	traceMu         sync.Mutex
+	trace           requestTraceMetrics
+	errorMu         sync.Mutex
+	readError       string
+	contentMu       sync.Mutex
+	content         *contentMetrics
+	contentResponse *http.Response
+	once            sync.Once
+	autoReason      string
 }
 
 func newRequestUsageRecorder(db *store.DB, start time.Time, model *store.Model, requestPath, protocol string) *requestUsageRecorder {
@@ -352,6 +353,15 @@ func (r *requestUsageRecorder) wrapResponseForModel(resp *http.Response, model *
 	if r == nil || resp == nil {
 		return
 	}
+	r.contentMu.Lock()
+	observed := r.contentResponse == resp && r.content != nil
+	metrics := r.content
+	r.contentMu.Unlock()
+	if observed {
+		metrics.setFirstContentHook(onFirstContent)
+		resp.Body = &usageObservedBody{ReadCloser: resp.Body, recorder: r}
+		return
+	}
 	provider := ""
 	if model != nil {
 		provider = model.Provider
@@ -361,10 +371,39 @@ func (r *requestUsageRecorder) wrapResponseForModel(resp *http.Response, model *
 	}
 	protocol := contentMetricProtocolForResponse(resp, provider, endpoint)
 	if protocol == "" {
+		r.contentMu.Lock()
+		r.content = nil
+		r.contentResponse = resp
+		r.contentMu.Unlock()
 		r.wrapResponse(resp)
 		return
 	}
 	r.wrapResponse(resp, r.contentOptions(protocol, onFirstContent))
+	r.contentMu.Lock()
+	r.contentResponse = resp
+	r.contentMu.Unlock()
+}
+
+// observeUpstreamContent starts at the source body, before any precommit read.
+// Replayed probe prefixes bypass this wrapper and keep their original timing.
+func (r *requestUsageRecorder) observeUpstreamContent(resp *http.Response, model *store.Model, endpoint string) {
+	if r == nil || resp == nil || resp.Body == nil {
+		return
+	}
+	provider := ""
+	if model != nil {
+		provider = model.Provider
+	}
+	protocol := contentMetricProtocolForResponse(resp, provider, endpoint)
+	var metrics *contentMetrics
+	if protocol != "" {
+		metrics = newContentMetrics(r.contentOptions(protocol, nil))
+		resp.Body = metrics.wrap(resp.Body)
+	}
+	r.contentMu.Lock()
+	r.content = metrics
+	r.contentResponse = resp
+	r.contentMu.Unlock()
 }
 
 func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorMessage string) {
@@ -417,6 +456,8 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 			r.item.StreamWaitMS = r.item.DurationMS - r.item.ResponseHeaderMS
 		}
 		r.item.ErrorMessage = sanitizeUsageError(errorMessage)
+		r.item.SpeedOutputTokens = -1
+		r.item.SpeedBasis = "unmeasured"
 		r.contentMu.Lock()
 		content := r.content
 		r.contentMu.Unlock()
@@ -429,6 +470,9 @@ func (r *requestUsageRecorder) finish(status int, usage localCompatUsage, errorM
 			r.item.LastContentMS = elapsedMetricMS(r.start, snapshot.lastContentAt)
 			r.item.FirstContentType = snapshot.firstContentType
 			r.item.MaxContentGapMS = durationMetricMS(snapshot.maxContentGap)
+			r.item.SpeedOutputTokens = snapshot.speedOutputTokens
+			r.item.SpeedDurationNS = int64(snapshot.speedDuration)
+			r.item.SpeedBasis = snapshot.speedBasis
 		}
 		if err := r.db.InsertRequestUsage(&r.item); err != nil {
 			log.Printf("[request-usage] 写入失败: %v", err)

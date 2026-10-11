@@ -76,6 +76,8 @@ func (db *DB) migrate() error {
 		{"daily_stats", "credits", "REAL NOT NULL DEFAULT 0"},
 		{"daily_stats", "generation_speed_sum", "REAL NOT NULL DEFAULT 0"},
 		{"daily_stats", "generation_speed_samples", "INTEGER NOT NULL DEFAULT 0"},
+		{"daily_stats", "generation_speed_v2_sum", "REAL NOT NULL DEFAULT 0"},
+		{"daily_stats", "generation_speed_v2_samples", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "credits", "REAL NOT NULL DEFAULT 0"},
 		{"request_usage", "input_cost", "REAL NOT NULL DEFAULT 0"},
 		{"request_usage", "output_cost", "REAL NOT NULL DEFAULT 0"},
@@ -85,6 +87,9 @@ func (db *DB) migrate() error {
 		{"request_usage", "first_event_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "first_content_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "last_content_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "speed_output_tokens", "INTEGER NOT NULL DEFAULT -1"},
+		{"request_usage", "speed_duration_ns", "INTEGER NOT NULL DEFAULT 0"},
+		{"request_usage", "speed_basis", "TEXT NOT NULL DEFAULT ''"},
 		{"request_usage", "first_content_type", "TEXT NOT NULL DEFAULT ''"},
 		{"request_usage", "max_content_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
 		{"request_usage", "content_measured", "INTEGER NOT NULL DEFAULT 0"},
@@ -246,6 +251,8 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     credits       REAL NOT NULL DEFAULT 0,
     generation_speed_sum REAL NOT NULL DEFAULT 0,
     generation_speed_samples INTEGER NOT NULL DEFAULT 0,
+    generation_speed_v2_sum REAL NOT NULL DEFAULT 0,
+    generation_speed_v2_samples INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, model_id)
 );
 
@@ -292,6 +299,9 @@ CREATE TABLE IF NOT EXISTS request_usage (
 	failover_reason     TEXT NOT NULL DEFAULT '',
 	capacity_wait_ms    INTEGER NOT NULL DEFAULT 0,
     last_content_ms    INTEGER NOT NULL DEFAULT 0,
+    speed_output_tokens INTEGER NOT NULL DEFAULT -1,
+    speed_duration_ns INTEGER NOT NULL DEFAULT 0,
+    speed_basis TEXT NOT NULL DEFAULT '',
     error_message      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_usage_date_id ON request_usage(request_date, id DESC);

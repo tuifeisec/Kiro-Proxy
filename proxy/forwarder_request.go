@@ -30,6 +30,31 @@ func useResponsesAPI(pre *Preflight, m *store.Model) bool {
 	return strings.Contains(m.Endpoint, "/responses")
 }
 
+// 与请求转换共用同一协议判定，避免自定义 URL 或 classifier 改写误导响应观测。
+func upstreamContentProtocolForCandidate(pre *Preflight, model *store.Model, forceChat bool) contentMetricProtocol {
+	switch model.Provider {
+	case "anthropic":
+		return contentMetricProtocolAnthropic
+	case "gemini":
+		return contentMetricProtocolGemini
+	case "codex":
+		return contentMetricProtocolResponses
+	}
+	if forceChat && model.Provider == "openai" {
+		return contentMetricProtocolChat
+	}
+	if pre.Protocol == "kiro" && pre.Conv != nil {
+		if useResponsesAPI(pre, model) {
+			return contentMetricProtocolResponses
+		}
+		return contentMetricProtocolChat
+	}
+	if strings.Contains(strings.TrimSpace(model.Endpoint), "/responses") {
+		return contentMetricProtocolResponses
+	}
+	return contentMetricProtocolChat
+}
+
 func buildUpstreamURL(baseURL, endpoint string) string {
 	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
 		return endpoint

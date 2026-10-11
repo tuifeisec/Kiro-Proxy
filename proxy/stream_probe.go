@@ -61,9 +61,20 @@ func probeSSEPrecommit(
 	}
 
 	body := resp.Body
+	protocol := sseProtocol(provider, endpoint)
+	switch upstreamContentProtocolFromResponse(resp) {
+	case contentMetricProtocolChat:
+		protocol = sseProbeChat
+	case contentMetricProtocolResponses:
+		protocol = sseProbeResponses
+	case contentMetricProtocolAnthropic:
+		protocol = sseProbeAnthropic
+	case contentMetricProtocolGemini:
+		protocol = sseProbeGemini
+	}
 	resultCh := make(chan sseProbeResult, 1)
 	go func() {
-		prefix, err := readUntilValidSSEEvent(body, sseProtocol(provider, endpoint), limit)
+		prefix, err := readUntilValidSSEEvent(body, protocol, limit)
 		resultCh <- sseProbeResult{prefix: prefix, err: err}
 	}()
 

@@ -238,7 +238,7 @@ function cacheHitRate(row) {
             <th class="compact-column text-right font-medium">输出 Token</th>
             <th class="compact-column text-right font-medium">缓存命中</th>
             <th class="compact-column text-right font-medium">费用（USD）</th>
-            <th class="compact-column text-right font-medium">平均 tok/s</th>
+            <th class="compact-column text-right font-medium" title="按修复后有效请求的解码速度取算术平均；旧口径样本不混入">平均 tok/s</th>
             <th class="compact-column text-right font-medium">命中率</th>
           </tr>
         </thead>

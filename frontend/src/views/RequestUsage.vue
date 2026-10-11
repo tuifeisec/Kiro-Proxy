@@ -7,6 +7,7 @@ import IconCopy from '../components/icons/IconCopy.vue'
 import { useToast } from '../composables/useToast.js'
 import { statsDaysAgo } from '../utils/date.js'
 import { formatNum, formatTokenRate, formatUsd } from '../utils/format.js'
+import { tokenSpeedExplanation } from '../utils/tokenSpeed.js'
 
 const items = ref([])
 const summary = ref({})
@@ -436,7 +437,7 @@ onBeforeUnmount(() => {
                 <th class="fit-column text-right font-medium">费用（USD）</th>
                 <th class="fit-column text-right font-medium">首字</th>
                 <th class="fit-column text-right font-medium">总耗时</th>
-                <th class="fit-column text-right font-medium" title="输出 Token ÷ 首次至末次内容间隔；代理观测值，数据未知或不完整时显示 —">输出 tok/s</th>
+                <th class="fit-column text-right font-medium" title="(测速 Token − 1) ÷ 真实内容增量区间；GPT 按上游用量细分排除隐藏推理，悬停查看口径或缺值原因">输出 tok/s</th>
                 <th class="fit-column font-medium">推理</th>
                 <th class="fit-column font-medium">档位</th>
                 <th class="font-medium">异常</th>
@@ -467,7 +468,7 @@ onBeforeUnmount(() => {
                 </td>
                 <td class="fit-column text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('timing', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.first_byte_ms) }}</span></td>
                 <td class="fit-column text-right tabular-nums"><span class="cursor-help whitespace-nowrap" @mouseenter="showTooltip('total', item, $event)" @mousemove="moveTooltip" @mouseleave="hideTooltip">{{ formatDuration(item.duration_ms) }}</span></td>
-                <td class="fit-column whitespace-nowrap text-right font-mono tabular-nums text-ink-2">{{ formatTokenRate(item.tokens_per_second) }}</td>
+                <td class="fit-column whitespace-nowrap text-right font-mono tabular-nums text-ink-2" :title="tokenSpeedExplanation(item)">{{ formatTokenRate(item.tokens_per_second) }}</td>
                 <td class="fit-column whitespace-nowrap" :title="item.reasoning_effort || 'Default'">{{ item.reasoning_effort || 'Default' }}</td>
                 <td class="fit-column whitespace-nowrap" :title="item.service_tier || 'Standard'">{{ item.service_tier || 'Standard' }}</td>
                 <td class="max-w-0 text-[11px] text-danger" :title="item.error_message"><div class="truncate">{{ item.error_message || '—' }}</div></td>
@@ -595,7 +596,7 @@ onBeforeUnmount(() => {
                 <div><dt class="text-ink-4">费用（USD）</dt><dd class="mt-0.5 font-semibold tabular-nums text-warning">{{ formatUsd(totalCostUsd(selectedItem)) }}</dd></div>
                 <div><dt class="text-ink-4">输出速度</dt><dd class="mt-0.5 font-semibold tabular-nums text-ink">{{ formatTokenRate(selectedItem.tokens_per_second) }} tok/s</dd></div>
               </dl>
-              <p class="mt-2 text-[11px] leading-4 text-ink-4">按输出 Token 与首次至末次内容的观测区间计算，表示代理观测到的速度；旧记录或无完整区间时显示 —。</p>
+              <p class="mt-2 text-[11px] leading-4 text-ink-4">{{ tokenSpeedExplanation(selectedItem) }}</p>
             </section>
 
             <section class="border-b border-line-2 px-4 py-4">

@@ -178,25 +178,23 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 	var readErr error
 
 	for {
-		line, err := reader.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
+		_, data, err := readSSEEvent(reader)
+		if err != nil {
+			readErr = err
+			if err != io.EOF {
+				log.Printf("[stream_anthropic] 读取错误: %v", err)
+			}
+			break
+		}
 
-		if line != "" {
-			c.handleLine(line)
+		if data != "" {
+			c.handleData(data)
 		}
 		c.mu.Lock()
 		writeFailed := c.writeFailed
 		terminal := c.outcome != StreamOutcomePending
 		c.mu.Unlock()
 		if writeFailed || terminal {
-			break
-		}
-
-		if err != nil {
-			readErr = err
-			if err != io.EOF {
-				log.Printf("[stream_anthropic] 读取错误: %v", err)
-			}
 			break
 		}
 	}
@@ -241,14 +239,8 @@ func (c *AnthropicStreamConverter) process(source io.ReadCloser) {
 	c.write(MeteringFrame(calcCredits(totalIn, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
-func (c *AnthropicStreamConverter) handleLine(line string) {
-	if len(line) < 6 || line[0] != 'd' || line[4] != ':' {
-		return
-	}
-	if line[:5] != "data:" {
-		return
-	}
-	data := strings.TrimSpace(line[5:])
+func (c *AnthropicStreamConverter) handleData(data string) {
+	data = strings.TrimSpace(data)
 	if data == "" {
 		return
 	}

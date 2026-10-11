@@ -223,6 +223,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 			attemptsByGroup[candidateGroup.ID]++
 		}
 		s.logger.InfoBytes("local-compat", fmt.Sprintf("本地兼容接口转发: api=%s model=%s → %s", api, statsModelID(candidate), candidatePrepared.upstreamURL), candidatePrepared.upstreamBody)
+		candidateCtx := withUpstreamContentProtocol(r.Context(), candidatePrepared.contentProtocol)
 		if grouped {
 			configuredFirstByteTimeout := time.Duration(candidateGroup.FirstByteTimeoutMS) * time.Millisecond
 			firstByteTimeout := imageAwareFirstByteTimeout(
@@ -234,7 +235,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 				len(candidates),
 			)
 			var firstByteDuration time.Duration
-			resp, firstByteDuration, err = requestWithProtocolFallback(r.Context(), firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
+			resp, firstByteDuration, err = requestWithProtocolFallback(candidateCtx, firstByteTimeout, func(attemptCtx context.Context) (*http.Response, error) {
 				if isOpenAIChatUpstream(candidate, candidatePrepared.upstreamURL) {
 					attempt := nextOpenAIChatAttempt(upstreamRequestOperationFromContext(attemptCtx))
 					attemptCtx = withOpenAIChatAttempt(attemptCtx, attempt)
@@ -253,7 +254,7 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 				s.forwarder.latency.record(candidate.ID, firstByteTimeout, configuredFirstByteTimeout, time.Now())
 			}
 		} else {
-			resp, err = s.forwarder.sendWithRetryBudget(r.Context(), candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, s.logger, sessionID, usageRecord, singleModelFirstByteTimeout)
+			resp, err = s.forwarder.sendWithRetryBudget(candidateCtx, candidatePrepared.upstreamURL, candidatePrepared.upstreamBody, candidate, s.logger, sessionID, usageRecord, singleModelFirstByteTimeout)
 		}
 		if err != nil {
 			lease.release()
@@ -645,12 +646,48 @@ type localCompatPreparedCandidate struct {
 	responsesFallback bool
 	fallbackState     *fallbackResponseState
 	aggregateCodex    bool
+	contentProtocol   contentMetricProtocol
 }
 
 func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, model *store.Model, clientWantsStream bool, sessionID string) (*localCompatPreparedCandidate, error) {
 	prepared := &localCompatPreparedCandidate{}
 	prepared.upstreamBody = replaceModelInBody(body, model.ModelID)
+	if api == localCompatChat && clientWantsStream {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(prepared.upstreamBody, &payload); err != nil {
+			return nil, err
+		}
+		var options map[string]json.RawMessage
+		if raw := payload["stream_options"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &options); err != nil {
+				return nil, err
+			}
+		}
+		if options == nil {
+			options = make(map[string]json.RawMessage)
+		}
+		if _, specified := options["include_usage"]; !specified {
+			options["include_usage"] = json.RawMessage("true")
+			var err error
+			payload["stream_options"], err = json.Marshal(options)
+			if err != nil {
+				return nil, err
+			}
+			prepared.upstreamBody, err = json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	prepared.responsesFallback = api == localCompatResponses && responsesNeedsChatFallback(model)
+	switch {
+	case api == localCompatMessages:
+		prepared.contentProtocol = contentMetricProtocolAnthropic
+	case api == localCompatResponses && !prepared.responsesFallback:
+		prepared.contentProtocol = contentMetricProtocolResponses
+	default:
+		prepared.contentProtocol = contentMetricProtocolChat
+	}
 	if api == localCompatResponses {
 		var err error
 		prepared.upstreamBody, _, err = ensureResponsesPromptCacheKey(prepared.upstreamBody, model.ModelID)

@@ -1139,6 +1139,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 	if err != nil {
 		return nil, nil, fmt.Errorf("转换失败: %w", err)
 	}
+	ctx = withUpstreamContentProtocol(ctx, upstreamContentProtocolForCandidate(pre, model, forceReasoningChat))
 
 	var contResult *converter.ResponsesContinuationResult
 	continuationStateKey := ""
@@ -1243,7 +1244,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 					resp.ContentLength = int64(len(body))
 					return resp, contResult, nil
 				}
-				resp, err = f.sendCandidateRequest(ctx, chatURL, chatBody, model, logger, sessionID, pre.usage, fallbackBudget)
+				resp, err = f.sendCandidateRequest(withUpstreamContentProtocol(ctx, contentMetricProtocolChat), chatURL, chatBody, model, logger, sessionID, pre.usage, fallbackBudget)
 				if err != nil {
 					return nil, contResult, err
 				}
@@ -1746,6 +1747,7 @@ func (f *Forwarder) doRequestWithOperation(ctx context.Context, url string, body
 	resp, err := client.Do(req)
 	if err == nil {
 		wrapUpstreamReadIdleTimeout(resp, upstreamReadIdleTimeout)
+		usage.observeUpstreamContent(resp, m, url)
 	}
 	return resp, err
 }

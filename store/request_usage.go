@@ -27,6 +27,10 @@ type RequestUsage struct {
 	FirstEventMS               int64    `json:"first_event_ms"`
 	FirstContentMS             int64    `json:"first_content_ms"`
 	LastContentMS              int64    `json:"last_content_ms"`
+	SpeedOutputTokens          int      `json:"speed_output_tokens"`
+	SpeedDurationNS            int64    `json:"speed_duration_ns"`
+	SpeedBasis                 string   `json:"speed_basis"`
+	TokenRateStatus            string   `json:"token_rate_status"`
 	TokensPerSecond            *float64 `json:"tokens_per_second"`
 	FirstContentType           string   `json:"first_content_type"`
 	MaxContentGapMS            int64    `json:"max_content_gap_ms"`
@@ -102,12 +106,46 @@ type RequestUsagePage struct {
 const requestUsageRetentionDays = 7
 
 func (item RequestUsage) calculateTokensPerSecond() *float64 {
-	if !item.Success || item.OutputTokens <= 0 || !item.ContentMeasured || !item.ContentMeasurementComplete ||
-		item.FirstContentMS < 0 || item.LastContentMS <= item.FirstContentMS || item.LastContentMS > item.DurationMS {
+	if item.tokenRateStatus() != "ok" {
 		return nil
 	}
-	rate := float64(item.OutputTokens) * 1000 / float64(item.LastContentMS-item.FirstContentMS)
+	rate := float64(item.SpeedOutputTokens-1) * 1e9 / float64(item.SpeedDurationNS)
 	return &rate
+}
+
+func (item RequestUsage) tokenRateStatus() string {
+	if !item.Success {
+		return "failed"
+	}
+	if item.SpeedBasis == "" {
+		return "legacy"
+	}
+	if item.SpeedBasis == "unmeasured" {
+		return "unmeasured"
+	}
+	if !item.ContentMeasured {
+		return "no_content"
+	}
+	if !item.ContentMeasurementComplete {
+		return "incomplete"
+	}
+	if item.SpeedBasis != "visible_output" && item.SpeedBasis != "output_with_reasoning" && item.SpeedBasis != "reported_output" {
+		return "usage_missing"
+	}
+	if item.SpeedOutputTokens < 0 {
+		return "usage_missing"
+	}
+	if item.SpeedOutputTokens <= 1 {
+		return "insufficient_tokens"
+	}
+	if item.SpeedDurationNS <= 0 || item.DurationMS < 0 {
+		return "insufficient_interval"
+	}
+	intervalMS, remainderNS := item.SpeedDurationNS/1e6, item.SpeedDurationNS%1e6
+	if intervalMS > item.DurationMS && (intervalMS-item.DurationMS > 1 || (intervalMS-item.DurationMS == 1 && remainderNS > 0)) {
+		return "insufficient_interval"
+	}
+	return "ok"
 }
 
 // cleanupExpiredRequestUsage 保留当前自然日及之前 6 个自然日的数据，每天最多执行一次。
@@ -150,6 +188,7 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 		item.RequestPath, item.Protocol, item.StatusCode, boolToInt(item.Success),
 		item.InputTokens, item.OutputTokens, item.CacheReadTokens, item.CacheWriteTokens,
 		item.FirstByteMS, item.FirstEventMS, item.FirstContentMS, item.LastContentMS, item.FirstContentType,
+		item.SpeedOutputTokens, item.SpeedDurationNS, item.SpeedBasis,
 		item.MaxContentGapMS, boolToInt(item.ContentMeasured), boolToInt(item.ContentMeasurementComplete),
 		item.DurationMS, item.Credits, item.InputCost, item.OutputCost,
 		item.CacheReadCost, item.CacheWriteCost, item.ConversionMS, item.AuditMS, item.SessionReadMS, item.AuthMS, item.DNSMS,
@@ -163,6 +202,7 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 			request_date, created_at, model_id, provider, endpoint, request_path, protocol,
 			status_code, success, input_tokens, output_tokens, cache_read_tokens,
 			cache_write_tokens, first_byte_ms, first_event_ms, first_content_ms, last_content_ms, first_content_type,
+			speed_output_tokens, speed_duration_ns, speed_basis,
 			max_content_gap_ms, content_measured, content_measurement_complete, duration_ms, credits, input_cost, output_cost,
 			cache_read_cost, cache_write_cost, conversion_ms, audit_ms, session_read_ms, auth_ms, dns_ms, connect_ms,
 			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
@@ -180,11 +220,11 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 	}
 	if speed := item.calculateTokensPerSecond(); speed != nil && item.ModelID != "" {
 		if _, err := tx.Exec(`
-			INSERT INTO daily_stats (date, model_id, generation_speed_sum, generation_speed_samples)
+			INSERT INTO daily_stats (date, model_id, generation_speed_v2_sum, generation_speed_v2_samples)
 			VALUES (?, ?, ?, 1)
 			ON CONFLICT(date, model_id) DO UPDATE SET
-				generation_speed_sum = generation_speed_sum + excluded.generation_speed_sum,
-				generation_speed_samples = generation_speed_samples + excluded.generation_speed_samples
+				generation_speed_v2_sum = generation_speed_v2_sum + excluded.generation_speed_v2_sum,
+				generation_speed_v2_samples = generation_speed_v2_samples + excluded.generation_speed_v2_samples
 		`, item.RequestDate, item.ModelID, *speed); err != nil {
 			return err
 		}
@@ -249,6 +289,7 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 		SELECT id, request_date, created_at, model_id, provider, endpoint, request_path,
 			protocol, status_code, success, input_tokens, output_tokens, cache_read_tokens,
 			cache_write_tokens, first_byte_ms, first_event_ms, first_content_ms, last_content_ms, first_content_type,
+			speed_output_tokens, speed_duration_ns, speed_basis,
 			max_content_gap_ms, content_measured, content_measurement_complete, duration_ms, credits, input_cost, output_cost,
 			cache_read_cost, cache_write_cost, conversion_ms, audit_ms, session_read_ms, auth_ms, dns_ms, connect_ms,
 			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
@@ -269,6 +310,7 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 			&item.Provider, &item.Endpoint, &item.RequestPath, &item.Protocol, &item.StatusCode,
 			&success, &item.InputTokens, &item.OutputTokens, &item.CacheReadTokens,
 			&item.CacheWriteTokens, &item.FirstByteMS, &item.FirstEventMS, &item.FirstContentMS, &item.LastContentMS, &item.FirstContentType,
+			&item.SpeedOutputTokens, &item.SpeedDurationNS, &item.SpeedBasis,
 			&item.MaxContentGapMS, &contentMeasured, &measurementComplete, &item.DurationMS, &item.Credits,
 			&item.InputCost, &item.OutputCost, &item.CacheReadCost, &item.CacheWriteCost,
 			&item.ConversionMS, &item.AuditMS, &item.SessionReadMS, &item.AuthMS, &item.DNSMS, &item.ConnectMS, &item.TLSMS,
@@ -282,6 +324,7 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 		item.ReusedConnection = reusedConnection != 0
 		item.ContentMeasured = contentMeasured != 0
 		item.ContentMeasurementComplete = measurementComplete != 0
+		item.TokenRateStatus = item.tokenRateStatus()
 		item.TokensPerSecond = item.calculateTokensPerSecond()
 		items = append(items, item)
 	}

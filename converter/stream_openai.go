@@ -9,7 +9,7 @@
 //
 // 性能优化：
 //   - 使用 bufio.Writer 包装 pipe 写端，减少 syscall 次数
-//   - SSE 行解析使用切片操作避免 strings 分配
+//   - 按完整 SSE 事件解析，避免终态空行跨读取时提前结束
 //   - 缓存 token 信息透传
 
 package converter
@@ -189,11 +189,17 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 	var readErr error
 
 	for {
-		line, err := reader.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
+		_, data, err := readSSEEvent(reader)
+		if err != nil {
+			readErr = err
+			if err != io.EOF {
+				log.Printf("[stream_openai] 读取错误: %v", err)
+			}
+			break
+		}
 
-		if line != "" {
-			c.handleLine(line)
+		if data != "" {
+			c.handleData(data)
 		}
 		c.mu.Lock()
 		writeFailed := c.writeFailed
@@ -201,14 +207,6 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 		doneReceived := c.doneReceived
 		c.mu.Unlock()
 		if writeFailed || terminalFailure || doneReceived {
-			break
-		}
-
-		if err != nil {
-			readErr = err
-			if err != io.EOF {
-				log.Printf("[stream_openai] 读取错误: %v", err)
-			}
 			break
 		}
 	}
@@ -254,15 +252,8 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, cacheW, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
-func (c *OpenAIStreamConverter) handleLine(line string) {
-	if len(line) < 6 || line[0] != 'd' || line[4] != ':' {
-		return
-	}
-	// 快速前缀检测：data: (5 chars)
-	if line[:5] != "data:" {
-		return
-	}
-	data := strings.TrimSpace(line[5:])
+func (c *OpenAIStreamConverter) handleData(data string) {
+	data = strings.TrimSpace(data)
 	if len(data) == 0 {
 		return
 	}

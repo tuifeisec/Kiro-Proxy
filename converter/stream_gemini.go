@@ -161,25 +161,23 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 	var readErr error
 
 	for {
-		line, err := reader.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
+		_, data, err := readSSEEvent(reader)
+		if err != nil {
+			readErr = err
+			if err != io.EOF {
+				log.Printf("[stream_gemini] 读取错误: %v", err)
+			}
+			break
+		}
 
-		if line != "" {
-			c.handleLine(line)
+		if data != "" {
+			c.handleData(data)
 		}
 		c.mu.Lock()
 		writeFailed := c.writeFailed
 		terminal := c.outcome != StreamOutcomePending
 		c.mu.Unlock()
 		if writeFailed || terminal {
-			break
-		}
-
-		if err != nil {
-			readErr = err
-			if err != io.EOF {
-				log.Printf("[stream_gemini] 读取错误: %v", err)
-			}
 			break
 		}
 	}
@@ -223,12 +221,8 @@ func (c *GeminiStreamConverter) process(source io.ReadCloser) {
 	c.write(MeteringFrame(calcCredits(in, out, cacheR, 0, c.inputPrice, c.outputPrice, c.cacheInputPrice, c.cacheOutputPrice, c.rateMultiplier)))
 }
 
-func (c *GeminiStreamConverter) handleLine(line string) {
-	// Gemini SSE 格式: "data: {...}"
-	if len(line) < 6 || line[0] != 'd' || line[:5] != "data:" {
-		return
-	}
-	data := strings.TrimSpace(line[5:])
+func (c *GeminiStreamConverter) handleData(data string) {
+	data = strings.TrimSpace(data)
 	if len(data) == 0 || data == "[DONE]" {
 		return
 	}
