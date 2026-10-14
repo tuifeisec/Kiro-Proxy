@@ -9,17 +9,17 @@ import (
 )
 
 func TestKiroStageStructuralProfilesIdentity(t *testing.T) {
-	const expectedHash = "3cfca7cb7f4808d82bb54141b203ab4900852afc86b1f808ac43e6a38259445d"
-	if len(kiroStageStructuralProfiles) != 1890969 || kiroStageSHA256(kiroStageStructuralProfiles) != expectedHash {
-		t.Fatal("restored final profiles changed byte identity")
+	const expectedHash = "ba9faf169eea9bfb998e16c47ea4883237984ae6635c10409583cab6553cefa7"
+	if len(kiroStageStructuralProfiles) != 2179320 || kiroStageSHA256(kiroStageStructuralProfiles) != expectedHash {
+		t.Fatal("generated final profiles changed byte identity")
 	}
 	profiles, err := loadKiroStageStructuralProfiles()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profiles) != 2 || profiles[0].Family != "legacy-workflow" || len(profiles[0].Hooks) != 34 ||
-		profiles[1].Family != "native-model-routing" || len(profiles[1].Hooks) != 33 {
-		t.Fatal("restored final profile families or hooks changed")
+	if len(profiles) != 2 || profiles[0].Family != "legacy-workflow" || len(profiles[0].Hooks) != 35 ||
+		profiles[1].Family != "native-model-routing" || len(profiles[1].Hooks) != 34 {
+		t.Fatal("generated final profile families or hooks changed")
 	}
 }
 

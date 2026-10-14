@@ -192,8 +192,8 @@ func TestKiroStagePreflightRealPerformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("first_preflight bytes=%d elapsed=%s compiler_calls=%d candidate_sha256=%s", len(original), time.Since(start), calls, plan.candidateHash)
-	if kiroStageSHA256(original) == "da956c67134e9de239795ac6bbd3c05f9312516d1685b45e217bc8d2826b9bb7" && plan.candidateHash != "05893583b44233eaaa1eaaafd82b39bbc1f6c0d07f2e0c90c0293e0942fee8fe" {
-		t.Fatalf("restored compiler differs from the installed final candidate: %s", plan.candidateHash)
+	if kiroStageSHA256(original) == "da956c67134e9de239795ac6bbd3c05f9312516d1685b45e217bc8d2826b9bb7" && plan.candidateHash != "cd630132d9224d3d4c82af9f3b9f2ca3e870f620c21331268887088ce69ec48a" {
+		t.Fatalf("compiler differs from the verified host-route candidate: %s", plan.candidateHash)
 	}
 	start = time.Now()
 	if _, err := installKiroStageBridge(plan); err != nil {

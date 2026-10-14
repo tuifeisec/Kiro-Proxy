@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import { BRIDGE_SOURCE, ORIGINAL_SHA256, PATCHES, buildCandidate, buildPatchManifest, sha256 } from '../tools/kiro_stage_bridge.mjs'
 
 function runtime(enabled = '1') {
- const context = createContext({Buffer,process:{env:{KIRO_PROXY_STAGE_BRIDGE:enabled}}})
+ const context = createContext({Buffer,require:createRequire(import.meta.url),hoe:()=>[],process:{env:{KIRO_PROXY_STAGE_BRIDGE:enabled}}})
  new Script(BRIDGE_SOURCE).runInContext(context)
  return context
 }
@@ -24,7 +24,9 @@ test('trusted recipe source and complete path select a declared duty', () => {
  assert.equal(route.executionId,'step-42')
  assert.equal(route.definitionRevision,ORIGINAL_SHA256+':0')
  assert.equal(context.kiroProxyStepRouteV2(meta,'step-42',1).taskType,'')
- assert.equal(context.kiroProxyStepRouteV2({...meta,workflowId:'unknown'},'step-43',0).definitionId,'')
+ const unknown = context.kiroProxyStepRouteV2({...meta,workflowId:'unknown'},'step-43',0)
+ assert.match(unknown.definitionId,/^content:\/\/[a-f0-9]{64}$/)
+ assert.equal(unknown.taskType,'')
  assert.equal(context.kiroProxyStepRouteV2({...meta,nodePath:['wf-1','elsewhere','review-gpt']},'step-44',0).taskType,'')
 })
 

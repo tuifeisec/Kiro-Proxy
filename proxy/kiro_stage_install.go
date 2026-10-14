@@ -289,25 +289,38 @@ func prepareKiroStageInstallWith(executable string, cache *kiroStageVerification
 		return preflightError(err)
 	}
 	if found {
-		currentAdapterHash := adapterHash
-		if record.AdapterSHA256 != currentAdapterHash {
-			return preflightError(fmt.Errorf("Kiro 自动桥接恢复记录 adapter 不受支持: 记录=%s，当前=%s", record.AdapterSHA256, currentAdapterHash))
+		switch record.AdapterSHA256 {
+		case adapterHash:
+			candidate, err := compile(original)
+			if err != nil {
+				return preflightError(err)
+			}
+			if !bytes.Equal(current, candidate) {
+				return preflightError(fmt.Errorf("Kiro 自动桥接恢复记录与当前 adapter 生成候选不一致"))
+			}
+			return &kiroStageInstallPlan{
+				target:        target,
+				expectedHash:  currentHash,
+				originalHash:  kiroStageSHA256(original),
+				candidateHash: currentHash,
+				verification:  cache,
+				adapterHash:   adapterHash,
+			}, nil
+		case kiroStagePreviousStructuralAdapterHash():
+			previousProfiles, err := loadKiroStagePreviousStructuralProfiles()
+			if err != nil {
+				return preflightError(err)
+			}
+			previousCandidate, err := buildKiroStageStructuralCandidateWithProfiles(original, previousProfiles, record.AdapterSHA256)
+			if err != nil {
+				return preflightError(fmt.Errorf("验证历史 Kiro 桥接失败: %w", err))
+			}
+			if !bytes.Equal(current, previousCandidate) {
+				return preflightError(fmt.Errorf("Kiro 自动桥接恢复记录与历史 adapter 生成候选不一致"))
+			}
+		default:
+			return preflightError(fmt.Errorf("Kiro 自动桥接恢复记录 adapter 不受支持: 记录=%s，当前=%s", record.AdapterSHA256, adapterHash))
 		}
-		candidate, err := compile(original)
-		if err != nil {
-			return preflightError(err)
-		}
-		if !bytes.Equal(current, candidate) {
-			return preflightError(fmt.Errorf("Kiro 自动桥接恢复记录与当前 adapter 生成候选不一致"))
-		}
-		return &kiroStageInstallPlan{
-			target:        target,
-			expectedHash:  currentHash,
-			originalHash:  kiroStageSHA256(original),
-			candidateHash: currentHash,
-			verification:  cache,
-			adapterHash:   adapterHash,
-		}, nil
 	}
 	if !found {
 		var manifests []kiroStageManifest

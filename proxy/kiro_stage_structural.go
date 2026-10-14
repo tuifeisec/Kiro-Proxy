@@ -13,6 +13,11 @@ import (
 //go:embed kiro_stage_structural_profiles.json
 var kiroStageStructuralProfiles []byte
 
+//go:embed kiro_stage_structural_profiles_previous.json
+var kiroStagePreviousStructuralProfiles []byte
+
+const kiroStagePreviousStructuralAdapterSHA256 = "3cfca7cb7f4808d82bb54141b203ab4900852afc86b1f808ac43e6a38259445d"
+
 type kiroStagePatternToken struct {
 	Key     string `json:"key"`
 	Binding string `json:"binding,omitempty"`
@@ -88,7 +93,31 @@ func kiroStageStructuralAdapterHash() string {
 	return kiroStageStructuralProfileCache.adapterHash
 }
 
+func kiroStagePreviousStructuralAdapterHash() string {
+	return kiroStagePreviousStructuralAdapterSHA256
+}
+
+// 历史适配器只参与旧安装的逐字节复现校验，不能用于生成新安装。
+func loadKiroStagePreviousStructuralProfiles() ([]kiroStageStructureProfile, error) {
+	if kiroStageSHA256(kiroStagePreviousStructuralProfiles) != kiroStagePreviousStructuralAdapterSHA256 {
+		return nil, fmt.Errorf("历史 Kiro 结构适配器摘要不匹配")
+	}
+	var profiles []kiroStageStructureProfile
+	if err := json.Unmarshal(kiroStagePreviousStructuralProfiles, &profiles); err != nil {
+		return nil, fmt.Errorf("读取历史 Kiro 结构适配器失败: %w", err)
+	}
+	return profiles, nil
+}
+
 func buildKiroStageStructuralCandidate(original []byte) ([]byte, error) {
+	profiles, err := loadKiroStageStructuralProfiles()
+	if err != nil {
+		return nil, err
+	}
+	return buildKiroStageStructuralCandidateWithProfiles(original, profiles, kiroStageStructuralAdapterHash())
+}
+
+func buildKiroStageStructuralCandidateWithProfiles(original []byte, profiles []kiroStageStructureProfile, adapterHash string) ([]byte, error) {
 	if bytes.Contains(original, []byte(kiroStageStructuralRecordPrefix)) {
 		return nil, fmt.Errorf("Kiro 自动桥接输入仍含安装记录")
 	}
@@ -100,10 +129,6 @@ func buildKiroStageStructuralCandidate(original []byte) ([]byte, error) {
 		if strings.HasPrefix(token.Name, "kiroProxy") {
 			return nil, fmt.Errorf("Kiro 源码含未验证或部分安装的桥接标识符 %q", token.Name)
 		}
-	}
-	profiles, err := loadKiroStageStructuralProfiles()
-	if err != nil {
-		return nil, err
 	}
 	index := buildKiroStageContextIndex(analysis.Tokens)
 	selected, plans, err := selectKiroStageStructuralProfile(analysis, index, profiles)
@@ -145,7 +170,7 @@ func buildKiroStageStructuralCandidate(original []byte) ([]byte, error) {
 	if err := verifyKiroStageInjectedBindings(installed, plans); err != nil {
 		return nil, err
 	}
-	return wrapKiroStageStructuralCandidate(original, payload, selected.Family, kiroStageStructuralAdapterHash(), recordEdits)
+	return wrapKiroStageStructuralCandidate(original, payload, selected.Family, adapterHash, recordEdits)
 }
 
 func selectKiroStageStructuralProfile(analysis *kiroStageJSAnalysis, index *kiroStageContextIndex, profiles []kiroStageStructureProfile) (*kiroStageStructureProfile, []kiroStageSourceEdit, error) {
