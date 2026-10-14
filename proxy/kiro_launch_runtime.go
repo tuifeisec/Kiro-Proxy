@@ -9,19 +9,37 @@ import (
 )
 
 type kiroRestartDriver struct {
-	running func() (bool, error)
-	stop    func(*TrafficLogger) error
-	wait    func()
-	start   func(kiroLaunchPlan) error
+	running     func() (bool, error)
+	stop        func(*TrafficLogger) error
+	waitForExit func() (bool, error)
+	start       func(kiroLaunchPlan) error
 }
 
 func launchPreparedKiro(plan kiroLaunchPlan, logger *TrafficLogger) error {
 	return executeKiroRestart(plan, logger, kiroRestartDriver{
 		running: checkKiroProcess,
 		stop:    stopKiroProcesses,
-		wait:    func() { time.Sleep(2 * time.Second) },
-		start:   startKiroProcess,
+		waitForExit: func() (bool, error) {
+			return waitForKiroExit(checkKiroProcess, time.Now, time.Sleep)
+		},
+		start: startKiroProcess,
 	})
+}
+
+// 保留原有退出等待预算，但进程退出后不再固定停留两秒。
+func waitForKiroExit(running func() (bool, error), now func() time.Time, pause func(time.Duration)) (bool, error) {
+	deadline := now().Add(2 * time.Second)
+	for {
+		stillRunning, err := running()
+		if err != nil || !stillRunning {
+			return stillRunning, err
+		}
+		remaining := deadline.Sub(now())
+		if remaining <= 0 {
+			return true, nil
+		}
+		pause(min(100*time.Millisecond, remaining))
+	}
 }
 
 func executeKiroRestart(plan kiroLaunchPlan, logger *TrafficLogger, driver kiroRestartDriver) error {
@@ -44,10 +62,11 @@ func executeKiroRestart(plan kiroLaunchPlan, logger *TrafficLogger, driver kiroR
 			return fmt.Errorf("停止 Kiro 失败: 未设置进程停止器")
 		}
 		stopErr := driver.stop(logger)
-		if driver.wait != nil {
-			driver.wait()
+		checkExit := driver.running
+		if driver.waitForExit != nil {
+			checkExit = driver.waitForExit
 		}
-		stillRunning, err := driver.running()
+		stillRunning, err := checkExit()
 		if err != nil {
 			if stopErr != nil {
 				return fmt.Errorf("停止 Kiro 失败: %v；停止后检查进程状态失败: %w", stopErr, err)

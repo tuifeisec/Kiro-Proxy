@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecuteKiroRestartSkipsStopWhenNoInstanceExists(t *testing.T) {
@@ -14,7 +15,7 @@ func TestExecuteKiroRestartSkipsStopWhenNoInstanceExists(t *testing.T) {
 			stopCalled = true
 			return nil
 		},
-		wait: func() { waitCalled = true },
+		waitForExit: func() (bool, error) { waitCalled = true; return false, nil },
 		start: func(kiroLaunchPlan) error {
 			startCalled = true
 			return nil
@@ -30,20 +31,19 @@ func TestExecuteKiroRestartSkipsStopWhenNoInstanceExists(t *testing.T) {
 
 func TestExecuteKiroRestartStopsAndRechecksBeforeStarting(t *testing.T) {
 	var order []string
-	checks := []bool{true, false}
-	checkIndex := 0
 	err := executeKiroRestart(kiroLaunchPlan{platform: "darwin"}, nil, kiroRestartDriver{
 		running: func() (bool, error) {
 			order = append(order, "probe")
-			result := checks[checkIndex]
-			checkIndex++
-			return result, nil
+			return true, nil
 		},
 		stop: func(*TrafficLogger) error {
 			order = append(order, "stop")
 			return nil
 		},
-		wait: func() { order = append(order, "wait") },
+		waitForExit: func() (bool, error) {
+			order = append(order, "wait")
+			return false, nil
+		},
 		start: func(kiroLaunchPlan) error {
 			order = append(order, "start")
 			return nil
@@ -52,8 +52,74 @@ func TestExecuteKiroRestartStopsAndRechecksBeforeStarting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(order, ","), "probe,stop,wait,probe,start"; got != want {
+	if got, want := strings.Join(order, ","), "probe,stop,wait,start"; got != want {
 		t.Fatalf("operation order = %q, want %q", got, want)
+	}
+}
+
+func TestWaitForKiroExitUsesOnlyNecessaryDelay(t *testing.T) {
+	probeFailure := errors.New("tasklist unavailable")
+	for _, tc := range []struct {
+		name        string
+		exitAfter   int
+		probeError  error
+		wantRunning bool
+		wantWait    time.Duration
+	}{
+		{"immediate", 1, nil, false, 0},
+		{"delayed", 4, nil, false, 300 * time.Millisecond},
+		{"timeout", 0, nil, true, 2 * time.Second},
+		{"query failure", 1, probeFailure, true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := time.Unix(0, 0)
+			started := clock
+			probes := 0
+			running, err := waitForKiroExit(func() (bool, error) {
+				probes++
+				if tc.probeError != nil {
+					return true, tc.probeError
+				}
+				return tc.exitAfter == 0 || probes < tc.exitAfter, nil
+			}, func() time.Time { return clock }, func(delay time.Duration) {
+				if delay <= 0 || delay > 100*time.Millisecond {
+					t.Fatalf("invalid poll delay: %s", delay)
+				}
+				clock = clock.Add(delay)
+			})
+			if running != tc.wantRunning || !errors.Is(err, tc.probeError) || clock.Sub(started) != tc.wantWait {
+				t.Fatalf("running=%t error=%v delay=%s", running, err, clock.Sub(started))
+			}
+		})
+	}
+}
+
+func TestExecuteKiroRestartWaitErrorsPreserveStopFailure(t *testing.T) {
+	stopFailure := errors.New("taskkill denied")
+	probeFailure := errors.New("tasklist unavailable")
+	for _, tc := range []struct {
+		name    string
+		running bool
+		err     error
+	}{
+		{"query failure", false, probeFailure},
+		{"timeout", true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			started := false
+			err := executeKiroRestart(kiroLaunchPlan{}, nil, kiroRestartDriver{
+				running:     func() (bool, error) { return true, nil },
+				stop:        func(*TrafficLogger) error { return stopFailure },
+				waitForExit: func() (bool, error) { return tc.running, tc.err },
+				start:       func(kiroLaunchPlan) error { started = true; return nil },
+			})
+			if err == nil || started || !strings.Contains(err.Error(), stopFailure.Error()) {
+				t.Fatalf("start=%t err=%v", started, err)
+			}
+			if tc.err != nil && !errors.Is(err, tc.err) {
+				t.Fatalf("lost probe error: %v", err)
+			}
+		})
 	}
 }
 

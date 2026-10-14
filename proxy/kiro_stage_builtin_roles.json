@@ -1,0 +1,36 @@
+{
+  "bundled://autoresearch": {
+    "experiments/experiment": "wf-auto-researcher"
+  },
+  "bundled://feature-pipeline": {
+    "setup": "wf-coder",
+    "requirements": "wf-design",
+    "design-loop/design-draft": "wf-design",
+    "design-loop/design-review": "wf-design-reviewer",
+    "plan": "wf-planner",
+    "code-loop/implement": "wf-coder",
+    "code-loop/code-reviews/review-fable": "semantic_reviewer",
+    "code-loop/code-reviews/review-gpt": "semantic_reviewer",
+    "code-loop/code-aggregate": "wf-review-aggregator",
+    "validate-gate/validate": "wf-coder"
+  },
+  "bundled://goal": {
+    "goal-loop/work": "wf-coder"
+  },
+  "bundled://investigate": {
+    "investigate": "wf-planner"
+  },
+  "bundled://publish-pr": {
+    "submit": "wf-pr-submitter",
+    "pr-loop/respond": "wf-pr-responder"
+  },
+  "bundled://ralph": {
+    "ralph-loop/iterate": "wf-coder"
+  },
+  "bundled://semantic-review-multi-model": {
+    "setup": "wf-coder",
+    "reviews/review-opus": "semantic_reviewer",
+    "reviews/review-gpt": "semantic_reviewer",
+    "aggregate": "wf-coder"
+  }
+}

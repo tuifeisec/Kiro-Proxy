@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 )
 
-//go:embed kiro_stage_bridge_manifest.json
+//go:embed kiro_stage_bridge_manifest.json kiro_stage_bridge_130_manifest.json
 var kiroStageBridgeManifest embed.FS
 
 type kiroStagePatch struct {
@@ -39,6 +39,9 @@ type kiroStageInstallPlan struct {
 	originalHash  string
 	candidateHash string
 	candidate     []byte
+	verification  *kiroStageVerificationCache
+	adapterHash   string
+	cacheHit      bool
 }
 
 type kiroStageInstallResult struct {
@@ -49,8 +52,15 @@ func kiroStageBundlePath(executable string) string {
 	return filepath.Join(filepath.Dir(executable), "resources", "app", "extensions", "kiro.kiro-agent", "dist", "extension.js")
 }
 
-func readKiroStageManifest() (kiroStageManifest, error) {
-	data, err := kiroStageBridgeManifest.ReadFile("kiro_stage_bridge_manifest.json")
+func readKiroStageManifest(names ...string) (kiroStageManifest, error) {
+	name := "kiro_stage_bridge_manifest.json"
+	if len(names) > 1 {
+		return kiroStageManifest{}, fmt.Errorf("读取内嵌 Kiro 阶段桥接清单时只能指定一个名称")
+	}
+	if len(names) == 1 {
+		name = names[0]
+	}
+	data, err := kiroStageBridgeManifest.ReadFile(name)
 	if err != nil {
 		return kiroStageManifest{}, fmt.Errorf("读取内嵌 Kiro 阶段桥接清单失败: %w", err)
 	}
@@ -81,6 +91,20 @@ func readKiroStageManifest() (kiroStageManifest, error) {
 		}
 	}
 	return manifest, nil
+}
+
+func selectKiroStageManifest(currentHash string, manifests []kiroStageManifest) (kiroStageManifest, error) {
+	for _, manifest := range manifests {
+		if currentHash == manifest.OriginalSHA256 || currentHash == manifest.CandidateSHA256 {
+			return manifest, nil
+		}
+		for _, previous := range manifest.PreviousVersions {
+			if currentHash == previous.CandidateSHA256 {
+				return manifest, nil
+			}
+		}
+	}
+	return kiroStageManifest{}, fmt.Errorf("不支持的 Kiro 阶段桥接目标 SHA256: %s；未停止或修改 Kiro", currentHash)
 }
 
 func validateKiroStagePatches(patches []kiroStagePatch) error {
@@ -176,30 +200,155 @@ func buildKiroStageUpgrade(current []byte, manifest kiroStageManifest) ([]byte, 
 	return nil, fmt.Errorf("不支持的 Kiro 阶段桥接目标 SHA256: %s；未停止或修改 Kiro", currentHash)
 }
 
-func prepareKiroStageInstall(executable string) (*kiroStageInstallPlan, error) {
-	manifest, err := readKiroStageManifest()
-	if err != nil {
-		return nil, err
+func restoreKiroStageLegacyOriginal(current []byte, currentHash string, manifests []kiroStageManifest) ([]byte, bool, error) {
+	var selected *kiroStageManifest
+	var patches []kiroStagePatch
+	for index := range manifests {
+		manifest := &manifests[index]
+		if currentHash == manifest.OriginalSHA256 {
+			if selected != nil {
+				return nil, true, fmt.Errorf("旧 Kiro 阶段桥接清单匹配存在歧义")
+			}
+			selected = manifest
+			patches = nil
+			continue
+		}
+		if currentHash == manifest.CandidateSHA256 {
+			if selected != nil {
+				return nil, true, fmt.Errorf("旧 Kiro 阶段桥接清单匹配存在歧义")
+			}
+			selected = manifest
+			patches = manifest.Patches
+			continue
+		}
+		for _, previous := range manifest.PreviousVersions {
+			if currentHash != previous.CandidateSHA256 {
+				continue
+			}
+			if selected != nil {
+				return nil, true, fmt.Errorf("旧 Kiro 阶段桥接清单匹配存在歧义")
+			}
+			selected = manifest
+			patches = previous.Patches
+			break
+		}
 	}
+	if selected == nil {
+		return nil, false, nil
+	}
+
+	original := append([]byte(nil), current...)
+	for index := len(patches) - 1; index >= 0; index-- {
+		patch := patches[index]
+		after := []byte(patch.After)
+		if count := bytes.Count(original, after); count != 1 {
+			return nil, true, fmt.Errorf("Kiro 旧桥接逆向锚点 %q 不是唯一匹配: %d", patch.Name, count)
+		}
+		original = bytes.Replace(original, after, []byte(patch.Before), 1)
+	}
+	if got := kiroStageSHA256(original); got != selected.OriginalSHA256 {
+		return nil, true, fmt.Errorf("重建 Kiro 原版 SHA256 不匹配: 预期 %s，实际 %s", selected.OriginalSHA256, got)
+	}
+	return original, true, nil
+}
+
+func prepareKiroStageInstall(executable string) (*kiroStageInstallPlan, error) {
+	cache, err := defaultKiroStageVerificationCache()
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Kiro 验证缓存失败；未停止或修改 Kiro: %w", err)
+	}
+	return prepareKiroStageInstallWith(executable, cache, buildKiroStageStructuralCandidate)
+}
+
+// 依赖显式注入，测试不访问真实安装或当前用户的持久缓存。
+func prepareKiroStageInstallWith(executable string, cache *kiroStageVerificationCache, compile func([]byte) ([]byte, error)) (*kiroStageInstallPlan, error) {
 	target := kiroStageBundlePath(executable)
 	current, err := readKiroStageBundle(target)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Kiro 阶段桥接预检失败；当前 SHA256=不可用；未停止或修改 Kiro: %w", err)
 	}
 	currentHash := kiroStageSHA256(current)
+	preflightError := func(err error) (*kiroStageInstallPlan, error) {
+		return nil, fmt.Errorf("%w；当前 SHA256=%s；未停止或修改 Kiro", err, currentHash)
+	}
+	adapterHash := kiroStageStructuralAdapterHash()
+	if cache != nil {
+		originalHash, hit, err := cache.Lookup(target, currentHash, adapterHash)
+		if err != nil {
+			return preflightError(fmt.Errorf("读取 Kiro 验证缓存失败: %w", err))
+		}
+		if hit {
+			return &kiroStageInstallPlan{target: target, expectedHash: currentHash,
+				originalHash: originalHash, candidateHash: currentHash,
+				verification: cache, adapterHash: adapterHash, cacheHit: true}, nil
+		}
+	}
+
+	original, record, found, err := parseKiroStageStructuralCandidate(current)
+	if err != nil {
+		return preflightError(err)
+	}
+	if found {
+		currentAdapterHash := adapterHash
+		if record.AdapterSHA256 != currentAdapterHash {
+			return preflightError(fmt.Errorf("Kiro 自动桥接恢复记录 adapter 不受支持: 记录=%s，当前=%s", record.AdapterSHA256, currentAdapterHash))
+		}
+		candidate, err := compile(original)
+		if err != nil {
+			return preflightError(err)
+		}
+		if !bytes.Equal(current, candidate) {
+			return preflightError(fmt.Errorf("Kiro 自动桥接恢复记录与当前 adapter 生成候选不一致"))
+		}
+		return &kiroStageInstallPlan{
+			target:        target,
+			expectedHash:  currentHash,
+			originalHash:  kiroStageSHA256(original),
+			candidateHash: currentHash,
+			verification:  cache,
+			adapterHash:   adapterHash,
+		}, nil
+	}
+	if !found {
+		var manifests []kiroStageManifest
+		for _, name := range []string{"kiro_stage_bridge_manifest.json", "kiro_stage_bridge_130_manifest.json"} {
+			manifest, err := readKiroStageManifest(name)
+			if err != nil {
+				return preflightError(err)
+			}
+			manifests = append(manifests, manifest)
+		}
+		original, _, err = restoreKiroStageLegacyOriginal(current, currentHash, manifests)
+		if err != nil {
+			return preflightError(err)
+		}
+		if original == nil {
+			original = current
+		}
+	}
+
+	candidate, err := compile(original)
+	if err != nil {
+		return preflightError(err)
+	}
+	if len(candidate) == 0 {
+		return preflightError(fmt.Errorf("自动 Kiro 阶段桥接编译器返回空候选"))
+	}
+	originalHash := kiroStageSHA256(original)
+	candidateHash := kiroStageSHA256(candidate)
 	plan := &kiroStageInstallPlan{
 		target:        target,
 		expectedHash:  currentHash,
-		originalHash:  manifest.OriginalSHA256,
-		candidateHash: manifest.CandidateSHA256,
+		originalHash:  originalHash,
+		candidateHash: candidateHash,
+		verification:  cache,
+		adapterHash:   adapterHash,
 	}
-	if currentHash == manifest.CandidateSHA256 {
+	if bytes.Equal(current, candidate) {
+		plan.candidateHash = currentHash
 		return plan, nil
 	}
-	plan.candidate, err = buildKiroStageUpgrade(current, manifest)
-	if err != nil {
-		return nil, err
-	}
+	plan.candidate = candidate
 	return plan, nil
 }
 
@@ -215,7 +364,7 @@ func installKiroStageBridge(plan *kiroStageInstallPlan) (kiroStageInstallResult,
 		return kiroStageInstallResult{}, fmt.Errorf("Kiro 阶段桥接目标在预检后发生变化: 预期 %s，实际 %s", plan.expectedHash, got)
 	}
 	if plan.expectedHash == plan.candidateHash {
-		return kiroStageInstallResult{}, nil
+		return finishKiroStageVerification(plan, kiroStageInstallResult{})
 	}
 	if !validKiroStageHash(plan.originalHash) || len(plan.candidate) == 0 || kiroStageSHA256(plan.candidate) != plan.candidateHash {
 		return kiroStageInstallResult{}, fmt.Errorf("Kiro 阶段桥接安装计划候选无效")
@@ -271,7 +420,16 @@ func installKiroStageBridge(plan *kiroStageInstallPlan) (kiroStageInstallResult,
 	if got := kiroStageSHA256(installed); got != plan.candidateHash {
 		return kiroStageInstallResult{}, fmt.Errorf("替换后 Kiro 阶段桥接 SHA256 不匹配: %s；原文件备份: %s", got, backupPath)
 	}
-	return kiroStageInstallResult{backupPath: backupPath}, nil
+	return finishKiroStageVerification(plan, kiroStageInstallResult{backupPath: backupPath})
+}
+
+func finishKiroStageVerification(plan *kiroStageInstallPlan, result kiroStageInstallResult) (kiroStageInstallResult, error) {
+	if plan.verification != nil && !plan.cacheHit {
+		if err := plan.verification.Store(plan.target, plan.candidateHash, plan.originalHash, plan.adapterHash); err != nil {
+			return result, fmt.Errorf("Kiro 阶段桥接已核验或安装，但保存验证缓存失败；当前 SHA256=%s；原文件备份: %s: %w", plan.candidateHash, result.backupPath, err)
+		}
+	}
+	return result, nil
 }
 
 func writeSyncedKiroStageFile(file *os.File, data []byte) error {
