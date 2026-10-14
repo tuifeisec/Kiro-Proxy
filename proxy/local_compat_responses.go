@@ -11,6 +11,7 @@ import (
 	"io"
 	"kiro-proxy/store"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -291,12 +292,17 @@ func responsesInputToChatMessages(raw json.RawMessage) ([]map[string]interface{}
 			_ = json.Unmarshal(item["call_id"], &callID)
 			_ = json.Unmarshal(item["name"], &name)
 			_ = json.Unmarshal(item["arguments"], &arguments)
-			messages = append(messages, map[string]interface{}{
-				"role": "assistant",
-				"tool_calls": []interface{}{map[string]interface{}{
-					"id": callID, "type": "function", "function": map[string]string{"name": name, "arguments": arguments},
-				}},
-			})
+			call := map[string]interface{}{
+				"id": callID, "type": "function", "function": map[string]string{"name": name, "arguments": arguments},
+			}
+			if len(messages) > 0 {
+				last := messages[len(messages)-1]
+				if calls, ok := last["tool_calls"].([]interface{}); last["role"] == "assistant" && ok {
+					last["tool_calls"] = append(calls, call)
+					continue
+				}
+			}
+			messages = append(messages, map[string]interface{}{"role": "assistant", "tool_calls": []interface{}{call}})
 		case "function_call_output":
 			var callID string
 			_ = json.Unmarshal(item["call_id"], &callID)
@@ -454,12 +460,14 @@ func convertChatCompletionToResponses(body []byte) ([]byte, localCompatUsage, er
 		responseID = "resp_" + responseID
 	}
 	output := make([]interface{}, 0, 1)
+	status, incompleteReason := "completed", ""
 	if len(chat.Choices) > 0 {
+		status, incompleteReason = chatResponsesCompletionStatus(chat.Choices[0].FinishReason)
 		message := chat.Choices[0].Message
 		if message.Content != nil && message.Content != "" {
 			output = append(output, map[string]interface{}{
 				"type": "message", "id": responseID + "_msg", "role": "assistant",
-				"status": "completed", "content": []interface{}{map[string]interface{}{
+				"status": status, "content": []interface{}{map[string]interface{}{
 					"type": "output_text", "text": message.Content, "annotations": []interface{}{},
 				}},
 			})
@@ -468,17 +476,31 @@ func convertChatCompletionToResponses(body []byte) ([]byte, localCompatUsage, er
 			output = append(output, map[string]interface{}{
 				"type": "function_call", "id": call.ID, "call_id": call.ID,
 				"name": call.Function.Name, "arguments": call.Function.Arguments,
-				"status": "completed",
+				"status": status,
 			})
 		}
 	}
 	response := map[string]interface{}{
 		"id": responseID, "object": "response", "created_at": chat.Created,
-		"status": "completed", "model": chat.Model, "output": output,
+		"status": status, "model": chat.Model, "output": output,
 		"output_text": responseOutputText(output), "usage": responsesUsage(usage),
+	}
+	if incompleteReason != "" {
+		response["incomplete_details"] = map[string]string{"reason": incompleteReason}
 	}
 	result, err := json.Marshal(response)
 	return result, usage, err
+}
+
+func chatResponsesCompletionStatus(finishReason string) (status, incompleteReason string) {
+	switch finishReason {
+	case "length":
+		return "incomplete", "max_output_tokens"
+	case "content_filter":
+		return "incomplete", "content_filter"
+	default:
+		return "completed", ""
+	}
 }
 
 func readAndConvertChatResponse(body io.Reader) ([]byte, localCompatUsage, error) {
@@ -536,12 +558,15 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 	usage := localCompatUsage{}
 	createdSent := false
 	terminalSeen := false
+	choiceSeen := false
+	finishReason := ""
 	type streamTool struct {
 		ID        string
 		Name      string
 		Arguments strings.Builder
 	}
 	tools := make(map[int]*streamTool)
+	firstToolIndex, firstToolSeen := 0, false
 	writeEvent := func(event string, value interface{}) error {
 		payload, err := json.Marshal(value)
 		if err != nil {
@@ -577,7 +602,7 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 			continue
 		}
 		if data == "[DONE]" {
-			terminalSeen = true
+			terminalSeen = terminalSeen || choiceSeen
 			continue
 		}
 		var chunk struct {
@@ -628,8 +653,10 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 			}
 		}
 		if len(chunk.Choices) > 0 {
+			choiceSeen = choiceSeen || chunk.Choices[0].FinishReason != "" || chunk.Choices[0].Delta.Content != "" || len(chunk.Choices[0].Delta.ToolCalls) > 0
 			if chunk.Choices[0].FinishReason != "" {
 				terminalSeen = true
+				finishReason = chunk.Choices[0].FinishReason
 			}
 			for _, call := range chunk.Choices[0].Delta.ToolCalls {
 				tool := tools[call.Index]
@@ -640,13 +667,16 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 					}
 					tool = &streamTool{ID: id, Name: call.Function.Name}
 					tools[call.Index] = tool
-					if err := writeEvent("response.output_item.added", map[string]interface{}{
-						"type": "response.output_item.added", "item": map[string]interface{}{
-							"type": "function_call", "id": id, "call_id": id,
-							"name": tool.Name, "arguments": "", "status": "in_progress",
-						},
-					}); err != nil {
-						return usage, responseID, nil, err
+					if !firstToolSeen {
+						firstToolIndex, firstToolSeen = call.Index, true
+						if err := writeEvent("response.output_item.added", map[string]interface{}{
+							"type": "response.output_item.added", "item": map[string]interface{}{
+								"type": "function_call", "id": id, "call_id": id,
+								"name": tool.Name, "arguments": "", "status": "in_progress",
+							},
+						}); err != nil {
+							return usage, responseID, nil, err
+						}
 					}
 				}
 				if tool.Name == "" && call.Function.Name != "" {
@@ -654,11 +684,16 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 				}
 				if call.Function.Arguments != "" {
 					tool.Arguments.WriteString(call.Function.Arguments)
-					if err := writeEvent("response.function_call_arguments.delta", map[string]interface{}{
-						"type": "response.function_call_arguments.delta", "item_id": tool.ID,
-						"call_id": tool.ID, "delta": call.Function.Arguments,
-					}); err != nil {
-						return usage, responseID, nil, err
+					// Kiro associates argument deltas with the most recent added
+					// item. Keep the first call streaming and defer other calls so
+					// interleaved Chat chunks cannot mix their arguments.
+					if call.Index == firstToolIndex {
+						if err := writeEvent("response.function_call_arguments.delta", map[string]interface{}{
+							"type": "response.function_call_arguments.delta", "item_id": tool.ID,
+							"call_id": tool.ID, "delta": call.Function.Arguments,
+						}); err != nil {
+							return usage, responseID, nil, err
+						}
 					}
 				}
 			}
@@ -683,11 +718,41 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 		}
 		return usage, responseID, nil, err
 	}
-	for _, tool := range tools {
+	status, incompleteReason := chatResponsesCompletionStatus(finishReason)
+	toolOrder := make([]int, 0, len(tools))
+	for index := range tools {
+		if index != firstToolIndex {
+			toolOrder = append(toolOrder, index)
+		}
+	}
+	sort.Ints(toolOrder)
+	if firstToolSeen {
+		toolOrder = append([]int{firstToolIndex}, toolOrder...)
+	}
+	for _, index := range toolOrder {
+		tool := tools[index]
+		if index != firstToolIndex {
+			if err := writeEvent("response.output_item.added", map[string]interface{}{
+				"type": "response.output_item.added", "item": map[string]interface{}{
+					"type": "function_call", "id": tool.ID, "call_id": tool.ID,
+					"name": tool.Name, "arguments": "", "status": "in_progress",
+				},
+			}); err != nil {
+				return usage, responseID, nil, err
+			}
+			if arguments := tool.Arguments.String(); arguments != "" {
+				if err := writeEvent("response.function_call_arguments.delta", map[string]interface{}{
+					"type": "response.function_call_arguments.delta", "item_id": tool.ID,
+					"call_id": tool.ID, "delta": arguments,
+				}); err != nil {
+					return usage, responseID, nil, err
+				}
+			}
+		}
 		if err := writeEvent("response.output_item.done", map[string]interface{}{
 			"type": "response.output_item.done", "item": map[string]interface{}{
 				"type": "function_call", "id": tool.ID, "call_id": tool.ID,
-				"name": tool.Name, "arguments": tool.Arguments.String(), "status": "completed",
+				"name": tool.Name, "arguments": tool.Arguments.String(), "status": status,
 			},
 		}); err != nil {
 			return usage, responseID, nil, err
@@ -695,7 +760,8 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 	}
 	assistant := map[string]interface{}{"role": "assistant", "content": text.String()}
 	toolCalls := make([]interface{}, 0, len(tools))
-	for _, tool := range tools {
+	for _, index := range toolOrder {
+		tool := tools[index]
 		toolCalls = append(toolCalls, map[string]interface{}{
 			"id": tool.ID, "type": "function", "function": map[string]string{
 				"name": tool.Name, "arguments": tool.Arguments.String(),
@@ -705,11 +771,16 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 	if len(toolCalls) > 0 {
 		assistant["tool_calls"] = toolCalls
 	}
-	if err := writeEvent("response.completed", map[string]interface{}{
-		"type": "response.completed", "response": map[string]interface{}{
-			"id": responseID, "object": "response", "status": "completed", "model": model,
-			"output_text": text.String(), "usage": responsesUsage(usage),
-		},
+	response := map[string]interface{}{
+		"id": responseID, "object": "response", "status": status, "model": model,
+		"output_text": text.String(), "usage": responsesUsage(usage),
+	}
+	if incompleteReason != "" {
+		response["incomplete_details"] = map[string]string{"reason": incompleteReason}
+	}
+	eventType := "response." + status
+	if err := writeEvent(eventType, map[string]interface{}{
+		"type": eventType, "response": response,
 	}); err != nil {
 		return usage, responseID, nil, err
 	}

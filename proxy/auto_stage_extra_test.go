@@ -11,7 +11,7 @@ import (
 	"kiro-proxy/store"
 )
 
-func TestStageRawManualPassthroughClearsAutoToolLock(t *testing.T) {
+func TestStageRawOfficialManualPassthroughClearsAutoToolLock(t *testing.T) {
 	oldMode := GetProxyMode()
 	SetProxyMode(ModeForward)
 	t.Cleanup(func() { SetProxyMode(oldMode) })
@@ -33,7 +33,7 @@ func TestStageRawManualPassthroughClearsAutoToolLock(t *testing.T) {
 		t.Fatalf("initial stage target = %q, want shared-responses: %+v", got.Model, got)
 	}
 
-	manual := serveRawStage(t, env, rawStageRequest(t, "manual", conversationID, "run", 0))
+	manual := serveRawStage(t, env, rawStageRequest(t, "official-model", conversationID, "run", 0))
 	if manual.Code != http.StatusOK || manual.Body.String() != "passthrough" || passthroughCalls != 1 {
 		t.Fatalf("manual raw request did not pass through: status=%d body=%q calls=%d", manual.Code, manual.Body.String(), passthroughCalls)
 	}

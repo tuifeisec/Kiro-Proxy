@@ -569,7 +569,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			}
 		}
 		if compatible == 0 {
-			return nil, fmt.Errorf("模型组 %s 没有 OpenAI /responses 兼容候选", route.Group.Name)
+			return nil, fmt.Errorf("模型组 %s 没有 OpenAI /responses 或 /chat/completions 兼容候选", route.Group.Name)
 		}
 	}
 
@@ -1104,7 +1104,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		if err != nil {
 			return nil, nil, err
 		}
-		body, err := prepareRawResponsesBody(pre.Body, pre, model)
+		body, err := prepareRawResponsesUpstreamBody(pre.Body, pre, model)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1416,7 +1416,8 @@ func (f *Forwarder) sendWithRetryBudget(ctx context.Context, url string, body []
 	return f.sendWithRetryBudgetPolicy(ctx, url, body, m, logger, sessionID, usage, retryBudget, false)
 }
 
-// 原生 raw 响应交回客户端后不做预读/事件转换；认证与发送重放保护仍复用同一实现。
+// raw sender 不预读流；配置驱动的 Chat 转换在响应 finalize 阶段惰性进行。
+// 认证与发送重放保护仍复用同一实现。
 func (f *Forwarder) sendRawResponsesWithRetryBudget(ctx context.Context, url string, body []byte, m *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder, retryBudget time.Duration) (*http.Response, error) {
 	return f.sendWithRetryBudgetPolicy(ctx, url, body, m, logger, sessionID, usage, retryBudget, true)
 }

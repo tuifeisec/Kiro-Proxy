@@ -115,7 +115,41 @@ func (r *Router) StageRoutingEnabled() bool {
 func (r *Router) Resolve(modelID string) *Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.resolveLocked(modelID, true)
+}
 
+// ResolveConfigured 按普通 Kiro 匹配顺序解析已启用的配置，包含模型组 ID；
+// 未知标识不回退首模型，Auto 由其专用路由处理。
+func (r *Router) ResolveConfigured(modelID string) *Route {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if strings.EqualFold(modelID, "auto") || strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	return r.resolveLocked(modelID, false)
+}
+
+// HasConfiguredTarget 区分本地配置与原厂标识；停用或无可用成员的配置仍属本地。
+func (r *Router) HasConfiguredTarget(modelID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if strings.EqualFold(modelID, "auto") || strings.TrimSpace(modelID) == "" {
+		return false
+	}
+	for _, group := range r.groups {
+		if group.ID == modelID || group.Name == modelID {
+			return true
+		}
+	}
+	for _, model := range r.models {
+		if model.ID == modelID || model.Name == modelID || model.ModelID == modelID {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Router) resolveLocked(modelID string, allowFallback bool) *Route {
 	if strings.EqualFold(modelID, "auto") {
 		return r.resolveAutoLocked(modelID)
 	}
@@ -179,7 +213,7 @@ func (r *Router) Resolve(modelID string) *Route {
 	}
 
 	// 未找到精确匹配时，用第一条可用模型（让 classifier 等请求也能走通）
-	if fallback != nil {
+	if allowFallback && fallback != nil {
 		return fallback
 	}
 	return nil

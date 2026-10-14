@@ -74,7 +74,11 @@ func TestStageRawRuntimeInterceptorRoutesAndFollowsStageBoundaries(t *testing.T)
 			t.Fatalf("raw response was transformed/failed: %d %s", resp.Code, resp.Body.String())
 		}
 		got := <-env.requests
-		if got.Path != "/v1/responses" || got.Model != tc.want || got.PromptCacheKey != "client-stable" || len(got.WorkflowHeaderValues) != 0 {
+		wantPath := "/v1/chat/completions"
+		if tc.want == "upstream-shared-responses" {
+			wantPath = "/v1/responses"
+		}
+		if got.Path != wantPath || got.Model != tc.want || got.PromptCacheKey != "client-stable" || len(got.WorkflowHeaderValues) != 0 {
 			t.Fatalf("unexpected outgoing route: %+v", got)
 		}
 	}
@@ -107,7 +111,7 @@ func TestStageRawRuntimeBoundaryAndPrivateMetadataRemoval(t *testing.T) {
 		capture bool
 	}{
 		{"no header", rawStageRequest(t, "auto", "raw-boundary", "", 0), false},
-		{"manual", rawStageRequest(t, "manual", "raw-boundary", "plan", 0), false},
+		{"official model", rawStageRequest(t, "official-model", "raw-boundary", "plan", 0), false},
 		{"capture", rawStageRequest(t, "auto", "raw-boundary", "plan", 0), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +127,7 @@ func TestStageRawRuntimeBoundaryAndPrivateMetadataRemoval(t *testing.T) {
 			if len(observedHeader.Values(converter.WorkflowStageHeader)) > 0 {
 				t.Fatal("private header leaked")
 			}
-			if tc.name != "no header" && strings.Contains(string(observedBody), "kiro:proxy_") {
+			if strings.Contains(string(observedBody), "kiro:proxy_") {
 				t.Fatalf("private metadata leaked: %s", observedBody)
 			}
 		})

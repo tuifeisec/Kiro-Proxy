@@ -18,8 +18,9 @@ import (
 )
 
 // ForwardRawResponses forwards a native OpenAI Responses request for a fixed
-// Auto target. It intentionally leaves the request and response
-// protocol untouched apart from the documented local routing fields.
+// Auto target or an explicitly selected local model/group. Native Responses
+// keeps its protocol; explicitly configured Chat Completions is adapted at the
+// upstream boundary.
 func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route *router.Route, logger *TrafficLogger) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("raw Responses request is nil")
@@ -30,7 +31,7 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 	if route == nil || route.Model == nil && route.Group == nil {
 		return nil, fmt.Errorf("raw Responses route has no selected model")
 	}
-	if route.AutoMode != store.AutoRoutingModeStageFixed && route.AutoMode != store.AutoRoutingModeDutyFixed {
+	if (strings.EqualFold(pre.SourceModel, "auto") || route.AutoMode != "") && route.AutoMode != store.AutoRoutingModeStageFixed && route.AutoMode != store.AutoRoutingModeDutyFixed {
 		return nil, fmt.Errorf("raw Responses requires a fixed Auto route")
 	}
 	bindAutoReasoningEffort(pre, route, nil)
@@ -63,12 +64,9 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		return nil, fmt.Errorf("raw Responses only supports provider openai; got %q", model.Provider)
 	}
 
-	upstreamURL, err := localCompatUpstreamURL(localCompatResponses, model)
+	upstreamURL, err := rawResponsesCandidateURL(model)
 	if err != nil {
 		return nil, fmt.Errorf("resolve raw Responses upstream URL: %w", err)
-	}
-	if !isOpenAIResponsesUpstream(model, upstreamURL) {
-		return nil, fmt.Errorf("raw Responses requires an OpenAI upstream endpoint ending in /responses")
 	}
 
 	body := pre.Body
@@ -78,7 +76,7 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 			return nil, fmt.Errorf("read raw Responses request body: %w", err)
 		}
 	}
-	upstreamBody, err := prepareRawResponsesBody(body, pre, model)
+	upstreamBody, err := prepareRawResponsesUpstreamBody(body, pre, model)
 	if err != nil {
 		return nil, err
 	}
@@ -129,17 +127,23 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 }
 
 func rawResponsesCandidateURL(model *store.Model) (string, error) {
-	if model == nil || model.Provider != "openai" {
-		return "", fmt.Errorf("raw Responses only supports provider openai")
-	}
-	endpoint, err := localCompatUpstreamURL(localCompatResponses, model)
+	endpoint, _, err := rawResponsesUpstreamURL(model)
+	return endpoint, err
+}
+
+func prepareRawResponsesUpstreamBody(body []byte, pre *Preflight, model *store.Model) ([]byte, error) {
+	prepared, err := prepareRawResponsesBody(body, pre, model)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if !isOpenAIResponsesUpstream(model, endpoint) {
-		return "", fmt.Errorf("raw Responses requires an OpenAI upstream endpoint ending in /responses")
+	_, chat, err := rawResponsesUpstreamURL(model)
+	if err != nil {
+		return nil, err
 	}
-	return endpoint, nil
+	if chat {
+		return prepareRawResponsesChatBody(prepared, model)
+	}
+	return prepared, nil
 }
 
 // A group candidate sends once; the shared scheduler owns member/status
@@ -160,6 +164,28 @@ func (f *Forwarder) sendRawGroupCandidate(ctx context.Context, endpoint string, 
 }
 
 func (f *Forwarder) finalizeRawResponses(ctx context.Context, resp *http.Response, usage *requestUsageRecorder, model *store.Model, endpoint string, lease *modelLease, onOutcome func(converter.StreamOutcome), contentHook func(time.Time, string)) (*http.Response, error) {
+	_, chat, err := rawResponsesUpstreamURL(model)
+	if err == nil && chat && resp.Body != nil {
+		var adapted *http.Response
+		adapted, err = adaptRawChatResponse(ctx, resp)
+		if err == nil {
+			resp = adapted
+		}
+	}
+	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		usage.finish(http.StatusBadGateway, localCompatUsage{}, err.Error())
+		f.recordRawResponsesStats(model, localCompatUsage{}, http.StatusBadGateway, err.Error(), ctx)
+		if lease != nil {
+			lease.release()
+		}
+		if onOutcome != nil {
+			onOutcome(converter.StreamOutcomeUpstreamProtocolFailure)
+		}
+		return nil, err
+	}
 	if resp.Body == nil {
 		usage.finish(resp.StatusCode, localCompatUsage{}, "upstream response has no body")
 		f.recordRawResponsesStats(model, localCompatUsage{}, resp.StatusCode, "upstream response has no body", ctx)
@@ -287,7 +313,7 @@ func prepareRawResponsesBody(body []byte, pre *Preflight, model *store.Model) ([
 		}
 	}
 
-	cleaned, err := stripRawWorkflowMetadata(body)
+	cleaned, err := stripRawUpstreamKiroContext(body)
 	if err != nil {
 		return nil, err
 	}
@@ -387,6 +413,7 @@ type rawResponsesUsageBody struct {
 	eventType   string
 	terminal    bool
 	failure     bool
+	failureInfo string
 	dropping    bool
 	lease       *modelLease
 	finalized   bool
@@ -495,26 +522,12 @@ func (b *rawResponsesUsageBody) consumeSSELineLocked(line []byte) {
 		return
 	}
 	mergeLocalCompatUsage(&b.localUsage, localCompatResponses, data)
-	var event struct {
-		Type     string          `json:"type"`
-		Error    json.RawMessage `json:"error"`
-		Response json.RawMessage `json:"response"`
-	}
-	if json.Unmarshal(data, &event) == nil {
-		eventType := event.Type
-		if eventType == "" {
-			eventType = b.eventType
-		}
-		if len(event.Error) > 0 && !bytes.Equal(bytes.TrimSpace(event.Error), []byte("null")) {
-			b.failure = true
-			b.terminal = true
-		}
-		switch eventType {
-		case "response.completed":
-			b.terminal = true
-		case "response.failed", "response.incomplete", "error":
-			b.failure = true
-			b.terminal = true
+	terminal, failure, detail := classifyRawResponsesTerminal(b.eventType, data)
+	b.terminal = b.terminal || terminal
+	if failure {
+		b.failure = true
+		if b.failureInfo == "" {
+			b.failureInfo = detail
 		}
 	}
 	b.eventType = ""
@@ -533,27 +546,18 @@ func (b *rawResponsesUsageBody) finishEOF() {
 			b.pending = nil
 		}
 		if b.failure {
-			errorMessage = "raw Responses stream reported failure"
+			errorMessage = b.failureInfo
 		} else if !b.terminal {
 			errorMessage = "raw Responses stream ended without a terminal event"
 		}
 	} else {
 		mergeLocalCompatUsage(&b.localUsage, localCompatResponses, b.jsonBody)
-		// Group health requires a real terminal response, never just HTTP 200.
-		if b.onOutcome != nil && b.status < http.StatusBadRequest {
-			var response struct {
-				Status string          `json:"status"`
-				Error  json.RawMessage `json:"error"`
-			}
-			if json.Unmarshal(b.jsonBody, &response) == nil {
-				b.terminal = response.Status == "completed" || response.Status == "failed" || response.Status == "incomplete"
-				b.failure = response.Status == "failed" || response.Status == "incomplete" || rawJSONNonEmpty(response.Error)
-			}
-			if b.failure {
-				errorMessage = "raw Responses stream reported failure"
-			} else if !b.terminal {
-				errorMessage = "raw Responses stream ended without a terminal event"
-			}
+		b.terminal, b.failure, b.failureInfo = classifyRawResponsesTerminal("", b.jsonBody)
+		if b.failure {
+			errorMessage = b.failureInfo
+		} else if b.onOutcome != nil && b.status < http.StatusBadRequest && !b.terminal {
+			// Group health requires a real terminal response, never just HTTP 200.
+			errorMessage = "raw Responses stream ended without a terminal event"
 		}
 	}
 	b.mu.Unlock()
@@ -573,7 +577,7 @@ func (b *rawResponsesUsageBody) finish(errorMessage string) {
 		clientCanceled := false
 		switch {
 		case observedFailure:
-			errorMessage = "raw Responses stream reported failure"
+			errorMessage = b.failureInfo
 		case ctxErr != nil:
 			errorMessage = ctxErr.Error()
 			clientCanceled = true

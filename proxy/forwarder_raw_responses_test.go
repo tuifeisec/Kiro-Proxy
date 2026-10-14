@@ -185,12 +185,12 @@ func TestForwardRawResponsesPreservesRawSSEAndObservesUsage(t *testing.T) {
 	if outboundStage != "" {
 		t.Fatalf("private workflow header reached upstream: %q", outboundStage)
 	}
-	for _, forbidden := range []string{"kiro:proxy_continuation_id", "kiro:proxy_current_tool_results", "private-id"} {
+	for _, forbidden := range []string{"metadata", "kiro:conversation_id", "kiro:agent_mode", "kiro:proxy_continuation_id", "kiro:proxy_current_tool_results", "private-id"} {
 		if bytes.Contains(outboundBody, []byte(forbidden)) {
 			t.Fatalf("private metadata leaked upstream (%s): %s", forbidden, outboundBody)
 		}
 	}
-	for _, preserved := range []string{"9007199254740993", "keep-this-key", "kiro:conversation_id", "kiro:agent_mode", "first", "second", `"effort":"high"`, `"summary":"auto"`} {
+	for _, preserved := range []string{"9007199254740993", "keep-this-key", "first", "second", `"effort":"high"`, `"summary":"auto"`} {
 		if !bytes.Contains(outboundBody, []byte(preserved)) {
 			t.Fatalf("request field %q was not preserved or applied: %s", preserved, outboundBody)
 		}
@@ -838,7 +838,7 @@ func TestRawResponsesObservedUpstreamFailureWinsOverCancellation(t *testing.T) {
 	cancel()
 	<-ctx.Done()
 	_ = observed.Close()
-	assertRawResponsesFinishAccounting(t, db, stats, f, model, false, true, "raw Responses stream reported failure")
+	assertRawResponsesFinishAccounting(t, db, stats, f, model, false, true, "raw Responses stream reported failure (event=response.failed)")
 	if got := underlying.closeCalls.Load(); got != 1 {
 		t.Fatalf("underlying body Close calls=%d want 1", got)
 	}

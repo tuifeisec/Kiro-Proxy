@@ -89,8 +89,8 @@ func (s *Server) setupInterceptor() {
 		protocol := router.DetectProtocol(host, path)
 		var preReadBody []byte
 		if protocol == "kiro-runtime-responses" {
-			// 只有同步桥接候选进入新适配；普通 raw 请求仍按原行为放行。
-			if req.Method != http.MethodPost || len(workflowHeaders) == 0 {
+			// 手选本地模型不依赖阶段桥接；Auto 仍只接管带头候选。
+			if req.Method != http.MethodPost {
 				protocol = "kiro-passthrough"
 			} else {
 				var err error
@@ -99,21 +99,33 @@ func (s *Server) setupInterceptor() {
 					return req, errorResponse(req, requestBodyErrorStatus(err), "invalid request body")
 				}
 				clean, err := stripRawWorkflowMetadata(preReadBody)
-				if err != nil {
+				if err != nil && !IsCaptureMode() {
 					return req, errorResponse(req, http.StatusBadRequest, "invalid raw Responses body")
 				}
-				req.Body = io.NopCloser(bytes.NewReader(clean))
-				req.ContentLength = int64(len(clean))
-				req.Header.Set("Content-Length", fmt.Sprint(len(clean)))
+				if err == nil {
+					req.Body = io.NopCloser(bytes.NewReader(clean))
+					req.ContentLength = int64(len(clean))
+					req.Header.Set("Content-Length", fmt.Sprint(len(clean)))
+				}
 				var model struct {
 					Model string `json:"model"`
 				}
-				if json.Unmarshal(preReadBody, &model) != nil || !strings.EqualFold(model.Model, "auto") {
-					// 手动选择不参与阶段策略；可关联时清除本 scope 的旧 Auto 锁。
-					if conv, err := converter.ParseKiroRawResponsesRouting(preReadBody); err == nil {
-						s.router.ForgetAuto(conv)
-					}
+				if IsCaptureMode() {
+					// 抓包只观察，不以生成协议的解析规则拒绝原请求。
 					protocol = "kiro-passthrough"
+				} else if json.Unmarshal(preReadBody, &model) != nil {
+					return req, errorResponse(req, http.StatusBadRequest, "invalid raw Responses model")
+				} else {
+					isAuto := strings.EqualFold(model.Model, "auto")
+					if isAuto && len(workflowHeaders) == 0 || !isAuto && !s.router.HasConfiguredTarget(model.Model) {
+						if !isAuto {
+							// 原厂模型仍需清理可关联执行域，本地模型在路由时清理。
+							if conv, err := converter.ParseKiroRawResponsesManualRouting(preReadBody); err == nil {
+								s.router.ForgetAuto(conv)
+							}
+						}
+						protocol = "kiro-passthrough"
+					}
 				}
 			}
 		}
@@ -375,6 +387,20 @@ func (s *Server) parseRequest(req *http.Request, protocol string, preReadBody []
 		return pre, nil
 	}
 	if protocol == "kiro-runtime-responses" {
+		var model struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(pre.Body, &model); err != nil {
+			return nil, err
+		}
+		if !strings.EqualFold(model.Model, "auto") {
+			conv, err := converter.ParseKiroRawResponsesManualRouting(pre.Body)
+			if err != nil {
+				return nil, err
+			}
+			pre.Conv, pre.SourceModel, pre.ConversationID = conv, conv.ModelID, conv.ConversationID
+			return pre, nil
+		}
 		conv, err := converter.ParseKiroRawResponsesRouting(pre.Body)
 		if err != nil {
 			return nil, err
@@ -517,6 +543,9 @@ func (s *Server) resolveMainRoute(pre *Preflight) (*router.Route, error) {
 	}
 	if pre.Conv != nil && !pre.IsClassifier {
 		s.router.ForgetAuto(pre.Conv)
+	}
+	if pre.Protocol == "kiro-runtime-responses" {
+		return s.router.ResolveConfigured(pre.SourceModel), nil
 	}
 	return s.router.Resolve(pre.SourceModel), nil
 }
