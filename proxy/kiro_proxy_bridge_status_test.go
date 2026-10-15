@@ -86,6 +86,7 @@ func TestKiroBridgeStatusRecordRequiresTrustedReceipt(t *testing.T) {
 	}
 	for _, tc := range []struct{ adapter, installation string }{
 		{kiroStagePreviousStructuralAdapterHash(), "record_previous"},
+		{kiroStage20261015StructuralAdapterHash(), "record_previous"},
 		{kiroStageSHA256([]byte("unknown adapter")), "unknown"},
 	} {
 		status := classifyKiroBridge(bridgeStatusCandidate(t, tc.adapter), "mock/extension.js", nil,

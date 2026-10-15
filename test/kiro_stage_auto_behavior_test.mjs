@@ -409,7 +409,7 @@ async function replayActualRegisteredChild(runtime){
  const functions=topLevelNodes(ast).filter(node=>node.type==='FunctionDeclaration'&&semanticName(node.id?.name,originalByActual)==='I3r')
  assert.equal(functions.length,1)
  const fn=functions[0]
- for(const scenario of [{taskType:'investigation'}, {}, {manual:true}, {disabled:true,manual:true}]){
+ for(const scenario of [{taskType:'investigation'}, {}, {manual:true}, {manual:true,parentModel:'switched-model'}, {disabled:true,manual:true}]){
   let built,child,nativeCalls=0
   const globals={
    I3e:()=>({modelId:'pinned-model'}),tm:()=> 'mock-conversation',_3r:x=>x,Tye:x=>x,sSt:x=>x,
@@ -426,7 +426,7 @@ async function replayActualRegisteredChild(runtime){
   const services={kiroProxyAutoDomain:!scenario.manual,kiroProxyRoute:route,modelRouting:{subAgentStartCategory(){nativeCalls++;return 'native-category'}}}
   const promptContext={specWorkflow:{workflowId:'wf-parent',nodeId:'review'},specSkipClarificationEnabled:false}
   const parent={getEventSink:()=>({}),workspace:{withToolPolicy:()=>({withContext:()=>({})})},sessionServices:services,getAgentContext:()=>({}),getAgentMode:()=> 'workflow',promptContext,
-   model:{modelId:'parent-model',thinkingType:'balanced',choices:{effortLevel:'balanced'}},abortController:{signal:{}},subExecutionDepth:1,chatSessionId:'parent-chat',autonomyMode:'auto',steering:[],repositories:[],knowledgeListing:[]}
+   model:{modelId:scenario.parentModel??'parent-model',thinkingType:'balanced',choices:{effortLevel:'balanced'}},abortController:{signal:{}},subExecutionDepth:1,chatSessionId:'parent-chat',autonomyMode:'auto',steering:[],repositories:[],knowledgeListing:[]}
   const messages=[{kind:'mock-context'}]
   const result=await context.actualRegisteredChild({definition:{id:'wf-reviewer',model:'pinned-model',prompt:'review'},caller:'InvokeSubAgent',agentName:'wf-reviewer',prompt:'review',registry:{},contextProviderRegistry:{},parentExecution:parent,contextMessages:messages,executionId:'child-run',taskType:scenario.taskType,categoryModelId:'category-strong',events:{forwardToParent:true}})
   assert.equal(result.kind,'fault')
@@ -434,8 +434,8 @@ async function replayActualRegisteredChild(runtime){
   assert.equal(built.contextMessages,messages)
   assert.equal(built.executionId,'child-run')
   assert.equal(built.specWorkflow,promptContext.specWorkflow)
-  assert.equal(child.model.modelId,scenario.manual?'native-category':'auto')
-  assert.equal(nativeCalls,scenario.manual?1:0)
+  assert.equal(child.model.modelId,scenario.disabled?'native-category':scenario.manual?parent.model.modelId:'auto')
+  assert.equal(nativeCalls,scenario.disabled?1:0)
   assert.equal(child.sessionServices.kiroProxyRoute.taskType,scenario.taskType??route.taskType)
   assert.equal(child.sessionServices.kiroProxyRoute.executionId,scenario.taskType?'child-run':route.executionId)
   assert.equal(services.kiroProxyRoute,route)
@@ -443,6 +443,31 @@ async function replayActualRegisteredChild(runtime){
   else assert.notEqual(child.sessionServices,services)
  }
  context.process.env.KIRO_PROXY_STAGE_BRIDGE='1'
+}
+
+function replayActualWorkflowModelSelection(runtime, family) {
+ const { ast, source, context, originalByActual } = runtime
+ const canonicalName = family === 'legacy' ? 'P8' : 'aY'
+ const functions = topLevelNodes(ast).filter(node =>
+  node.type === 'FunctionDeclaration' && semanticName(node.id?.name, originalByActual) === canonicalName)
+ assert.equal(functions.length, 1, `expected one actual ${canonicalName} workflow selector`)
+ const fn = functions[0]
+ const normalizerName = family === 'legacy' ? 'Jve' : 'O2'
+ visit(fn, node => {
+  if (node.type !== 'Identifier') return
+  if (semanticName(node.name, originalByActual) === normalizerName) context[node.name] = value => value || undefined
+ })
+ new Script(`${source.slice(fn.start, fn.end)};globalThis.actualWorkflowModelSelection=${fn.id.name}`).runInContext(context)
+ const select = (parentModelId, stepModelId, workflowModelId, enabled) => {
+  context.process.env.KIRO_PROXY_STAGE_BRIDGE = enabled ? '1' : '0'
+  return context.actualWorkflowModelSelection({ modelId: stepModelId }, { parentModelId, modelId: workflowModelId })
+ }
+ assert.equal(select('auto', 'step-pinned', 'workflow-pinned', true), 'auto')
+ assert.equal(select('model-a', 'step-pinned', 'workflow-pinned', true), 'model-a')
+ assert.equal(select('model-b', 'step-pinned', 'workflow-pinned', true), 'model-b')
+ assert.equal(select('model-b', 'step-pinned', 'auto', true), 'model-b')
+ assert.equal(select('model-b', 'step-pinned', 'workflow-pinned', false), 'step-pinned')
+ context.process.env.KIRO_PROXY_STAGE_BRIDGE = '1'
 }
 
 function mockFs() {
@@ -703,6 +728,7 @@ test('compiler candidates preserve Auto metadata, stage transport, source identi
    await t.test(`${filename}: AST-extracted helpers replay Auto protocol and source I/O`, async () => {
     await replayMetadataAndTransport(runtime)
     await replayActualTransportHooks(runtime)
+    if(variant==='original'||variant==='alpha')replayActualWorkflowModelSelection(runtime,family)
     if(family==='native'&&(variant==='original'||variant==='alpha'))await replayActualRegisteredChild(runtime)
     await replaySourceFilesAndChildIdentity(runtime, recipes)
     const seen = new Set()

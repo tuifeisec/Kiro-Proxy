@@ -9,8 +9,8 @@ import (
 )
 
 func TestKiroStageStructuralProfilesIdentity(t *testing.T) {
-	const expectedHash = "ba9faf169eea9bfb998e16c47ea4883237984ae6635c10409583cab6553cefa7"
-	if len(kiroStageStructuralProfiles) != 2179320 || kiroStageSHA256(kiroStageStructuralProfiles) != expectedHash {
+	const expectedHash = "f7c455af0dc03dc185a99ea5a192c34364230b737e6457aa4e41fb672d67b37b"
+	if len(kiroStageStructuralProfiles) != 2181579 || kiroStageSHA256(kiroStageStructuralProfiles) != expectedHash {
 		t.Fatal("generated final profiles changed byte identity")
 	}
 	profiles, err := loadKiroStageStructuralProfiles()

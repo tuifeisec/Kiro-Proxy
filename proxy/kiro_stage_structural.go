@@ -18,6 +18,11 @@ var kiroStagePreviousStructuralProfiles []byte
 
 const kiroStagePreviousStructuralAdapterSHA256 = "3cfca7cb7f4808d82bb54141b203ab4900852afc86b1f808ac43e6a38259445d"
 
+//go:embed kiro_stage_structural_profiles_20261015.json
+var kiroStage20261015StructuralProfiles []byte
+
+const kiroStage20261015StructuralAdapterSHA256 = "ba9faf169eea9bfb998e16c47ea4883237984ae6635c10409583cab6553cefa7"
+
 type kiroStagePatternToken struct {
 	Key     string `json:"key"`
 	Binding string `json:"binding,omitempty"`
@@ -97,16 +102,33 @@ func kiroStagePreviousStructuralAdapterHash() string {
 	return kiroStagePreviousStructuralAdapterSHA256
 }
 
-// 历史适配器只参与旧安装的逐字节复现校验，不能用于生成新安装。
-func loadKiroStagePreviousStructuralProfiles() ([]kiroStageStructureProfile, error) {
-	if kiroStageSHA256(kiroStagePreviousStructuralProfiles) != kiroStagePreviousStructuralAdapterSHA256 {
-		return nil, fmt.Errorf("历史 Kiro 结构适配器摘要不匹配")
+func kiroStage20261015StructuralAdapterHash() string {
+	return kiroStage20261015StructuralAdapterSHA256
+}
+
+func loadKiroStageHistoricalStructuralProfiles(hash string) ([]kiroStageStructureProfile, error) {
+	var data []byte
+	switch hash {
+	case kiroStagePreviousStructuralAdapterSHA256:
+		data = kiroStagePreviousStructuralProfiles
+	case kiroStage20261015StructuralAdapterSHA256:
+		data = kiroStage20261015StructuralProfiles
+	default:
+		return nil, fmt.Errorf("历史 Kiro 结构适配器身份不受支持: %s", hash)
+	}
+	if kiroStageSHA256(data) != hash {
+		return nil, fmt.Errorf("历史 Kiro 结构适配器摘要不匹配: %s", hash)
 	}
 	var profiles []kiroStageStructureProfile
-	if err := json.Unmarshal(kiroStagePreviousStructuralProfiles, &profiles); err != nil {
+	if err := json.Unmarshal(data, &profiles); err != nil {
 		return nil, fmt.Errorf("读取历史 Kiro 结构适配器失败: %w", err)
 	}
 	return profiles, nil
+}
+
+// 历史适配器只参与旧安装的逐字节复现校验，不能用于生成新安装。
+func loadKiroStagePreviousStructuralProfiles() ([]kiroStageStructureProfile, error) {
+	return loadKiroStageHistoricalStructuralProfiles(kiroStagePreviousStructuralAdapterSHA256)
 }
 
 func buildKiroStageStructuralCandidate(original []byte) ([]byte, error) {

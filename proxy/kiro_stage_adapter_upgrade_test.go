@@ -100,6 +100,52 @@ func TestKiroStagePreviousStructuralAdapterUpgrade(t *testing.T) {
 	}
 }
 
+func TestKiroStage20261015StructuralAdapterUpgrade(t *testing.T) {
+	originalPath := os.Getenv("KIRO_STAGE_TEST_BUNDLE_130")
+	if originalPath == "" {
+		t.Skip("KIRO_STAGE_TEST_BUNDLE_130 is required")
+	}
+	original, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := kiroStage20261015StructuralAdapterHash()
+	profiles, err := loadKiroStageHistoricalStructuralProfiles(oldHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCandidate, err := buildKiroStageStructuralCandidateWithProfiles(original, profiles, oldHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, record, found, err := parseKiroStageStructuralCandidate(oldCandidate); err != nil || !found || record.AdapterSHA256 != oldHash {
+		t.Fatalf("old candidate identity: found=%t adapter=%q err=%v", found, record.AdapterSHA256, err)
+	}
+	executable, target := writeStagePreflightFixture(t, oldCandidate)
+	plan, err := prepareKiroStageInstallWith(executable, nil, buildKiroStageStructuralCandidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.expectedHash != kiroStageSHA256(oldCandidate) || len(plan.candidate) == 0 || plan.candidateHash == plan.expectedHash {
+		t.Fatalf("old candidate was not upgraded: %+v", plan)
+	}
+	if _, record, found, err := parseKiroStageStructuralCandidate(plan.candidate); err != nil || !found || record.AdapterSHA256 != kiroStageStructuralAdapterHash() {
+		t.Fatalf("new candidate identity: found=%t adapter=%q err=%v", found, record.AdapterSHA256, err)
+	}
+	result, err := installKiroStageBridge(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup, err := os.ReadFile(result.backupPath)
+	if err != nil || !bytes.Equal(backup, oldCandidate) {
+		t.Fatalf("backup does not preserve old candidate: %v", err)
+	}
+	installed, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(installed, plan.candidate) {
+		t.Fatalf("installed candidate differs: %v", err)
+	}
+}
+
 func TestKiroStageStructuralAdapterRejectsUnknownIdentity(t *testing.T) {
 	original := []byte("const sentinel=1;\n")
 	payload := []byte("const sentinel=2;\n")

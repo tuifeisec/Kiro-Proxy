@@ -190,7 +190,7 @@ func classifyKiroBridge(current []byte, target string, manifests []kiroStageMani
 				status.Message = "当前桥接文件已有本验证器的可信核验；运行中的 Kiro 是否加载仍需请求验证。"
 			}
 		}
-	case kiroStagePreviousStructuralAdapterHash():
+	case kiroStagePreviousStructuralAdapterHash(), kiroStage20261015StructuralAdapterHash():
 		status.Installation = "record_previous"
 		status.Message = "检测到旧桥接记录，尚未应用本版修复；重启时会严格预检后升级。"
 	default:

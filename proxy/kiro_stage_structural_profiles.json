@@ -7490,7 +7490,7 @@
         ],
         "first": 0,
         "last": 44,
-        "after": "function P8(t,e){return kiroProxyGlobalV3_process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"\u0026\u0026(e.parentModelId===\"auto\"||e.modelId===\"auto\")?\"auto\":Jve(t.modelId)??Jve(e.modelId)??Jve(e.parentModelId)}",
+        "after": "function P8(t,e){return process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"?(e.parentModelId===\"auto\"?\"auto\":Jve(e.parentModelId)??(e.modelId===\"auto\"?\"auto\":Jve(t.modelId)??Jve(e.modelId))):Jve(t.modelId)??Jve(e.modelId)??Jve(e.parentModelId)}",
         "captures": [
           {
             "start": 9,
@@ -7511,44 +7511,81 @@
             "declaration": true
           },
           {
-            "start": 86,
-            "end": 87,
+            "start": 67,
+            "end": 68,
             "binding": "b:72246:e"
           },
           {
-            "start": 112,
-            "end": 113,
-            "binding": "b:72246:e"
-          },
-          {
-            "start": 139,
-            "end": 142,
+            "start": 99,
+            "end": 102,
             "binding": "b:1:Jve"
           },
           {
-            "start": 143,
-            "end": 144,
+            "start": 103,
+            "end": 104,
+            "binding": "b:72246:e"
+          },
+          {
+            "start": 122,
+            "end": 123,
+            "binding": "b:72246:e"
+          },
+          {
+            "start": 148,
+            "end": 151,
+            "binding": "b:1:Jve"
+          },
+          {
+            "start": 152,
+            "end": 153,
             "binding": "b:72246:t"
           },
           {
-            "start": 155,
-            "end": 158,
+            "start": 164,
+            "end": 167,
             "binding": "b:1:Jve"
           },
           {
-            "start": 159,
-            "end": 160,
+            "start": 168,
+            "end": 169,
             "binding": "b:72246:e"
           },
           {
-            "start": 171,
-            "end": 174,
+            "start": 181,
+            "end": 184,
             "binding": "b:1:Jve"
           },
           {
-            "start": 175,
-            "end": 176,
+            "start": 185,
+            "end": 186,
+            "binding": "b:72246:t"
+          },
+          {
+            "start": 197,
+            "end": 200,
+            "binding": "b:1:Jve"
+          },
+          {
+            "start": 201,
+            "end": 202,
             "binding": "b:72246:e"
+          },
+          {
+            "start": 213,
+            "end": 216,
+            "binding": "b:1:Jve"
+          },
+          {
+            "start": 217,
+            "end": 218,
+            "binding": "b:72246:e"
+          }
+        ],
+        "globals": [
+          {
+            "start": 24,
+            "end": 31,
+            "name": "process"
           }
         ]
       },
@@ -9044,7 +9081,7 @@
         ],
         "first": 0,
         "last": 25,
-        "after": "let y=f.sessionServices.kiroProxyAutoDomain?\"auto\":t.inline?t.inline.resolvedModelId:yoe(e.model,\"subagent-registered\").modelId",
+        "after": "let y=f.sessionServices.kiroProxyAutoDomain?\"auto\":process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"?f.model.modelId:t.inline?t.inline.resolvedModelId:yoe(e.model,\"subagent-registered\").modelId",
         "captures": [
           {
             "start": 4,
@@ -9058,24 +9095,36 @@
             "binding": "b:72590:f"
           },
           {
-            "start": 51,
-            "end": 52,
+            "start": 93,
+            "end": 94,
+            "binding": "b:72590:f"
+          },
+          {
+            "start": 109,
+            "end": 110,
             "binding": "b:72589:t"
           },
           {
-            "start": 60,
-            "end": 61,
+            "start": 118,
+            "end": 119,
             "binding": "b:72589:t"
           },
           {
-            "start": 85,
-            "end": 88,
+            "start": 143,
+            "end": 146,
             "binding": "b:1:yoe"
           },
           {
-            "start": 89,
-            "end": 90,
+            "start": 147,
+            "end": 148,
             "binding": "b:72590:e"
+          }
+        ],
+        "globals": [
+          {
+            "start": 51,
+            "end": 58,
+            "name": "process"
           }
         ]
       },
@@ -48869,7 +48918,7 @@
         ],
         "first": 0,
         "last": 44,
-        "after": "function aY(t,e){return kiroProxyGlobalV3_process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"\u0026\u0026(e.parentModelId===\"auto\"||e.modelId===\"auto\")?\"auto\":O2(t.modelId)??O2(e.modelId)??O2(e.parentModelId)}",
+        "after": "function aY(t,e){return process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"?(e.parentModelId===\"auto\"?\"auto\":O2(e.parentModelId)??(e.modelId===\"auto\"?\"auto\":O2(t.modelId)??O2(e.modelId))):O2(t.modelId)??O2(e.modelId)??O2(e.parentModelId)}",
         "captures": [
           {
             "start": 9,
@@ -48890,44 +48939,81 @@
             "declaration": true
           },
           {
-            "start": 86,
-            "end": 87,
+            "start": 67,
+            "end": 68,
             "binding": "b:76290:e"
           },
           {
-            "start": 112,
-            "end": 113,
-            "binding": "b:76290:e"
-          },
-          {
-            "start": 139,
-            "end": 141,
+            "start": 99,
+            "end": 101,
             "binding": "b:1:O2"
           },
           {
-            "start": 142,
-            "end": 143,
+            "start": 102,
+            "end": 103,
+            "binding": "b:76290:e"
+          },
+          {
+            "start": 121,
+            "end": 122,
+            "binding": "b:76290:e"
+          },
+          {
+            "start": 147,
+            "end": 149,
+            "binding": "b:1:O2"
+          },
+          {
+            "start": 150,
+            "end": 151,
             "binding": "b:76290:t"
           },
           {
-            "start": 154,
-            "end": 156,
+            "start": 162,
+            "end": 164,
             "binding": "b:1:O2"
           },
           {
-            "start": 157,
-            "end": 158,
+            "start": 165,
+            "end": 166,
             "binding": "b:76290:e"
           },
           {
-            "start": 169,
-            "end": 171,
+            "start": 178,
+            "end": 180,
             "binding": "b:1:O2"
           },
           {
-            "start": 172,
-            "end": 173,
+            "start": 181,
+            "end": 182,
+            "binding": "b:76290:t"
+          },
+          {
+            "start": 193,
+            "end": 195,
+            "binding": "b:1:O2"
+          },
+          {
+            "start": 196,
+            "end": 197,
             "binding": "b:76290:e"
+          },
+          {
+            "start": 208,
+            "end": 210,
+            "binding": "b:1:O2"
+          },
+          {
+            "start": 211,
+            "end": 212,
+            "binding": "b:76290:e"
+          }
+        ],
+        "globals": [
+          {
+            "start": 24,
+            "end": 31,
+            "name": "process"
           }
         ]
       },
@@ -51034,7 +51120,7 @@
         ],
         "first": 18,
         "last": 40,
-        "after": "V=f.sessionServices.kiroProxyAutoDomain?\"auto\":t.categoryModelId??y,te=f.sessionServices.kiroProxyAutoDomain?void 0:f.sessionServices.modelRouting?.subAgentStartCategory(V)",
+        "after": "V=process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"?(f.sessionServices.kiroProxyAutoDomain?\"auto\":f.model.modelId):t.categoryModelId??y,te=process.env.KIRO_PROXY_STAGE_BRIDGE===\"1\"?void 0:f.sessionServices.modelRouting?.subAgentStartCategory(V)",
         "captures": [
           {
             "start": 0,
@@ -51043,40 +51129,52 @@
             "declaration": true
           },
           {
-            "start": 2,
-            "end": 3,
+            "start": 45,
+            "end": 46,
             "binding": "b:77023:f"
           },
           {
-            "start": 47,
-            "end": 48,
+            "start": 90,
+            "end": 91,
+            "binding": "b:77023:f"
+          },
+          {
+            "start": 107,
+            "end": 108,
             "binding": "b:77022:t"
           },
           {
-            "start": 66,
-            "end": 67,
+            "start": 126,
+            "end": 127,
             "binding": "b:77024:y"
           },
           {
-            "start": 68,
-            "end": 70,
+            "start": 128,
+            "end": 130,
             "binding": "b:77024:te",
             "declaration": true
           },
           {
-            "start": 71,
-            "end": 72,
+            "start": 180,
+            "end": 181,
             "binding": "b:77023:f"
           },
           {
-            "start": 116,
-            "end": 117,
-            "binding": "b:77023:f"
-          },
-          {
-            "start": 170,
-            "end": 171,
+            "start": 234,
+            "end": 235,
             "binding": "b:77024:V"
+          }
+        ],
+        "globals": [
+          {
+            "start": 2,
+            "end": 9,
+            "name": "process"
+          },
+          {
+            "start": 131,
+            "end": 138,
+            "name": "process"
           }
         ]
       },

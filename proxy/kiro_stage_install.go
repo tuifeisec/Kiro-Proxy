@@ -306,8 +306,8 @@ func prepareKiroStageInstallWith(executable string, cache *kiroStageVerification
 				verification:  cache,
 				adapterHash:   adapterHash,
 			}, nil
-		case kiroStagePreviousStructuralAdapterHash():
-			previousProfiles, err := loadKiroStagePreviousStructuralProfiles()
+		case kiroStagePreviousStructuralAdapterHash(), kiroStage20261015StructuralAdapterHash():
+			previousProfiles, err := loadKiroStageHistoricalStructuralProfiles(record.AdapterSHA256)
 			if err != nil {
 				return preflightError(err)
 			}
