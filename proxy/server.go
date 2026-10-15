@@ -63,6 +63,7 @@ type Server struct {
 	responsesFallbackMu  sync.Mutex
 	responsesFallback    map[string]fallbackResponseState
 	closeOnce            sync.Once
+	kiroLaunchStatus     kiroLaunchTracker
 }
 
 // NewServer 创建并初始化代理服务器

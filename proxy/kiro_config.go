@@ -33,12 +33,14 @@ func getKiroSettingsPath() string {
 }
 
 type kiroProxyStatus struct {
-	Configured    bool   `json:"configured"`     // 是否已配置为我们的代理
-	CurrentProxy  string `json:"current_proxy"`  // 当前代理值
-	TargetProxy   string `json:"target_proxy"`   // 我们的代理地址
-	OriginalProxy string `json:"original_proxy"` // 原始代理值（配置前备份的）
-	SettingsPath  string `json:"settings_path"`
-	Error         string `json:"error,omitempty"`
+	Configured    bool              `json:"configured"`     // 是否已配置为我们的代理
+	CurrentProxy  string            `json:"current_proxy"`  // 当前代理值
+	TargetProxy   string            `json:"target_proxy"`   // 我们的代理地址
+	OriginalProxy string            `json:"original_proxy"` // 原始代理值（配置前备份的）
+	SettingsPath  string            `json:"settings_path"`
+	Error         string            `json:"error,omitempty"`
+	ProxyMode     string            `json:"proxy_mode"`
+	StageBridge   *kiroBridgeStatus `json:"stage_bridge,omitempty"`
 }
 
 type kiroProxyResult struct {
@@ -62,15 +64,15 @@ func (s *Server) handleKiroProxy(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		status := getKiroProxyStatus(targetProxy)
+		status := s.kiroProxyStatus(targetProxy)
 		json.NewEncoder(w).Encode(status)
 
 	case http.MethodPost:
-		result := configureKiroProxyAt(targetProxy, s.logger, getKiroSettingsPath(), s.prepareKiroStageLaunch, launchPreparedKiro)
+		result := configureKiroProxyAt(targetProxy, s.logger, getKiroSettingsPath(), s.prepareKiroStageLaunch, s.launchKiroWithStatus)
 		json.NewEncoder(w).Encode(result)
 
 	case http.MethodDelete:
-		result := restoreKiroProxyAt(s.logger, getKiroSettingsPath(), s.prepareKiroStageLaunch, launchPreparedKiro)
+		result := restoreKiroProxyAt(s.logger, getKiroSettingsPath(), s.prepareKiroStageLaunch, s.launchKiroWithStatus)
 		json.NewEncoder(w).Encode(result)
 
 	default:
@@ -94,7 +96,7 @@ func (s *Server) handleKiroRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(restartKiroAt(s.logger, fmt.Sprintf("http://%s:%d", s.proxyBindHost(), s.cfg.Proxy.Port), getKiroSettingsPath(), s.prepareKiroStageLaunch, launchPreparedKiro))
+	json.NewEncoder(w).Encode(restartKiroAt(s.logger, fmt.Sprintf("http://%s:%d", s.proxyBindHost(), s.cfg.Proxy.Port), getKiroSettingsPath(), s.prepareKiroStageLaunch, s.launchKiroWithStatus))
 }
 
 func getKiroProxyStatus(targetProxy string) kiroProxyStatus {

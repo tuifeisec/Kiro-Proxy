@@ -12,7 +12,20 @@ func (s *Server) prepareKiroStageLaunch(injectCA bool) (kiroLaunchPlan, error) {
 	if err != nil {
 		return plan, err
 	}
-	enabled := injectCA && !IsCaptureMode() && s.router.StageRoutingEnabled()
+	mode := GetProxyMode()
+	plan.proxyMode = mode
+	enabled := injectCA && mode == ModeForward && s.router != nil && s.router.StageRoutingEnabled()
+	if s.logger != nil {
+		reason := "Auto 职责路由未启用"
+		if !injectCA {
+			reason = "Kiro 未使用本代理 CA"
+		} else if mode == ModeCapture {
+			reason = "抓包模式，下次启动关闭桥接并跳过安装"
+		} else if enabled {
+			reason = "转发模式且 Auto 职责路由已启用，将预检桥接"
+		}
+		s.logger.Info("kiro-stage-bridge", reason)
+	}
 	if enabled && plan.platform == "windows" {
 		install, err := prepareKiroStageInstall(plan.executable)
 		if err != nil {

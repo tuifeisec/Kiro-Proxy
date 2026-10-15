@@ -19,6 +19,7 @@ type kiroLaunchPlan struct {
 	args         []string
 	env          []string
 	stageInstall *kiroStageInstallPlan
+	proxyMode    string
 }
 
 type kiroLaunchPreparer func(injectCA bool) (kiroLaunchPlan, error)

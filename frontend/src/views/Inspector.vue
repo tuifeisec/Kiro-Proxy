@@ -9,7 +9,7 @@ import IconForward from '../components/icons/IconForward.vue'
 import IconCapture from '../components/icons/IconCapture.vue'
 import IconSettings from '../components/icons/IconSettings.vue'
 import { useToast } from '../composables/useToast.js'
-import { getProxyMode, updateProxyMode } from '../api/settings.js'
+import { getProxyMode, updateProxyMode, restartKiroProxy } from '../api/settings.js'
 import { getLogDetail, updateLogDetail } from '../api/logs.js'
 
 const { messages, connected, trafficLogAllowed, clearMessages, refreshTrafficLogPermission } = useWebSocket()
@@ -22,18 +22,34 @@ const logDetailMode = ref('summary')
 const logMaxBody = ref(65536)
 const showSettings = ref(false)
 const modeSaving = ref(false)
+const restartLoading = ref(false)
+const kiroRestartRequired = ref(false)
+const kiroRestartReason = ref('')
+const kiroRestartError = ref('')
+const modeError = ref('')
 const logDetailSaving = ref(false)
 const settingsError = ref('')
 const { showToast } = useToast()
 
+function assertSuccess(data, fallback) {
+  if (!data || data.ok === false) throw new Error(data?.message || data?.error || fallback)
+  return data
+}
+
+function applyModeStatus(data) {
+  if (data.mode) proxyMode.value = data.mode
+  kiroRestartRequired.value = data.kiro_restart_required === true
+  kiroRestartReason.value = data.kiro_restart_reason || ''
+}
+
 async function fetchMode() {
   try {
-    const data = await getProxyMode()
-    proxyMode.value = data.mode
+    const data = assertSuccess(await getProxyMode(), '读取代理模式失败')
+    applyModeStatus(data)
+    modeError.value = ''
   } catch (e) {
-    settingsError.value = e.message || '读取代理模式失败'
-    // 初始加载时设置面板默认收起，面板内错误不可见，需额外 toast 提示用户。
-    showToast(settingsError.value, { tone: 'error' })
+    modeError.value = e.message || '读取代理模式失败'
+    showToast(modeError.value, { tone: 'error' })
   }
 }
 
@@ -50,18 +66,34 @@ async function fetchLogDetail() {
 }
 
 async function setMode(mode) {
-  if (modeSaving.value || mode === proxyMode.value) return
+  if (modeSaving.value || restartLoading.value || mode === proxyMode.value) return
   modeSaving.value = true
-  settingsError.value = ''
+  modeError.value = ''
   try {
-    const data = await updateProxyMode(mode)
-    proxyMode.value = data.mode || mode
+    const data = assertSuccess(await updateProxyMode(mode), '切换代理模式失败')
+    applyModeStatus({ ...data, mode: data.mode || mode })
     showToast(proxyMode.value === 'capture' ? '已切换为抓包模式' : '已切换为转发模式')
   } catch (e) {
-    settingsError.value = e.message || '切换代理模式失败'
-    showToast(settingsError.value, { tone: 'error' })
+    modeError.value = e.message || '切换代理模式失败'
+    showToast(modeError.value, { tone: 'error' })
   } finally {
     modeSaving.value = false
+  }
+}
+
+async function restartKiroForMode() {
+  if (modeSaving.value || restartLoading.value) return
+  restartLoading.value = true
+  kiroRestartError.value = ''
+  try {
+    const data = assertSuccess(await restartKiroProxy(), '重启 Kiro 失败')
+    showToast(data.message || 'Kiro 重启请求已提交')
+  } catch (e) {
+    kiroRestartError.value = e.message || '重启 Kiro 失败'
+    showToast(kiroRestartError.value, { tone: 'error' })
+  } finally {
+    await fetchMode()
+    restartLoading.value = false
   }
 }
 
@@ -141,7 +173,29 @@ function handleClear() {
       </div>
     </div>
 
+    <div v-if="kiroRestartRequired" class="mb-3 shrink-0 rounded-lg border border-warning-tint-line bg-warning-tint px-3 py-2 text-[12px]" role="status">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="min-w-0 flex-1">
+          <p class="font-semibold text-warning-fg">需要重启 Kiro 同步桥接设置</p>
+          <p class="mt-0.5 text-warning-fg">{{ kiroRestartReason || '当前代理模式需要通过重启 Kiro 同步。' }}</p>
+        </div>
+        <button
+          class="h-8 shrink-0 ui-primary-button px-3 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+          :disabled="modeSaving || restartLoading"
+          @click="restartKiroForMode"
+        >
+          {{ restartLoading ? '重启中...' : '重启 Kiro 以应用模式' }}
+        </button>
+      </div>
+    </div>
+    <p v-if="kiroRestartError" class="mb-3 shrink-0 rounded-lg border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger" role="alert">
+      {{ kiroRestartError }}
+    </p>
+
     <div v-show="showSettings" class="mb-3 shrink-0 ui-card bg-surface p-3">
+      <p v-if="modeError" class="mb-3 rounded-lg border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger" role="alert">
+        {{ modeError }}
+      </p>
       <p v-if="settingsError" class="mb-3 rounded-lg border border-danger-tint-line bg-danger-tint px-3 py-2 text-[12px] text-danger" role="alert">
         {{ settingsError }}
       </p>
@@ -154,7 +208,7 @@ function handleClear() {
               :class="proxyMode === 'forward'
                 ? 'border-primary-tint-line-strong bg-primary-tint text-primary-fg shadow-sm'
                 : 'border-line bg-surface text-ink-3 hover:text-ink'"
-              :disabled="modeSaving"
+              :disabled="modeSaving || restartLoading"
               @click="setMode('forward')"
             >
               <IconForward class="h-3.5 w-3.5" />
@@ -165,7 +219,7 @@ function handleClear() {
               :class="proxyMode === 'capture'
                 ? 'border-warning-tint-line bg-warning-tint text-warning-fg shadow-sm'
                 : 'border-line bg-surface text-ink-3 hover:text-ink'"
-              :disabled="modeSaving"
+              :disabled="modeSaving || restartLoading"
               @click="setMode('capture')"
             >
               <IconCapture class="h-3.5 w-3.5" />
@@ -174,7 +228,7 @@ function handleClear() {
           </div>
           <div class="mt-2 space-y-1 text-[11px] leading-4 text-ink-3">
             <p><b class="text-primary-fg">转发模式</b>：拦截 Kiro 请求，进行格式转换，再转发到配置的 API 后端。</p>
-            <p><b class="text-warning">抓包模式</b>：仅记录请求和响应原始数据，不做修改，流量直通原始服务器。</p>
+            <p><b class="text-warning">抓包模式</b>：Kiro 官方流量进入官方接口；按当前设置重启后关闭 Auto 桥接。</p>
           </div>
         </div>
 

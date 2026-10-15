@@ -1,6 +1,7 @@
-import { get, post, put, del } from './http.js'
+import { get, post, put, request, jsonInit } from './http.js'
 
 const BASE = '/api'
+const KIRO_LIFECYCLE_TIMEOUT_MS = 180000
 
 export async function getSettings() {
   const data = await get(`${BASE}/settings`)
@@ -38,13 +39,16 @@ export async function getKiroProxyStatus() {
 }
 
 export async function configureKiroProxy() {
-  return post(`${BASE}/kiro-proxy`)
+  // 客户端等待预算为 180 秒；超时不代表后端流程已终止，因此不自动重试。
+  return request(`${BASE}/kiro-proxy`, { ...jsonInit('POST'), timeout: KIRO_LIFECYCLE_TIMEOUT_MS })
 }
 
 export async function restoreKiroProxy() {
-  return del(`${BASE}/kiro-proxy`)
+  // 超时不代表后端还原流程已终止，因此不自动重试。
+  return request(`${BASE}/kiro-proxy`, { method: 'DELETE', timeout: KIRO_LIFECYCLE_TIMEOUT_MS })
 }
 
 export async function restartKiroProxy() {
-  return post(`${BASE}/kiro-restart`)
+  // 超时不代表后端重启流程已终止，因此不自动重试。
+  return request(`${BASE}/kiro-restart`, { ...jsonInit('POST'), timeout: KIRO_LIFECYCLE_TIMEOUT_MS })
 }

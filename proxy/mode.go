@@ -57,7 +57,7 @@ func (s *Server) handleProxyMode(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		json.NewEncoder(w).Encode(map[string]string{"mode": GetProxyMode()})
+		json.NewEncoder(w).Encode(s.proxyModeStatus())
 
 	case http.MethodPut:
 		var body struct {
@@ -74,8 +74,10 @@ func (s *Server) handleProxyMode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		SetProxyMode(body.Mode)
-		s.logger.Info("proxy", "模式切换: "+body.Mode)
-		json.NewEncoder(w).Encode(map[string]string{"mode": body.Mode})
+		if s.logger != nil {
+			s.logger.Info("proxy", "模式切换: "+body.Mode)
+		}
+		json.NewEncoder(w).Encode(s.proxyModeStatus())
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
