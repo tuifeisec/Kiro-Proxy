@@ -62,7 +62,6 @@ func prepareRawResponsesChatBody(body []byte, model *store.Model) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-
 	var source map[string]json.RawMessage
 	if err := json.Unmarshal(body, &source); err != nil {
 		return nil, fmt.Errorf("parse prepared raw Responses body: %w", err)
@@ -71,6 +70,21 @@ func prepareRawResponsesChatBody(body []byte, model *store.Model) ([]byte, error
 	if err := json.Unmarshal(converted, &chat); err != nil {
 		return nil, fmt.Errorf("parse converted Chat body: %w", err)
 	}
+	return finishRawResponsesChatRoot(source, chat, model)
+}
+
+func prepareRawResponsesChatRoot(source map[string]json.RawMessage, model *store.Model) ([]byte, error) {
+	if _, _, err := ensureResponsesPromptCacheKeyRoot(source, model.ModelID); err != nil {
+		return nil, err
+	}
+	chat, _, err := responsesToChatFallbackRootWithPrevious(source, model.ModelID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return finishRawResponsesChatRoot(source, chat, model)
+}
+
+func finishRawResponsesChatRoot(source, chat map[string]json.RawMessage, model *store.Model) ([]byte, error) {
 	encodedModel, err := json.Marshal(model.ModelID)
 	if err != nil {
 		return nil, fmt.Errorf("encode configured Chat model: %w", err)

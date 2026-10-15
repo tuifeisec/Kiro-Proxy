@@ -18,6 +18,22 @@ func stripRawUpstreamKiroContext(body []byte) ([]byte, error) {
 	if root == nil {
 		return nil, fmt.Errorf("raw Responses body must be a JSON object")
 	}
+	changed, err := stripRawUpstreamKiroContextRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return body, nil
+	}
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("encode raw Responses body: %w", err)
+	}
+	return encoded, nil
+}
+
+// stripRawUpstreamKiroContextRoot mutates only the caller's request-private root.
+func stripRawUpstreamKiroContextRoot(root map[string]json.RawMessage) (bool, error) {
 	changed := false
 	for _, key := range []string{"origin", "profileArn"} {
 		if _, exists := root[key]; exists {
@@ -29,7 +45,7 @@ func stripRawUpstreamKiroContext(body []byte) ([]byte, error) {
 		var metadata map[string]json.RawMessage
 		if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
-				return nil, fmt.Errorf("raw Responses metadata must be an object or null")
+				return false, fmt.Errorf("raw Responses metadata must be an object or null")
 			}
 		}
 		metadataChanged := len(metadata) == 0
@@ -45,7 +61,7 @@ func stripRawUpstreamKiroContext(body []byte) ([]byte, error) {
 			} else {
 				encoded, err := json.Marshal(metadata)
 				if err != nil {
-					return nil, fmt.Errorf("encode raw Responses metadata: %w", err)
+					return false, fmt.Errorf("encode raw Responses metadata: %w", err)
 				}
 				root["metadata"] = encoded
 			}
@@ -55,7 +71,7 @@ func stripRawUpstreamKiroContext(body []byte) ([]byte, error) {
 	if raw, exists := root["reasoning"]; exists && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		var reasoning map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &reasoning); err != nil || reasoning == nil {
-			return nil, fmt.Errorf("raw Responses reasoning must be an object or null")
+			return false, fmt.Errorf("raw Responses reasoning must be an object or null")
 		}
 		if _, exists := reasoning["type"]; exists {
 			delete(reasoning, "type")
@@ -64,19 +80,12 @@ func stripRawUpstreamKiroContext(body []byte) ([]byte, error) {
 			} else {
 				encoded, err := json.Marshal(reasoning)
 				if err != nil {
-					return nil, fmt.Errorf("encode raw Responses reasoning: %w", err)
+					return false, fmt.Errorf("encode raw Responses reasoning: %w", err)
 				}
 				root["reasoning"] = encoded
 			}
 			changed = true
 		}
 	}
-	if !changed {
-		return body, nil
-	}
-	encoded, err := json.Marshal(root)
-	if err != nil {
-		return nil, fmt.Errorf("encode raw Responses body: %w", err)
-	}
-	return encoded, nil
+	return changed, nil
 }

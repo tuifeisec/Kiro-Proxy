@@ -249,6 +249,8 @@ type Forwarder struct {
 	avoidance     *modelAvoidanceStore
 	imageCaps     *modelImageCapabilityStore
 	prefixAudit   *prefixAuditTracker
+	// rawPreparationNow is fixed at construction; nil uses time.Now.
+	rawPreparationNow func() time.Time
 }
 
 // NewForwarder 创建转发器
@@ -1104,7 +1106,8 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		if err != nil {
 			return nil, nil, err
 		}
-		body, err := prepareRawResponsesUpstreamBody(pre.Body, pre, model)
+		body, conversionDuration, err := f.prepareRawResponsesUpstreamBodyMeasured(pre.Body, pre, model)
+		pre.usage.addConversionDuration(conversionDuration)
 		if err != nil {
 			return nil, nil, err
 		}

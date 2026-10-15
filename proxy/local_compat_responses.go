@@ -110,10 +110,25 @@ func ensureResponsesPromptCacheKey(body []byte, model string) ([]byte, string, e
 	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, "", fmt.Errorf("invalid Responses request: %w", err)
 	}
+	key, changed, err := ensureResponsesPromptCacheKeyRoot(root, model)
+	if err != nil {
+		return nil, "", err
+	}
+	if !changed {
+		return body, key, nil
+	}
+	result, err := json.Marshal(root)
+	if err != nil {
+		return nil, "", err
+	}
+	return result, key, nil
+}
+
+func ensureResponsesPromptCacheKeyRoot(root map[string]json.RawMessage, model string) (string, bool, error) {
 	if raw := root["prompt_cache_key"]; len(raw) > 0 {
 		var key string
 		if json.Unmarshal(raw, &key) == nil && strings.TrimSpace(key) != "" {
-			return body, key, nil
+			return key, false, nil
 		}
 	}
 
@@ -128,27 +143,23 @@ func ensureResponsesPromptCacheKey(body []byte, model string) ([]byte, string, e
 			decoder.UseNumber()
 			var value interface{}
 			if err := decoder.Decode(&value); err != nil {
-				return nil, "", fmt.Errorf("invalid Responses %s: %w", name, err)
+				return "", false, fmt.Errorf("invalid Responses %s: %w", name, err)
 			}
 			stable[name] = value
 		}
 	}
 	canonical, err := stdjson.Marshal(stable)
 	if err != nil {
-		return nil, "", fmt.Errorf("encode Responses cache namespace: %w", err)
+		return "", false, fmt.Errorf("encode Responses cache namespace: %w", err)
 	}
 	sum := sha256.Sum256(canonical)
 	key := "kiro-local-v2-" + hex.EncodeToString(sum[:16])
 	encoded, err := json.Marshal(key)
 	if err != nil {
-		return nil, "", err
+		return "", false, err
 	}
 	root["prompt_cache_key"] = encoded
-	result, err := json.Marshal(root)
-	if err != nil {
-		return nil, "", err
-	}
-	return result, key, nil
+	return key, true, nil
 }
 
 func responsesToChatFallback(body []byte, model string) ([]byte, *fallbackResponseState, error) {
@@ -165,7 +176,18 @@ func responsesToChatFallbackWithPrevious(body []byte, model string, previous []m
 	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, nil, fmt.Errorf("invalid Responses request: %w", err)
 	}
+	chat, state, err := responsesToChatFallbackRootWithPrevious(root, model, previous)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := json.Marshal(chat)
+	if err != nil {
+		return nil, nil, err
+	}
+	return result, state, nil
+}
 
+func responsesToChatFallbackRootWithPrevious(root map[string]json.RawMessage, model string, previous []map[string]interface{}) (map[string]json.RawMessage, *fallbackResponseState, error) {
 	chat := make(map[string]json.RawMessage, len(root)+2)
 	for _, name := range []string{
 		"model", "stream", "temperature", "top_p", "user", "frequency_penalty",
@@ -232,11 +254,7 @@ func responsesToChatFallbackWithPrevious(body []byte, model string, previous []m
 		}
 	}
 
-	result, err := json.Marshal(chat)
-	if err != nil {
-		return nil, nil, err
-	}
-	return result, &fallbackResponseState{Model: model, Messages: messages}, nil
+	return chat, &fallbackResponseState{Model: model, Messages: messages}, nil
 }
 
 func fallbackMessagesPrefix(messages, prefix []map[string]interface{}) bool {

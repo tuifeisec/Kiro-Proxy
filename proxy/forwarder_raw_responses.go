@@ -76,8 +76,9 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 			return nil, fmt.Errorf("read raw Responses request body: %w", err)
 		}
 	}
-	upstreamBody, err := prepareRawResponsesUpstreamBody(body, pre, model)
+	upstreamBody, conversionDuration, err := f.prepareRawResponsesUpstreamBodyMeasured(body, pre, model)
 	if err != nil {
+		pre.usage.addConversionDuration(conversionDuration)
 		return nil, err
 	}
 
@@ -89,6 +90,7 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		}
 		usage = newRequestUsageRecorder(f.db, pre.StartTime, model, requestPath, pre.Protocol)
 	}
+	usage.addConversionDuration(conversionDuration)
 	if pre.usage != nil {
 		bindUsageModel(pre, model)
 	} else {
@@ -140,14 +142,39 @@ func prepareRawResponsesUpstreamBody(body []byte, pre *Preflight, model *store.M
 	if err != nil {
 		return nil, err
 	}
-	normalized, err := normalizeRawResponsesToolParameters(prepared, chat)
+	// Preserve the prepared body's encoding validation and canonical raw values
+	// before sharing its root with normalization and the optional Chat mapping.
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(prepared, &root); err != nil {
+		return nil, fmt.Errorf("parse prepared raw Responses JSON: %w", err)
+	}
+	changed, err := normalizeRawResponsesToolParametersRoot(root, chat)
 	if err != nil {
 		return nil, err
 	}
 	if chat {
-		return prepareRawResponsesChatBody(normalized, model)
+		return prepareRawResponsesChatRoot(root, model)
 	}
-	return normalized, nil
+	if !changed {
+		return prepared, nil
+	}
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("encode normalized raw Responses body: %w", err)
+	}
+	return encoded, nil
+}
+
+// The clock is an instance dependency fixed before forwarding starts. Both raw
+// entry points stop timing before usage setup or any upstream request.
+func (f *Forwarder) prepareRawResponsesUpstreamBodyMeasured(body []byte, pre *Preflight, model *store.Model) ([]byte, time.Duration, error) {
+	now := time.Now
+	if f != nil && f.rawPreparationNow != nil {
+		now = f.rawPreparationNow
+	}
+	started := now()
+	prepared, err := prepareRawResponsesUpstreamBody(body, pre, model)
+	return prepared, now().Sub(started), err
 }
 
 // normalizeRawResponsesToolParameters applies the selected endpoint's schema
@@ -160,13 +187,28 @@ func normalizeRawResponsesToolParameters(body []byte, chat bool) ([]byte, error)
 	if root == nil {
 		return body, nil
 	}
+	changed, err := normalizeRawResponsesToolParametersRoot(root, chat)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return body, nil
+	}
+	encodedBody, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("encode normalized raw Responses body: %w", err)
+	}
+	return encodedBody, nil
+}
+
+func normalizeRawResponsesToolParametersRoot(root map[string]json.RawMessage, chat bool) (bool, error) {
 	rawTools, exists := root["tools"]
 	if !exists || len(rawTools) == 0 {
-		return body, nil
+		return false, nil
 	}
 	var tools []json.RawMessage
 	if err := json.Unmarshal(rawTools, &tools); err != nil || tools == nil {
-		return body, nil
+		return false, nil
 	}
 	normalized := make([]json.RawMessage, len(tools))
 	changed := false
@@ -216,7 +258,7 @@ func normalizeRawResponsesToolParameters(body []byte, chat bool) ([]byte, error)
 			definition["parameters"] = updated
 			encodedFunction, err := json.Marshal(definition)
 			if err != nil {
-				return nil, fmt.Errorf("encode normalized raw Responses function: %w", err)
+				return false, fmt.Errorf("encode normalized raw Responses function: %w", err)
 			}
 			tool["function"] = encodedFunction
 		} else {
@@ -224,24 +266,20 @@ func normalizeRawResponsesToolParameters(body []byte, chat bool) ([]byte, error)
 		}
 		encodedTool, err := json.Marshal(tool)
 		if err != nil {
-			return nil, fmt.Errorf("encode normalized raw Responses tool: %w", err)
+			return false, fmt.Errorf("encode normalized raw Responses tool: %w", err)
 		}
 		normalized[i] = encodedTool
 		changed = true
 	}
 	if !changed {
-		return body, nil
+		return false, nil
 	}
 	encodedTools, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, fmt.Errorf("encode normalized raw Responses tools: %w", err)
+		return false, fmt.Errorf("encode normalized raw Responses tools: %w", err)
 	}
 	root["tools"] = encodedTools
-	encodedBody, err := json.Marshal(root)
-	if err != nil {
-		return nil, fmt.Errorf("encode normalized raw Responses body: %w", err)
-	}
-	return encodedBody, nil
+	return true, nil
 }
 
 // A group candidate sends once; the shared scheduler owns member/status
@@ -398,26 +436,42 @@ func stripRawWorkflowMetadata(body []byte) ([]byte, error) {
 }
 
 func prepareRawResponsesBody(body []byte, pre *Preflight, model *store.Model) ([]byte, error) {
-	var original map[string]json.RawMessage
-	if err := json.Unmarshal(body, &original); err != nil {
+	root, err := prepareRawResponsesRoot(body, pre, model)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("encode raw Responses body: %w", err)
+	}
+	return encoded, nil
+}
+
+func prepareRawResponsesRoot(body []byte, pre *Preflight, model *store.Model) (map[string]json.RawMessage, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, fmt.Errorf("parse raw Responses JSON: %w", err)
 	}
-	if original == nil {
+	if root == nil {
 		return nil, fmt.Errorf("raw Responses body must be a JSON object")
 	}
 	for _, key := range []string{"previous_response_id", "conversation"} {
-		if value, ok := original[key]; ok && rawJSONNonEmpty(value) {
+		if value, ok := root[key]; ok && rawJSONNonEmpty(value) {
 			return nil, fmt.Errorf("raw Responses %s is not supported", key)
 		}
 	}
 
-	cleaned, err := stripRawUpstreamKiroContext(body)
+	changed, err := stripRawUpstreamKiroContextRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(cleaned, &root); err != nil {
-		return nil, fmt.Errorf("parse cleaned raw Responses JSON: %w", err)
+	if changed {
+		// The legacy cleanup encoded the whole root before model/effort
+		// overrides. Keep that validation boundary, including fields that an
+		// override or the Chat mapper will later replace or omit.
+		if _, err := json.Marshal(root); err != nil {
+			return nil, fmt.Errorf("encode raw Responses body: %w", err)
+		}
 	}
 	modelRaw, err := json.Marshal(model.ModelID)
 	if err != nil {
@@ -482,11 +536,7 @@ func prepareRawResponsesBody(body []byte, pre *Preflight, model *store.Model) ([
 			root["reasoning"] = encodedReasoning
 		}
 	}
-	encoded, err := json.Marshal(root)
-	if err != nil {
-		return nil, fmt.Errorf("encode raw Responses body: %w", err)
-	}
-	return encoded, nil
+	return root, nil
 }
 
 func rawJSONNonEmpty(raw json.RawMessage) bool {

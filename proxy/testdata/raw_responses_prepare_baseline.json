@@ -1,0 +1,89 @@
+{
+  "chat_auto_cache_key_static_prefix_turn_one": {
+    "upstream_body": "{\"messages\":[{\"content\":\"stable synthetic policy\",\"role\":\"system\"},{\"content\":\"first synthetic turn\",\"role\":\"user\"}],\"model\":\"synthetic-upstream-model\",\"prompt_cache_key\":\"kiro-local-v2-7de4f2a5c3005e62496abcbb7eebea22\",\"reasoning_effort\":\"low\"}"
+  },
+  "chat_auto_cache_key_static_prefix_turn_two": {
+    "upstream_body": "{\"messages\":[{\"content\":\"stable synthetic policy\",\"role\":\"system\"},{\"content\":\"second, different synthetic turn\",\"role\":\"user\"}],\"model\":\"synthetic-upstream-model\",\"prompt_cache_key\":\"kiro-local-v2-7de4f2a5c3005e62496abcbb7eebea22\",\"reasoning_effort\":\"low\"}"
+  },
+  "chat_invalid_reasoning_effort_rejected": {
+    "error": "raw Responses reasoning effort must be a string: json: cannot unmarshal number into Go value of type string"
+  },
+  "chat_mixed_metadata_context_and_reasoning": {
+    "upstream_body": "{\"messages\":[{\"content\":\"stable policy\",\"role\":\"system\"},{\"content\":\"synthetic request\",\"role\":\"user\"}],\"metadata\":{\"custom\":\"keep\"},\"model\":\"synthetic-upstream-model\",\"prompt_cache_key\":\"kiro-local-v2-459882c1309dc2440a5652f479b22f92\",\"reasoning_effort\":\"medium\",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
+  },
+  "chat_nested_tools_and_unknown_fields": {
+    "upstream_body": "{\"messages\":[{\"content\":\"synthetic input\",\"role\":\"user\"}],\"model\":\"synthetic-upstream-model\",\"prompt_cache_key\":\"kiro-local-v2-e203ff8780b4c86da49273eb9a502c85\",\"reasoning_effort\":\"low\",\"tools\":[{\"function\":{\"name\":\"control_pwsh_process\",\"parameters\":{\"properties\":{\"command\":{\"type\":\"string\"}},\"type\":\"object\"},\"strict\":false,\"x-inner\":9007199254740993},\"type\":\"function\",\"x-outer\":9007199254740993},{\"function\":{\"name\":\"lookup\",\"parameters\":{\"type\":\"object\"}},\"type\":\"function\"}]}"
+  },
+  "chat_unsupported_tool_choice_rejected": {
+    "error": "Responses tool_choice \"strict\" is not supported by Chat Completions"
+  },
+  "responses_conversation_rejected": {
+    "error": "raw Responses conversation is not supported"
+  },
+  "responses_empty_metadata_and_explicit_cache_key": {
+    "upstream_body": "{\"input\":\"synthetic input\",\"model\":\"synthetic-upstream-model\",\"prompt_cache_key\":\"client-cache-key\",\"reasoning\":{\"effort\":\"medium\"}}"
+  },
+  "responses_explicit_reasoning_effort_is_preserved": {
+    "upstream_body": "{\"input\":\"synthetic input\",\"model\":\"synthetic-upstream-model\",\"reasoning\":{\"effort\":\"xhigh\",\"summary\":\"concise\"}}"
+  },
+  "responses_fixed_empty_reasoning_effort_clears_value": {
+    "upstream_body": "{\"input\":\"synthetic input\",\"model\":\"synthetic-upstream-model\",\"reasoning\":{\"summary\":\"keep\"}}"
+  },
+  "responses_fixed_reasoning_effort_overrides_client": {
+    "upstream_body": "{\"input\":\"synthetic input\",\"model\":\"synthetic-upstream-model\",\"reasoning\":{\"effort\":\"medium\",\"summary\":\"keep\"}}"
+  },
+  "responses_invalid_metadata_rejected": {
+    "error": "raw Responses metadata must be an object or null"
+  },
+  "responses_invalid_reasoning_rejected": {
+    "error": "raw Responses reasoning must be an object or null"
+  },
+  "responses_mixed_metadata_context_and_reasoning": {
+    "upstream_body": "{\"extension\":{\"precise\":900719925474099312345,\"decimal\":0.1000000000000000000001,\"unknown\":{\"keep\":true}},\"input\":[{\"role\":\"user\",\"content\":\"synthetic request\"}],\"instructions\":\"stable policy\",\"metadata\":{\"custom\":\"keep\"},\"model\":\"synthetic-upstream-model\",\"reasoning\":{\"effort\":\"medium\",\"summary\":\"detailed\"},\"stream\":true}"
+  },
+  "responses_no_metadata_and_default_effort": {
+    "upstream_body": "{\"input\":\"synthetic input\",\"model\":\"synthetic-upstream-model\",\"reasoning\":{\"effort\":\"high\"}}"
+  },
+  "responses_null_root_rejected": {
+    "error": "raw Responses body must be a JSON object"
+  },
+  "responses_previous_response_id_rejected": {
+    "error": "raw Responses previous_response_id is not supported"
+  },
+  "responses_trailing_json_rejected": {
+    "error": "parse raw Responses JSON: invalid character '{' after top-level value"
+  },
+  "responses_workflow_tool_schema_order_duplicates_and_precision": {
+    "upstream_body": "{\"input\":\"synthetic input\",\"model\":\"synthetic-upstream-model\",\"reasoning\":{\"effort\":\"low\"},\"tools\":[{\"name\":\"run_workflow\",\"parameters\":{\"properties\":{\"inputs\":{\"additionalProperties\":{\"type\":\"string\"},\"type\":\"object\"},\"runLabel\":{\"pattern\":\"^[^\\u0000-\\u001f-\\u2028\\u2029\\\"]*$\",\"type\":\"string\"},\"workflowPath\":{\"type\":[\"string\",\"null\"]},\"workflowPrompt\":{\"type\":[\"string\",\"null\"]}},\"type\":\"object\"},\"strict\":false,\"type\":\"function\",\"x-definition\":9007199254740993},{\"type\":\"function\",\"name\":\"control_pwsh_process\",\"strict\":true,\"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"anyOf\":[{\"anyOf\":[{\"not\":{}},{\"type\":\"string\"}]},{\"type\":\"null\"}]},\"large\":{\"type\":\"integer\",\"const\":9007199254740993}}}},{\"type\":\"function\",\"name\":\"todo_list\",\"strict\":null,\"parameters\":{\"type\":\"object\",\"properties\":{\"tasks\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"object\"}},\"new_tasks\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/properties/tasks/anyOf/0/anyOf/1/items\"}}}}},{\"type\":\"function\",\"name\":\"run_workflow\",\"parameters\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"pattern\":\"near-match\"}}}}]}"
+  },
+  "chat_function_call_output_object_extreme_explicit_cache": {
+    "error": "encode raw Responses body: json: error calling MarshalJSON for type json.RawMessage: strconv.ParseFloat: parsing \"1e999\": value out of range"
+  },
+  "chat_invalid_input_object_whitespace": {
+    "error": "Responses input must be a string or array: json: slice unexpected end of JSON input"
+  },
+  "chat_invalid_instructions_object_whitespace": {
+    "error": "responses instructions must be a string: json: cannot unmarshal object into Go value of type string"
+  },
+  "chat_invalid_instructions_with_unknown_extension_extreme": {
+    "error": "encode raw Responses body: json: error calling MarshalJSON for type json.RawMessage: strconv.ParseFloat: parsing \"1e999\": value out of range"
+  },
+  "chat_message_content_object_extreme_auto_cache": {
+    "error": "encode raw Responses body: json: error calling MarshalJSON for type json.RawMessage: strconv.ParseFloat: parsing \"1e999\": value out of range"
+  },
+  "chat_unknown_extension_extreme_explicit_cache": {
+    "error": "encode raw Responses body: json: error calling MarshalJSON for type json.RawMessage: strconv.ParseFloat: parsing \"1e999\": value out of range"
+  },
+  "responses_extreme_number_and_escaped_text": {
+    "error": "encode raw Responses body: json: error calling MarshalJSON for type json.RawMessage: strconv.ParseFloat: parsing \"1e999\": value out of range"
+  },
+  "responses_finite_extreme_number_and_escaped_text": {
+    "upstream_body": "{\"extension\":{\"huge\":1e308,\"small\":0.1000000000000000000001,\"text\":\"\\u003c\\u003e\\u0026\\u2028\",\"nested\":{\"number\":900719925474099312345}},\"input\":\"synthetic\",\"model\":\"synthetic-upstream-model\",\"prompt_cache_key\":\"explicit-responses-finite-cache\",\"reasoning\":{\"effort\":\"low\"}}"
+  },
+  "responses_no_origin_reasoning_extreme_fixed_effort": {
+    "upstream_body": "{\"input\":\"synthetic\",\"instructions\":\"synthetic\",\"model\":\"synthetic-upstream-model\",\"reasoning\":{\"effort\":\"high\"}}"
+  },
+  "responses_origin_rewrite_reasoning_extreme_fixed_effort": {
+    "error": "encode raw Responses body: json: error calling MarshalJSON for type json.RawMessage: strconv.ParseFloat: parsing \"1e999\": value out of range"
+  }
+}

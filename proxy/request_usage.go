@@ -202,8 +202,15 @@ func (r *requestUsageRecorder) setConversionDuration(started time.Time) {
 	if r == nil {
 		return
 	}
+	r.addConversionDuration(time.Since(started))
+}
+
+func (r *requestUsageRecorder) addConversionDuration(elapsed time.Duration) {
+	if r == nil {
+		return
+	}
 	r.traceMu.Lock()
-	r.trace.conversionMS += time.Since(started).Milliseconds()
+	r.trace.conversionMS += elapsed.Milliseconds()
 	r.traceMu.Unlock()
 }
 
