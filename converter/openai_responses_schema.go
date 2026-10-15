@@ -70,15 +70,35 @@ func hashOpenAIResponsesTools(tools []OpenAITool) string {
 	return hex.EncodeToString(hash.Sum(nil))[:16]
 }
 
-// normalizeOpenAIResponsesTools 将已确认的 run_workflow 正则写为显式字符范围，
-// 保留原字符限制，并避免依赖上游对 Unicode 属性转义的支持。
+// NormalizeOpenAIResponsesToolParameters rewrites only the confirmed
+// run_workflow Unicode property pattern. It keeps the original bytes when no
+// change is needed and preserves JSON number precision while traversing schema.
+func NormalizeOpenAIResponsesToolParameters(name string, raw gojson.RawMessage) (gojson.RawMessage, bool) {
+	if name != "run_workflow" {
+		return raw, false
+	}
+	var schema interface{}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&schema) != nil {
+		return raw, false
+	}
+	var trailing interface{}
+	if decoder.Decode(&trailing) != io.EOF || !rewriteOpenAIResponsesSchemaPatterns(schema) {
+		return raw, false
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		return raw, false
+	}
+	return gojson.RawMessage(encoded), true
+}
+
+// normalizeOpenAIResponsesTools preserves the cached provider slice unless a
+// run_workflow schema needs rewriting, then copies it before replacing params.
 func normalizeOpenAIResponsesTools(tools []OpenAITool) ([]OpenAITool, bool) {
 	var normalized []OpenAITool
-	changed := false
 	for i, tool := range tools {
-		if tool.Function.Name != "run_workflow" {
-			continue
-		}
 		raw, ok := tool.Function.Parameters.(gojson.RawMessage)
 		if !ok {
 			if other, yes := tool.Function.Parameters.([]byte); yes {
@@ -87,23 +107,16 @@ func normalizeOpenAIResponsesTools(tools []OpenAITool) ([]OpenAITool, bool) {
 				continue
 			}
 		}
-		var schema interface{}
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if decoder.Decode(&schema) != nil || !rewriteOpenAIResponsesSchemaPatterns(schema) {
-			continue
-		}
-		encoded, err := json.Marshal(schema)
-		if err != nil {
-			continue
-		}
+		parameters, changed := NormalizeOpenAIResponsesToolParameters(tool.Function.Name, raw)
 		if !changed {
-			normalized = append([]OpenAITool(nil), tools...)
-			changed = true
+			continue
 		}
-		normalized[i].Function.Parameters = gojson.RawMessage(encoded)
+		if normalized == nil {
+			normalized = append([]OpenAITool(nil), tools...)
+		}
+		normalized[i].Function.Parameters = parameters
 	}
-	if !changed {
+	if normalized == nil {
 		return tools, false
 	}
 	return normalized, true

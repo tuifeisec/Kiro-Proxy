@@ -140,10 +140,108 @@ func prepareRawResponsesUpstreamBody(body []byte, pre *Preflight, model *store.M
 	if err != nil {
 		return nil, err
 	}
-	if chat {
-		return prepareRawResponsesChatBody(prepared, model)
+	normalized, err := normalizeRawResponsesToolParameters(prepared, chat)
+	if err != nil {
+		return nil, err
 	}
-	return prepared, nil
+	if chat {
+		return prepareRawResponsesChatBody(normalized, model)
+	}
+	return normalized, nil
+}
+
+// normalizeRawResponsesToolParameters applies the selected endpoint's schema
+// compatibility rule while keeping every untouched tool and field raw.
+func normalizeRawResponsesToolParameters(body []byte, chat bool) ([]byte, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return nil, fmt.Errorf("parse prepared raw Responses JSON: %w", err)
+	}
+	if root == nil {
+		return body, nil
+	}
+	rawTools, exists := root["tools"]
+	if !exists || len(rawTools) == 0 {
+		return body, nil
+	}
+	var tools []json.RawMessage
+	if err := json.Unmarshal(rawTools, &tools); err != nil || tools == nil {
+		return body, nil
+	}
+	normalized := make([]json.RawMessage, len(tools))
+	changed := false
+	for i, rawTool := range tools {
+		var tool map[string]json.RawMessage
+		if err := json.Unmarshal(rawTool, &tool); err != nil || tool == nil {
+			normalized[i] = rawTool
+			continue
+		}
+		var typ string
+		if json.Unmarshal(tool["type"], &typ) != nil || typ != "function" {
+			normalized[i] = rawTool
+			continue
+		}
+		definition := tool
+		nestedFunctionRaw, nestedFunction := tool["function"]
+		if nestedFunction {
+			var function map[string]json.RawMessage
+			if err := json.Unmarshal(nestedFunctionRaw, &function); err != nil || function == nil {
+				normalized[i] = rawTool
+				continue
+			}
+			definition = function
+		}
+		var name string
+		if json.Unmarshal(definition["name"], &name) != nil {
+			normalized[i] = rawTool
+			continue
+		}
+		parameters, exists := definition["parameters"]
+		if !exists {
+			normalized[i] = rawTool
+			continue
+		}
+		var updated json.RawMessage
+		var modified bool
+		if chat {
+			updated, modified = converter.NormalizeOpenAIChatToolParameters(name, parameters)
+		} else {
+			updated, modified = converter.NormalizeOpenAIResponsesToolParameters(name, parameters)
+		}
+		if !modified {
+			normalized[i] = rawTool
+			continue
+		}
+		if nestedFunction {
+			definition["parameters"] = updated
+			encodedFunction, err := json.Marshal(definition)
+			if err != nil {
+				return nil, fmt.Errorf("encode normalized raw Responses function: %w", err)
+			}
+			tool["function"] = encodedFunction
+		} else {
+			tool["parameters"] = updated
+		}
+		encodedTool, err := json.Marshal(tool)
+		if err != nil {
+			return nil, fmt.Errorf("encode normalized raw Responses tool: %w", err)
+		}
+		normalized[i] = encodedTool
+		changed = true
+	}
+	if !changed {
+		return body, nil
+	}
+	encodedTools, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("encode normalized raw Responses tools: %w", err)
+	}
+	root["tools"] = encodedTools
+	encodedBody, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("encode normalized raw Responses body: %w", err)
+	}
+	return encodedBody, nil
 }
 
 // A group candidate sends once; the shared scheduler owns member/status

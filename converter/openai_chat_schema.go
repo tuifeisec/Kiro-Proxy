@@ -3,17 +3,49 @@ package converter
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 
 	gojson "github.com/goccy/go-json"
 )
 
-// normalizeOpenAIChatTools removes a JSON Schema false branch (not: {}) from
-// anyOf. The accepted argument set is unchanged. Cached provider tools are
-// copied before modification so Responses and other providers keep their
-// original definitions.
+// NormalizeOpenAIChatToolParameters applies the established Chat schema
+// compatibility rules without changing the input bytes when no change is needed.
+func NormalizeOpenAIChatToolParameters(name string, raw gojson.RawMessage) (gojson.RawMessage, bool) {
+	var schema interface{}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&schema) != nil {
+		return raw, false
+	}
+	var trailing interface{}
+	if decoder.Decode(&trailing) != io.EOF {
+		return raw, false
+	}
+	referenceRepaired := repairKiroTodoListReference(name, schema)
+	// Simplifying anyOf can change array indexes or remove an intermediate
+	// node named by a JSON Pointer. Keep referenced schemas intact until
+	// their pointers can be rewritten together with the target nodes.
+	if hasOpenAIChatSchemaReference(schema) && !referenceRepaired {
+		return raw, false
+	}
+	result, modified := schema, referenceRepaired
+	if !hasOpenAIChatSchemaReference(schema) {
+		result, modified = simplifyOpenAIChatSchema(schema)
+	}
+	if !modified {
+		return raw, false
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return raw, false
+	}
+	return gojson.RawMessage(encoded), true
+}
+
+// normalizeOpenAIChatTools preserves cached provider tools unless their
+// parameters change, then copies the slice before replacing those parameters.
 func normalizeOpenAIChatTools(tools []OpenAITool) ([]OpenAITool, bool) {
 	var normalized []OpenAITool
-	changed := false
 	for i, tool := range tools {
 		raw, ok := tool.Function.Parameters.(gojson.RawMessage)
 		if !ok {
@@ -24,39 +56,16 @@ func normalizeOpenAIChatTools(tools []OpenAITool) ([]OpenAITool, bool) {
 				continue
 			}
 		}
-		var schema interface{}
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if decoder.Decode(&schema) != nil {
-			continue
-		}
-		referenceRepaired := repairKiroTodoListReference(tool.Function.Name, schema)
-		// Simplifying anyOf can change array indexes or remove an intermediate
-		// node named by a JSON Pointer. Keep referenced schemas intact until
-		// their pointers can be rewritten together with the target nodes.
-		if hasOpenAIChatSchemaReference(schema) {
-			if !referenceRepaired {
-				continue
-			}
-		}
-		result, modified := schema, referenceRepaired
-		if !hasOpenAIChatSchemaReference(schema) {
-			result, modified = simplifyOpenAIChatSchema(schema)
-		}
-		if !modified {
-			continue
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			continue
-		}
+		parameters, changed := NormalizeOpenAIChatToolParameters(tool.Function.Name, raw)
 		if !changed {
-			normalized = append([]OpenAITool(nil), tools...)
-			changed = true
+			continue
 		}
-		normalized[i].Function.Parameters = gojson.RawMessage(encoded)
+		if normalized == nil {
+			normalized = append([]OpenAITool(nil), tools...)
+		}
+		normalized[i].Function.Parameters = parameters
 	}
-	if !changed {
+	if normalized == nil {
 		return tools, false
 	}
 	return normalized, true

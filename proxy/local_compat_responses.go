@@ -349,30 +349,48 @@ func decodeResponsesContent(raw json.RawMessage) interface{} {
 }
 
 func responsesToolsToChat(raw json.RawMessage) (json.RawMessage, error) {
-	var tools []map[string]json.RawMessage
+	var tools []json.RawMessage
 	if err := json.Unmarshal(raw, &tools); err != nil {
 		return nil, fmt.Errorf("invalid Responses tools: %w", err)
 	}
-	converted := make([]map[string]interface{}, 0, len(tools))
-	for _, tool := range tools {
+	converted := make([]json.RawMessage, 0, len(tools))
+	for _, rawTool := range tools {
+		var tool map[string]json.RawMessage
+		if err := json.Unmarshal(rawTool, &tool); err != nil {
+			return nil, err
+		}
 		var typ string
 		_ = json.Unmarshal(tool["type"], &typ)
 		if typ != "function" {
 			return nil, fmt.Errorf("Responses tool type %q requires a native Responses upstream", typ)
 		}
-		var fn map[string]interface{}
-		if rawFn := tool["function"]; len(rawFn) > 0 {
-			if err := json.Unmarshal(rawFn, &fn); err != nil {
+		var fn map[string]json.RawMessage
+		functionRaw, nested := tool["function"]
+		if nested && len(functionRaw) > 0 {
+			if err := json.Unmarshal(functionRaw, &fn); err != nil {
 				return nil, err
 			}
-		} else {
-			fn = map[string]interface{}{
-				"name":        decodeRawValue(tool["name"]),
-				"description": decodeRawValue(tool["description"]),
-				"parameters":  decodeRawValue(tool["parameters"]),
+			converted = append(converted, rawTool)
+			continue
+		}
+		fn = make(map[string]json.RawMessage, len(tool)-1)
+		for key, value := range tool {
+			if key != "type" {
+				fn[key] = value
 			}
 		}
-		converted = append(converted, map[string]interface{}{"type": "function", "function": fn})
+		functionRaw, err := json.Marshal(fn)
+		if err != nil {
+			return nil, err
+		}
+		encodedTool, err := json.Marshal(map[string]json.RawMessage{
+			"type":     tool["type"],
+			"function": functionRaw,
+		})
+		if err != nil {
+			return nil, err
+		}
+		converted = append(converted, encodedTool)
 	}
 	return json.Marshal(converted)
 }
