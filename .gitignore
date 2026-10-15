@@ -7,6 +7,8 @@
 .vscode/
 .idea/
 .vs/
+.zcodeignore
+.agents/
 .codegraph/*
 !.codegraph/.gitignore
 *.suo
