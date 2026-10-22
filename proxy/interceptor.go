@@ -35,16 +35,17 @@ var errMITMRequestBodyTooLarge = errors.New("MITM request body too large")
 
 // Preflight 一次解析的结果，贯穿整个请求生命周期
 type Preflight struct {
-	Body                 []byte
-	Conv                 *converter.ParsedConversation // nil 表示非 Kiro 请求
-	Protocol             string
-	SourceModel          string
-	IsClassifier         bool
-	ConversationID       string
-	StartTime            time.Time
-	GroupReasoningEffort string
-	AutoReasoningEffort  *string // Auto 的固定有效等级；空字符串也覆盖客户端值。
-	usage                *requestUsageRecorder
+	Body                    []byte
+	Conv                    *converter.ParsedConversation // nil 表示非 Kiro 请求
+	Protocol                string
+	SourceModel             string
+	IsClassifier            bool
+	ConversationID          string
+	StartTime               time.Time
+	GroupReasoningEffort    string
+	AutoReasoningEffort     *string // Auto 的固定有效等级；空字符串也覆盖客户端值。
+	usage                   *requestUsageRecorder
+	autoDiagnosticRequestID string
 }
 
 // isKiroConversationBody 检查 runtime 根路径请求是否具有对话操作的稳定结构。
@@ -283,10 +284,12 @@ func (s *Server) setupInterceptor() {
 			route, err = s.resolveMainRoute(pre)
 			if err != nil {
 				s.logger.Error("router", "Auto 阶段路由失败: "+err.Error())
+				s.logAutoRequestResult(pre, "route_resolution_failed", http.StatusServiceUnavailable)
 				return req, errorResponse(req, http.StatusServiceUnavailable, err.Error())
 			}
 		}
 		if route == nil {
+			s.logAutoRequestResult(pre, "no_route", http.StatusServiceUnavailable)
 			s.logger.Error("interceptor", "无可用路由: model="+pre.SourceModel)
 			return req, errorResponse(req, http.StatusServiceUnavailable, "no route for model: "+pre.SourceModel)
 		}
@@ -294,6 +297,7 @@ func (s *Server) setupInterceptor() {
 			pre.GroupReasoningEffort = route.Group.ReasoningEffort
 		}
 		if result, err := s.licenseClient.CheckCached(); err != nil || !result.Authorized {
+			s.logAutoRequestResult(pre, "authorization_denied", http.StatusForbidden)
 			msg := "未授权，请加入群获取免费授权并在后台添加机器码"
 			if err != nil {
 				msg = "授权检测失败: " + err.Error()
@@ -347,6 +351,7 @@ func (s *Server) setupInterceptor() {
 		}
 		if err != nil {
 			pre.usage.finish(http.StatusBadGateway, localCompatUsage{}, err.Error())
+			s.logAutoRequestResult(pre, "forward_failed", http.StatusBadGateway)
 			s.logger.ErrorWithMeta("forwarder", "转发失败: "+err.Error(), LogMeta{
 				Model:     statsModelID(route.Model),
 				LatencyMS: time.Since(pre.StartTime).Milliseconds(),
@@ -371,6 +376,7 @@ func (s *Server) setupInterceptor() {
 			s.logAutoRoute(pre, route)
 		}
 		s.rememberMainModel(pre, route)
+		s.logAutoRequestResult(pre, "upstream_headers", resp.StatusCode)
 
 		s.logger.InfoWithMeta("forwarder", fmt.Sprintf("上游响应: status=%d", resp.StatusCode), LogMeta{
 			Model:     statsModelID(route.Model),
@@ -633,6 +639,7 @@ func (s *Server) logAutoRoute(pre *Preflight, route *router.Route) {
 		Model:    statsModelID(route.Model),
 		Metadata: metadata,
 	})
+	s.logAutoRoutingDiagnostic(pre, route)
 }
 
 // 主会话和独立 agent 分支分别记忆 classifier 跟随的实际模型。

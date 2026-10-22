@@ -71,9 +71,11 @@ const (
 )
 
 type kiroActivityParseReport struct {
-	Entries    []kiroActivityRoutingMeta
-	Categories []kiroActivityParseCategory
-	singleton  bool
+	Entries      []kiroActivityRoutingMeta
+	Categories   []kiroActivityParseCategory
+	Committed    int
+	StoreIgnored int
+	singleton    bool
 }
 
 func (r *kiroActivityParseReport) addCategory(category kiroActivityParseCategory) {
@@ -1251,17 +1253,21 @@ func (s *Server) synthesizeKiroActivityWorkflowHeader(req *http.Request, body []
 	}
 	meta, ok := s.lookupKiroActivityRouting(conv.ConversationID)
 	if !ok {
+		s.logKiroActivityLookup(conv, "no_observation", kiroActivityRoutingMeta{})
 		return req, false
 	}
 	if meta.AgentMode != "" && conv.AgentMode != "" && meta.AgentMode != conv.AgentMode {
+		s.logKiroActivityLookup(conv, "mode_mismatch", meta)
 		return req, false
 	}
 	header, err := buildKiroActivityWorkflowHeader(conv, meta)
 	if err != nil {
+		s.logKiroActivityLookup(conv, "header_invalid", meta)
 		s.logger.Debug("kiro-activity", "activity 路由观察无效: header_invalid")
 		return req, false
 	}
 	s.logger.Info("kiro-activity", "activity 观察命中本地 auto 路由")
+	s.logKiroActivityLookup(conv, "header_synthesized", meta)
 	ctx := context.WithValue(req.Context(), kiroActivityWorkflowRequestContextKey{}, true)
 	return req.WithContext(withWorkflowStageHeaders(ctx, []string{header})), true
 }

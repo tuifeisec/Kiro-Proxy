@@ -4,7 +4,10 @@
 package proxy
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -49,21 +52,27 @@ type LogMeta struct {
 
 // TrafficLogger 日志记录器
 type TrafficLogger struct {
-	mu             sync.Mutex
-	optionsMu      sync.RWMutex
-	fileMu         sync.Mutex
-	queueMu        sync.Mutex
-	file           *os.File
-	filePath       string
-	fileSize       int64
-	hub            *Hub
-	seq            int64
-	detailMode     string
-	maxDetailBytes int
-	queue          chan []byte
-	queueClosed    bool
-	workerWG       sync.WaitGroup
-	dropped        uint64
+	mu                   sync.Mutex
+	optionsMu            sync.RWMutex
+	fileMu               sync.Mutex
+	autoDiagnosticMu     sync.Mutex
+	queueMu              sync.Mutex
+	file                 *os.File
+	filePath             string
+	fileSize             int64
+	autoDiagnosticFile   *os.File
+	autoDiagnosticPath   string
+	autoDiagnosticSize   int64
+	autoDiagnosticClosed bool
+	autoDiagnosticRunID  string
+	hub                  *Hub
+	seq                  int64
+	detailMode           string
+	maxDetailBytes       int
+	queue                chan []byte
+	queueClosed          bool
+	workerWG             sync.WaitGroup
+	dropped              uint64
 }
 
 type LogOptions struct {
@@ -74,6 +83,12 @@ type LogOptions struct {
 const (
 	maxTrafficLogBytes    int64 = 100 * 1024 * 1024
 	maxFullLogDetailBytes       = 16 << 20
+)
+
+var (
+	autoDiagnosticRunIDOnce  sync.Once
+	autoDiagnosticRunIDValue string
+	autoDiagnosticRunIDErr   error
 )
 
 func NewTrafficLogger(logFile string, hub *Hub, opts ...LogOptions) (*TrafficLogger, error) {
@@ -93,6 +108,35 @@ func NewTrafficLogger(logFile string, hub *Hub, opts ...LogOptions) (*TrafficLog
 		tl.filePath = logFile
 		tl.fileSize = info.Size()
 	}
+	if logFile != "" {
+		runID, err := getAutoDiagnosticRunID()
+		if err != nil {
+			if tl.file != nil {
+				_ = tl.file.Close()
+			}
+			return nil, fmt.Errorf("生成 Auto 诊断运行标识失败: %w", err)
+		}
+		autoPath := logFile + ".auto-diagnostic.log"
+		autoFile, err := os.OpenFile(autoPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			if tl.file != nil {
+				_ = tl.file.Close()
+			}
+			return nil, fmt.Errorf("打开 Auto 诊断日志文件失败: %w", err)
+		}
+		info, err := autoFile.Stat()
+		if err != nil {
+			_ = autoFile.Close()
+			if tl.file != nil {
+				_ = tl.file.Close()
+			}
+			return nil, fmt.Errorf("读取 Auto 诊断日志文件信息失败: %w", err)
+		}
+		tl.autoDiagnosticFile = autoFile
+		tl.autoDiagnosticPath = autoPath
+		tl.autoDiagnosticSize = info.Size()
+		tl.autoDiagnosticRunID = runID
+	}
 	if tl.file != nil || tl.hub != nil {
 		tl.queue = make(chan []byte, 512)
 		tl.workerWG.Add(1)
@@ -111,9 +155,19 @@ func (tl *TrafficLogger) Close() {
 	tl.workerWG.Wait()
 
 	tl.fileMu.Lock()
-	defer tl.fileMu.Unlock()
 	if tl.file != nil {
-		tl.file.Close()
+		_ = tl.file.Close()
+	}
+	tl.fileMu.Unlock()
+
+	tl.autoDiagnosticMu.Lock()
+	defer tl.autoDiagnosticMu.Unlock()
+	if !tl.autoDiagnosticClosed {
+		tl.autoDiagnosticClosed = true
+		if tl.autoDiagnosticFile != nil {
+			_ = tl.autoDiagnosticFile.Close()
+			tl.autoDiagnosticFile = nil
+		}
 	}
 }
 
@@ -169,41 +223,123 @@ func (tl *TrafficLogger) writeFile(data []byte) {
 }
 
 func (tl *TrafficLogger) rotateFile() error {
-	if tl.file == nil || tl.filePath == "" {
+	return rotateLogFile(&tl.file, tl.filePath, &tl.fileSize)
+}
+
+func rotateLogFile(file **os.File, filePath string, fileSize *int64) error {
+	if *file == nil || filePath == "" {
 		return nil
 	}
-	if err := tl.file.Close(); err != nil {
+	if err := (*file).Close(); err != nil {
 		return err
 	}
-	tl.file = nil
-	backupPath := tl.filePath + ".1"
+	*file = nil
+	backupPath := filePath + ".1"
 	reopenCurrent := func() {
-		file, err := os.OpenFile(tl.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		current, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			return
 		}
-		tl.file = file
-		if info, err := file.Stat(); err == nil {
-			tl.fileSize = info.Size()
+		*file = current
+		if info, err := current.Stat(); err == nil {
+			*fileSize = info.Size()
 		}
 	}
 	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
 		reopenCurrent()
 		return err
 	}
-	if err := os.Rename(tl.filePath, backupPath); err != nil {
+	if err := os.Rename(filePath, backupPath); err != nil {
 		reopenCurrent()
 		return err
 	}
-	file, err := os.OpenFile(tl.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	current, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		_ = os.Rename(backupPath, tl.filePath)
+		_ = os.Rename(backupPath, filePath)
 		reopenCurrent()
 		return err
 	}
-	tl.file = file
-	tl.fileSize = 0
+	*file = current
+	*fileSize = 0
 	return nil
+}
+
+// AutoDiagnostic synchronously appends one structured Auto diagnostic event to
+// the isolated diagnostic log. It never uses the traffic log queue or hub.
+func (tl *TrafficLogger) AutoDiagnostic(event string, metadata map[string]interface{}) error {
+	if tl == nil {
+		return fmt.Errorf("写入 Auto 诊断日志失败: logger 为空")
+	}
+	tl.autoDiagnosticMu.Lock()
+	defer tl.autoDiagnosticMu.Unlock()
+	if tl.autoDiagnosticClosed {
+		return fmt.Errorf("写入 Auto 诊断日志失败: logger 已关闭")
+	}
+	if tl.autoDiagnosticFile == nil {
+		if tl.autoDiagnosticPath == "" {
+			return nil
+		}
+		return fmt.Errorf("写入 Auto 诊断日志失败: 文件未打开")
+	}
+	eventID, err := randomAutoDiagnosticID()
+	if err != nil {
+		return fmt.Errorf("生成 Auto 诊断事件标识失败: %w", err)
+	}
+	entryMetadata := make(map[string]interface{}, len(metadata)+3)
+	for key, value := range metadata {
+		entryMetadata[key] = value
+	}
+	entryMetadata["schema_version"] = 1
+	entryMetadata["run_id"] = tl.autoDiagnosticRunID
+	entryMetadata["event_id"] = eventID
+	now := time.Now()
+	entry := &LogEntry{
+		ID:       eventID,
+		Date:     logStatsDay(now),
+		Time:     now.Format("15:04:05.000"),
+		FullTime: now.Format(time.RFC3339Nano),
+		Level:    "info",
+		Category: "auto-diagnostic",
+		Message:  event,
+		Metadata: entryMetadata,
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("编码 Auto 诊断日志失败: %w", err)
+	}
+	entrySize := int64(len(data) + 1)
+	if tl.autoDiagnosticSize+entrySize > maxTrafficLogBytes {
+		if err := rotateLogFile(&tl.autoDiagnosticFile, tl.autoDiagnosticPath, &tl.autoDiagnosticSize); err != nil {
+			return fmt.Errorf("轮转 Auto 诊断日志失败: %w", err)
+		}
+		if tl.autoDiagnosticFile == nil {
+			return fmt.Errorf("轮转 Auto 诊断日志失败: 轮转后文件未打开")
+		}
+	}
+	n, err := tl.autoDiagnosticFile.Write(append(data, '\n'))
+	if err != nil {
+		return fmt.Errorf("写入 Auto 诊断日志失败: %w", err)
+	}
+	if n != len(data)+1 {
+		return fmt.Errorf("写入 Auto 诊断日志失败: %w", io.ErrShortWrite)
+	}
+	tl.autoDiagnosticSize += entrySize
+	return nil
+}
+
+func getAutoDiagnosticRunID() (string, error) {
+	autoDiagnosticRunIDOnce.Do(func() {
+		autoDiagnosticRunIDValue, autoDiagnosticRunIDErr = randomAutoDiagnosticID()
+	})
+	return autoDiagnosticRunIDValue, autoDiagnosticRunIDErr
+}
+
+func randomAutoDiagnosticID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // Log 记录一条日志（推送到 WebSocket + 写文件 + 控制台）

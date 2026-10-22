@@ -25,7 +25,9 @@ func isKiroActivityRequest(req *http.Request) bool {
 // Parsed entries are committed only when parsing, draining, and close all succeed.
 func (s *Server) discardKiroActivityRequestBody(req *http.Request) (kiroActivityParseReport, error, error) {
 	if req == nil || req.Body == nil {
-		return kiroActivityParseReport{}, errKiroActivityInvalidJSON, nil
+		report := kiroActivityParseReport{}
+		s.logKiroActivityBatch(report, errKiroActivityInvalidJSON, nil)
+		return report, errKiroActivityInvalidJSON, nil
 	}
 	report, parseErr := parseKiroActivityRouting(req.Body)
 	_, drainErr := io.Copy(io.Discard, req.Body)
@@ -36,10 +38,16 @@ func (s *Server) discardKiroActivityRequestBody(req *http.Request) (kiroActivity
 	}
 	if parseErr == nil && drainErr == nil && closeErr == nil {
 		for _, entry := range report.Entries {
-			s.recordKiroActivityRouting(entry)
+			if s.recordKiroActivityRouting(entry) {
+				report.Committed++
+			} else {
+				report.StoreIgnored++
+			}
 		}
 	}
-	return report, parseErr, errors.Join(drainErr, closeErr)
+	consumeErr := errors.Join(drainErr, closeErr)
+	s.logKiroActivityBatch(report, parseErr, consumeErr)
+	return report, parseErr, consumeErr
 }
 
 func newKiroActivityResponse(req *http.Request) *http.Response {

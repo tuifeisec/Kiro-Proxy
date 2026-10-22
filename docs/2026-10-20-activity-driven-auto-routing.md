@@ -66,6 +66,8 @@ activity 路径只去掉与 workflowId 相等的首段，余段按 JS encodeURIC
 
 activity 没有携带 workflow 时，以固定诊断类别 `workflow_unavailable` 区别于提供了不完整节点字段的 `event_unroutable`；不保存正文，也不为普通活动伪造节点。此调整不改变默认选模、continuation 锁、身份校验或子流隔离。未提供节点元数据的请求仍不能实现 18/20 个职责的精确自动识别；不能靠修改显示名称弥补协议中缺失的证据。
 
+普通 Vibe 后续细分所需的独立观察日志遵循 [Auto 职责细分观察日志](2026-10-22-auto-routing-diagnostics.md)，只积累结构性证据，不改变此处路由规则或保存提示正文。
+
 ## 验收
 
 - 批量 envelope、根级兼容、错误类型、重复键、多文档、截断、超长 token、海量路径段、深度和有界批内状态有稳定 Mock；完整消费与内存分配分别验证。
