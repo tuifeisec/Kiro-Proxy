@@ -71,6 +71,23 @@ func isKiroConversationBody(body []byte) bool {
 // setupInterceptor 注册请求拦截器
 func (s *Server) setupInterceptor() {
 	s.proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		if isKiroActivityRequest(req) {
+			report, parseErr, discardErr := s.discardKiroActivityRequestBody(req)
+			if discardErr != nil {
+				s.logger.Error("kiro-activity", "本地停止活动上报失败: body_consume_failed")
+				return req, errorResponse(req, http.StatusBadRequest, "failed to discard Kiro activity request body")
+			}
+			if parseErr != nil {
+				// 类别由解析器固定映射，不能把错误中的正文字符写入日志。
+				s.logger.Debug("kiro-activity", "activity 观察解析: "+string(kiroActivityErrorCategory(parseErr)))
+			}
+			for _, category := range report.Categories {
+				s.logger.Debug("kiro-activity", "activity 观察解析: "+string(category))
+			}
+			s.logger.Info("kiro-activity", "已在本地停止 Kiro 活动上报")
+			return req, newKiroActivityResponse(req)
+		}
+
 		// 代理私有阶段信息必须留在本地，capture/passthrough 同样不能泄漏。
 		workflowHeaders := req.Header.Values(converter.WorkflowStageHeader)
 		req.Header.Del(converter.WorkflowStageHeader)
@@ -89,7 +106,7 @@ func (s *Server) setupInterceptor() {
 		protocol := router.DetectProtocol(host, path)
 		var preReadBody []byte
 		if protocol == "kiro-runtime-responses" {
-			// 手选本地模型不依赖阶段桥接；Auto 仍只接管带头候选。
+			// raw Auto 与手选本地模型均不依赖阶段桥接。
 			if req.Method != http.MethodPost {
 				protocol = "kiro-passthrough"
 			} else {
@@ -117,12 +134,16 @@ func (s *Server) setupInterceptor() {
 					return req, errorResponse(req, http.StatusBadRequest, "invalid raw Responses model")
 				} else {
 					isAuto := strings.EqualFold(model.Model, "auto")
-					if isAuto && len(workflowHeaders) == 0 || !isAuto && !s.router.HasConfiguredTarget(model.Model) {
-						if !isAuto {
-							// 原厂模型仍需清理可关联执行域，本地模型在路由时清理。
-							if conv, err := converter.ParseKiroRawResponsesManualRouting(preReadBody); err == nil {
-								s.router.ForgetAuto(conv)
-							}
+					if isAuto && len(workflowHeaders) == 0 {
+						// activity 状态命中时合成 v2 workflow 头走精确路由；未命中时
+						// 无头继续本地解析，按 v0 元数据落 default 兜底，不放行官方。
+						if synthesized, ok := s.synthesizeKiroActivityWorkflowHeader(req, preReadBody); ok {
+							req = synthesized
+						}
+					} else if !isAuto && !s.router.HasConfiguredTarget(model.Model) {
+						// 原厂模型仍需清理可关联执行域，本地模型在路由时清理。
+						if conv, err := converter.ParseKiroRawResponsesManualRouting(preReadBody); err == nil {
+							s.router.ForgetAuto(conv)
 						}
 						protocol = "kiro-passthrough"
 					}
@@ -406,11 +427,19 @@ func (s *Server) parseRequest(req *http.Request, protocol string, preReadBody []
 			return nil, err
 		}
 		values := workflowStageHeaders(req)
-		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+		if len(values) > 1 || (len(values) == 1 && strings.TrimSpace(values[0]) == "") {
 			return nil, fmt.Errorf("raw Responses requires one nonempty workflow header")
 		}
-		if err := converter.ApplyWorkflowStageHeader(conv, values[0]); err != nil {
-			return nil, err
+		// 无头 raw auto 是 activity 驱动路由的正常形态：元数据保持为空，
+		// 由 ResolveStageAuto 按 v0 元数据落 default 兜底；官方会拒绝 auto 请求，
+		// 不再把无头 auto 放行到原始服务器。
+		if len(values) == 1 {
+			if err := converter.ApplyWorkflowStageHeader(conv, values[0]); err != nil {
+				return nil, err
+			}
+			if isKiroActivityWorkflowRequest(req) {
+				conv.WorkflowStageSource = "activity_observation"
+			}
 		}
 		pre.Conv, pre.SourceModel, pre.ConversationID = conv, conv.ModelID, conv.ConversationID
 		return pre, nil

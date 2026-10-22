@@ -427,16 +427,20 @@ func TestManualRawResponsesBoundariesAndClearsAutoLockWithoutApplyingStage(t *te
 	if unknown.Code != http.StatusOK || unknown.Body.String() != "passthrough" || officialHits != 1 {
 		t.Fatalf("unknown model fallback behavior changed: status=%d body=%q hits=%d", unknown.Code, unknown.Body.String(), officialHits)
 	}
+	// 无头 raw auto 按 v0 元数据落 default 本地兜底，不再 passthrough 到官方。
 	autoNoStage := serveRawStage(t, env, rawStageRequest(t, "auto", "auto-without-stage", "", 0))
-	if autoNoStage.Code != http.StatusOK || autoNoStage.Body.String() != "passthrough" || officialHits != 2 {
-		t.Fatalf("Auto without stage did not pass through: status=%d body=%q hits=%d", autoNoStage.Code, autoNoStage.Body.String(), officialHits)
+	if autoNoStage.Code != http.StatusOK || autoNoStage.Body.String() == "passthrough" || officialHits != 1 {
+		t.Fatalf("Auto without stage bypassed local routing: status=%d body=%q hits=%d", autoNoStage.Code, autoNoStage.Body.String(), officialHits)
+	}
+	if got := <-env.requests; got.Model != "upstream-default" {
+		t.Fatalf("Auto without stage routed = %+v, want upstream-default", got)
 	}
 	withReference := httptest.NewRequest(http.MethodPost, "http://runtime.us-east-1.kiro.dev/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":%q,"stream":true,"input":[{"role":"user","content":"referenced"}],"previous_response_id":"prior-response"}`, selected.ID)))
 	rejectedReference := serveRawStage(t, env, withReference)
 	if rejectedReference.Code != http.StatusBadRequest {
 		t.Fatalf("known model with previous_response_id was not rejected: status=%d body=%q", rejectedReference.Code, rejectedReference.Body.String())
 	}
-	if officialHits != 2 {
+	if officialHits != 1 {
 		t.Fatalf("unsupported continuation reference hit official mock: %d hits", officialHits)
 	}
 	select {
@@ -446,14 +450,14 @@ func TestManualRawResponsesBoundariesAndClearsAutoLockWithoutApplyingStage(t *te
 	}
 	SetProxyMode(ModeCapture)
 	captured := serveRawStage(t, env, manualRawRequest(selected.ID, "capture"))
-	if captured.Code != http.StatusOK || captured.Body.String() != "passthrough" || officialHits != 3 {
+	if captured.Code != http.StatusOK || captured.Body.String() != "passthrough" || officialHits != 2 {
 		t.Fatalf("capture mode did not pass through: status=%d body=%q hits=%d", captured.Code, captured.Body.String(), officialHits)
 	}
 	SetProxyMode(ModeForward)
 	nonPost := manualRawRequest(selected.ID, "non-post")
 	nonPost.Method = http.MethodGet
 	getResp := serveRawStage(t, env, nonPost)
-	if getResp.Code != http.StatusOK || getResp.Body.String() != "passthrough" || officialHits != 4 {
+	if getResp.Code != http.StatusOK || getResp.Body.String() != "passthrough" || officialHits != 3 {
 		t.Fatalf("non-POST request did not pass through: status=%d body=%q hits=%d", getResp.Code, getResp.Body.String(), officialHits)
 	}
 	select {

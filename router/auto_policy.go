@@ -25,6 +25,7 @@ type autoModelLock struct {
 	NodeIdentity     string
 	TaskType         string
 	ExecutionID      string
+	ScopeKey         string
 	LockScope        string
 	Reason           string
 	SelectionSource  string
@@ -119,6 +120,7 @@ func (r *Router) resolveAuto(conv *converter.ParsedConversation, requireEnabledA
 	}
 
 	now := time.Now()
+	nativeContinuationKey := autoNativeContinuationLockKey(conv)
 	executionKey := autoExecutionLockKey(conv)
 	toolKey := autoScopeKey(conv)
 	r.autoMu.Lock()
@@ -127,6 +129,11 @@ func (r *Router) resolveAuto(conv *converter.ParsedConversation, requireEnabledA
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	if nativeContinuationKey != "" {
+		if lock, ok := r.autoLocks[nativeContinuationKey]; ok {
+			return r.resolveExistingExecutionLocked(conv, lock, nativeContinuationKey, now)
+		}
+	}
 	if executionKey != "" {
 		if lock, ok := r.autoLocks[executionKey]; ok {
 			return r.resolveExistingExecutionLocked(conv, lock, executionKey, now)
@@ -213,7 +220,7 @@ func (r *Router) resolveExistingDutyLockLocked(conv *converter.ParsedConversatio
 	r.autoLocks[key] = lock
 	selection := autoSelection{ModelID: lock.ModelID, Duty: lock.Duty, Effort: lock.Effort, EffortFixed: lock.EffortFixed,
 		Source: lock.SelectionSource, UnknownReason: lock.UnknownReason, Reason: lock.Reason}
-	applyAutoSelection(route, selection, lock.ExecutionID, lock.LockScope, lock.Effort)
+	applyAutoSelection(route, selection, observedAutoExecutionID(conv, lock), lock.LockScope, lock.Effort)
 	route.AutoMode = lock.Mode
 	route.AutoChannelIdentity = lock.ChannelIdentity
 	r.recordAutoObservationLocked(conv, route, lock.LockScope)
@@ -237,7 +244,9 @@ func (r *Router) resolveLegacyStageAutoLocked(conv *converter.ParsedConversation
 		selection.Reason = "tool_continuation_unlocked:" + selectionReason
 	}
 	lockKey, lockScope := toolKey, "tool_continuation"
-	if executionKey != "" {
+	if nativeKey := autoNativeContinuationLockKey(conv); nativeKey != "" {
+		lockKey, lockScope = nativeKey, "native_continuation"
+	} else if executionKey != "" {
 		lockKey, lockScope = executionKey, "execution"
 	}
 	selection.EffortFixed = false // legacy stage_fixed preserves legacy request-level effort behavior
@@ -246,8 +255,13 @@ func (r *Router) resolveLegacyStageAutoLocked(conv *converter.ParsedConversation
 	route.AutoStage = selection.Stage
 	route.AutoChannelIdentity = autoChannelIdentity(route.Model)
 	if lockKey != "" {
+		lockExecutionID := conv.WorkflowExecutionID
+		if lockScope == "native_continuation" {
+			lockExecutionID = ""
+		}
 		r.storeAutoLock(lockKey, autoModelLock{ModelID: route.Model.ID, LastUsed: now, Mode: store.AutoRoutingModeStageFixed,
-			Stage: selection.Stage, WorkflowID: conv.WorkflowID, NodeIdentity: conversationNodeIdentity(conv), ExecutionID: conv.WorkflowExecutionID,
+			Stage: selection.Stage, WorkflowID: conv.WorkflowID, NodeIdentity: conversationNodeIdentity(conv), ExecutionID: lockExecutionID,
+			ScopeKey:  autoScopeKey(conv),
 			TaskType:  conv.WorkflowTaskType,
 			LockScope: lockScope, Reason: selectionReason, SelectionSource: selection.Source, UnknownReason: selection.UnknownReason,
 			ChannelIdentity: route.AutoChannelIdentity})
@@ -283,7 +297,9 @@ func (r *Router) resolveDutyAutoLocked(conv *converter.ParsedConversation, selec
 		return nil, fmt.Errorf("auto routing target %q does not support image input", selection.ModelID)
 	}
 	lockKey, lockScope := toolKey, "tool_continuation"
-	if executionKey != "" {
+	if nativeKey := autoNativeContinuationLockKey(conv); nativeKey != "" {
+		lockKey, lockScope = nativeKey, "native_continuation"
+	} else if executionKey != "" {
 		lockKey, lockScope = executionKey, "execution"
 	}
 	applyAutoSelection(route, selection, conv.WorkflowExecutionID, lockScope, selection.Effort)
@@ -294,10 +310,14 @@ func (r *Router) resolveDutyAutoLocked(conv *converter.ParsedConversation, selec
 		groupID, groupFingerprint = route.Group.ID, r.autoGroupFingerprintLocked(route)
 	}
 	if lockKey != "" {
+		lockExecutionID := conv.WorkflowExecutionID
+		if lockScope == "native_continuation" {
+			lockExecutionID = ""
+		}
 		r.storeAutoLock(lockKey, autoModelLock{ModelID: selection.ModelID, GroupID: groupID, GroupFingerprint: groupFingerprint, LastUsed: now, Mode: store.AutoRoutingModeDutyFixed,
 			Duty: selection.Duty, Effort: selection.Effort, EffortFixed: true, NodeIdentity: conversationNodeIdentity(conv),
 			TaskType:    conv.WorkflowTaskType,
-			ExecutionID: conv.WorkflowExecutionID, LockScope: lockScope, Reason: selection.Reason,
+			ExecutionID: lockExecutionID, ScopeKey: autoScopeKey(conv), LockScope: lockScope, Reason: selection.Reason,
 			SelectionSource: selection.Source, UnknownReason: selection.UnknownReason, ChannelIdentity: route.AutoChannelIdentity})
 	}
 	r.recordAutoObservationLocked(conv, route, lockScope)
@@ -317,7 +337,7 @@ func (r *Router) resolveLockedAutoRoute(conv *converter.ParsedConversation, lock
 	}
 	lock.LastUsed = now
 	r.autoLocks[key] = lock
-	applyAutoSelection(route, selection, lock.ExecutionID, lock.LockScope, lock.Effort)
+	applyAutoSelection(route, selection, observedAutoExecutionID(conv, lock), lock.LockScope, lock.Effort)
 	route.AutoMode = lock.Mode
 	route.AutoStage = lock.Stage
 	route.AutoChannelIdentity = lock.ChannelIdentity
@@ -333,6 +353,13 @@ func (r *Router) storeAutoLock(key string, lock autoModelLock) {
 		r.autoLocks = make(map[string]autoModelLock)
 	}
 	r.autoLocks[key] = lock
+}
+
+func observedAutoExecutionID(conv *converter.ParsedConversation, lock autoModelLock) string {
+	if lock.LockScope == "native_continuation" && conv != nil {
+		return conv.WorkflowExecutionID
+	}
+	return lock.ExecutionID
 }
 
 func applyAutoSelection(route *Route, selection autoSelection, executionID, lockScope, effectiveEffort string) {
@@ -352,10 +379,19 @@ func (r *Router) ForgetAuto(conv *converter.ParsedConversation) {
 	if conv == nil {
 		return
 	}
+	scopeKey := autoScopeKey(conv)
+	if scopeKey == "" {
+		return
+	}
 	r.autoMu.Lock()
-	delete(r.autoLocks, autoScopeKey(conv))
+	delete(r.autoLocks, scopeKey)
 	if executionKey := autoExecutionLockKey(conv); executionKey != "" {
 		delete(r.autoLocks, executionKey)
+	}
+	for key, lock := range r.autoLocks {
+		if lock.LockScope == "execution" && lock.ScopeKey == scopeKey {
+			delete(r.autoLocks, key)
+		}
 	}
 	r.autoMu.Unlock()
 }
@@ -364,22 +400,44 @@ func autoScopeKey(conv *converter.ParsedConversation) string {
 	if conv == nil {
 		return ""
 	}
+	if nativeKey := autoNativeContinuationLockKey(conv); nativeKey != "" {
+		return nativeKey
+	}
 	if conv.ContinuationStateKey != "" {
 		return conv.ContinuationStateKey
 	}
 	return conv.ConversationID
 }
 
-func autoExecutionLockKey(conv *converter.ParsedConversation) string {
-	if conv == nil || strings.TrimSpace(conv.WorkflowExecutionID) == "" {
+func autoNativeContinuationLockKey(conv *converter.ParsedConversation) string {
+	if conv == nil || conv.AgentContinuationProvenance != converter.AgentContinuationProvenanceNativeRaw {
 		return ""
 	}
-	return "execution:" + strings.TrimSpace(conv.WorkflowExecutionID)
+	conversationID := strings.TrimSpace(conv.ConversationID)
+	agentMode := strings.ToLower(strings.TrimSpace(conv.AgentMode))
+	continuationID := strings.TrimSpace(conv.AgentContinuationID)
+	if conversationID == "" || continuationID == "" {
+		return ""
+	}
+	return fmt.Sprintf("native_continuation:%d:%s%d:%s%d:%s",
+		len(conversationID), conversationID, len(agentMode), agentMode, len(continuationID), continuationID)
+}
+
+func autoExecutionLockKey(conv *converter.ParsedConversation) string {
+	if conv == nil || conv.AgentContinuationProvenance == converter.AgentContinuationProvenanceNativeRaw || strings.TrimSpace(conv.WorkflowExecutionID) == "" {
+		return ""
+	}
+	scopeKey := autoScopeKey(conv)
+	executionID := strings.TrimSpace(conv.WorkflowExecutionID)
+	// Workflow execution IDs originate in an external client. Include the
+	// conversation/branch scope to prevent identical IDs in separate sessions
+	// from sharing a model lock.
+	return fmt.Sprintf("execution:%d:%s%d:%s", len(scopeKey), scopeKey, len(executionID), executionID)
 }
 
 func (r *Router) expireAutoLocksLocked(now time.Time) {
 	for key, lock := range r.autoLocks {
-		if lock.LockScope == "execution" {
+		if lock.LockScope == "execution" || lock.LockScope == "native_continuation" {
 			continue
 		}
 		if now.Sub(lock.LastUsed) >= autoLockIdleLimit {
@@ -586,6 +644,9 @@ func selectDutyTarget(conv *converter.ParsedConversation, config store.AutoRouti
 			}
 		}
 	}
+	if match, ok := dutySelectionForNodePath(conv, config); ok {
+		return match
+	}
 	if strings.TrimSpace(conv.WorkflowTaskType) != "" {
 		return dutySelectionForTaskType(conv.WorkflowTaskType, conv.WorkflowNodeID, config)
 	}
@@ -594,6 +655,46 @@ func selectDutyTarget(conv *converter.ParsedConversation, config store.AutoRouti
 		selection.Reason = "default:stable_identity_unavailable"
 	}
 	return selection
+}
+
+// dutySelectionForNodePath is the activity-source secondary match: when the
+// workflow definition identity is absent and a node path is present, the path
+// alone selects a configured node entry. Two or more entries sharing the path,
+// across node_overrides and node_bindings alike, are ambiguous and fall back to
+// the default target. Unmatched paths report false so the existing selection
+// flow continues unchanged.
+func dutySelectionForNodePath(conv *converter.ParsedConversation, config store.AutoRoutingConfig) (autoSelection, bool) {
+	if conv == nil || conv.WorkflowDefinitionID != "" || conv.WorkflowDefinitionRevision != "" || conv.WorkflowNodePath == "" {
+		return autoSelection{}, false
+	}
+	matches := 0
+	var override *store.AutoNodeOverride
+	var binding *store.AutoNodeBinding
+	for index := range config.NodeOverrides {
+		if config.NodeOverrides[index].NodePath == conv.WorkflowNodePath {
+			matches++
+			override = &config.NodeOverrides[index]
+		}
+	}
+	for index := range config.NodeBindings {
+		if config.NodeBindings[index].NodePath == conv.WorkflowNodePath {
+			matches++
+			binding = &config.NodeBindings[index]
+		}
+	}
+	switch {
+	case matches == 0:
+		return autoSelection{}, false
+	case matches > 1:
+		return autoSelection{ModelID: config.DefaultModelID, UseModelDefault: true, EffortFixed: true,
+			Source: "default", UnknownReason: "node_path_ambiguous", Reason: "default:node_path_ambiguous"}, true
+	case override != nil:
+		return autoSelection{ModelID: override.ModelID, Effort: override.ReasoningEffort, UseModelDefault: false,
+			EffortFixed: true, Duty: declaredDutyForObservation(conv, config), Source: "node_override_path",
+			Reason: "node_override_path"}, true
+	default:
+		return dutySelectionForName(binding.Duty, "node_binding_path", config), true
+	}
 }
 
 func declaredDutyForObservation(conv *converter.ParsedConversation, config store.AutoRoutingConfig) string {

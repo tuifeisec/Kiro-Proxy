@@ -15,6 +15,8 @@ import {
   autoTargetDefaultEffort,
   autoTargetEffortOptions,
   autoTargetGroupCandidates,
+  applyNodeBindingRule,
+  applyNodeOverrideRule,
   applyDutyForLayout,
   emptyAutoDutyConfig,
   isAutoTargetSelectable,
@@ -22,6 +24,7 @@ import {
   migrateAutoDutyConfig,
   observationIdentity,
   nodeIdentityComplete,
+  pathOnlyNodeRuleConflictMessage,
   parseAutoDutyConfig,
   resolveAutoTarget,
   validateAutoDutyConfig,
@@ -211,6 +214,10 @@ const canApplyBatchQuickRule = computed(() => (
 const batchQuickPreview = computed(() => quickSelectionDetails(batchQuickSelection.value))
 const batchActionLabel = computed(() => {
   if (batchQuickPreview.value?.kind !== 'binding') {
+    const replacesPathOnlyBinding = selectedBatchObservations.value.some((card) => (
+      isPathOnlyNodeIdentity(card.latestRoute) && nodeBindingForObservation(card.latestRoute)
+    ))
+    if (replacesPathOnlyBinding) return '批量切换为独立规则并替换同身份职责绑定'
     const hasExistingOverride = selectedBatchObservations.value.some((card) => nodeOverrideForObservation(card.latestRoute))
     return hasExistingOverride ? '批量更新独立规则' : '批量添加独立规则'
   }
@@ -427,6 +434,8 @@ function quickRuleValidationErrors(observation, selection) {
   const details = quickSelectionDetails(selection)
   if (!details) return [...errors, '请选择职责、模型或分组。']
   if (details.error) errors.push(details.error)
+  const pathConflict = pathOnlyNodeRuleConflictMessage(config.value, observation)
+  if (pathConflict) errors.push(pathConflict)
   if (!details.modelId) errors.push('目标为空；请选择已配置的职责目标、启用模型或有效分组。')
   else if (!isAutoTargetSelectable(details.modelId, models.value, groups.value)) errors.push('目标不是已启用模型或有效分组。')
   if (typeof details.effort !== 'string') errors.push('思考等级必须是字符串。')
@@ -456,7 +465,6 @@ function cloneConfigForQuickRule() {
 }
 
 function applyQuickSelection(candidate, observation, details) {
-  const identity = observationIdentity(observation)
   if (details.kind === 'binding') {
     const item = {
       definition_id: observation.definition_id,
@@ -464,8 +472,9 @@ function applyQuickSelection(candidate, observation, details) {
       node_path: observation.node_path,
       duty: details.duty.key,
     }
-    candidate.node_bindings = [...candidate.node_bindings.filter((existing) => observationIdentity(existing) !== identity), item]
-    candidate.node_overrides = candidate.node_overrides.filter((existing) => observationIdentity(existing) !== identity)
+    const next = applyNodeBindingRule(candidate, item)
+    candidate.node_bindings = next.node_bindings
+    candidate.node_overrides = next.node_overrides
     return
   }
   const item = {
@@ -475,7 +484,9 @@ function applyQuickSelection(candidate, observation, details) {
     model_id: details.modelId,
     reasoning_effort: details.effort,
   }
-  candidate.node_overrides = [...candidate.node_overrides.filter((existing) => observationIdentity(existing) !== identity), item]
+  const next = applyNodeOverrideRule(candidate, item, { upsertIdentity: true })
+  candidate.node_bindings = next.node_bindings
+  candidate.node_overrides = next.node_overrides
 }
 
 function buildBatchCandidate() {
@@ -489,6 +500,20 @@ function buildBatchCandidate() {
     const cardErrors = quickRuleValidationErrors(observation, batchQuickSelection.value)
     errors.push(...cardErrors.map((error) => `${stableObservationLabel(observation)}：${error}`))
     if (!cardErrors.length && details) applyQuickSelection(candidate, observation, details)
+  }
+  if (details) {
+    const checkedIdentities = new Set()
+    for (const card of selectedBatchObservations.value) {
+      const observation = card.latestRoute
+      const identity = observationIdentity(observation)
+      if (checkedIdentities.has(identity)) continue
+      checkedIdentities.add(identity)
+      const candidateConflict = pathOnlyNodeRuleConflictMessage(candidate, observation)
+      const currentConflict = pathOnlyNodeRuleConflictMessage(config.value, observation)
+      if (candidateConflict && candidateConflict !== currentConflict) {
+        errors.push(`${stableObservationLabel(observation)}：${candidateConflict}`)
+      }
+    }
   }
   errors.push(...newlyIntroducedAutoDutyIssues(candidate).map((issue) => `最终草稿：${issue.message}`))
   return { candidate, errors: [...new Set(errors)] }
@@ -530,6 +555,11 @@ function quickActionLabel(card) {
   if (details.kind === 'binding') {
     if (nodeOverrideForObservation(observation)) return '切换到职责绑定并删除覆盖'
     return nodeBindingForObservation(observation) ? '更新职责绑定' : '快捷添加职责绑定'
+  }
+  if (isPathOnlyNodeIdentity(observation) && nodeBindingForObservation(observation)) {
+    return nodeOverrideForObservation(observation)
+      ? '更新独立规则并替换同身份职责绑定'
+      : '切换到独立规则并替换同身份职责绑定'
   }
   return nodeOverrideForObservation(observation) ? '更新独立规则' : '添加独立规则'
 }
@@ -591,6 +621,11 @@ function nodeWorkflowName(record) {
     ? record
     : catalogByIdentity.value.get(autoNodeIdentityKey(record))
   return cardWorkflowName(card)
+}
+
+function isPathOnlyNodeIdentity(record) {
+  return record?.definition_id === '' && record?.definition_revision === '' &&
+    typeof record?.node_path === 'string' && record.node_path !== '' && nodeIdentityErrors(record).length === 0
 }
 
 function cardHasRule(card) {
@@ -743,7 +778,7 @@ function cardTargetScopeText(card) {
     ? `修改当前布局中“${duty.label}”的职责目标，会影响之后按该职责选择目标的请求；不会重写这条已观察或历史路由。`
     : '修改固定默认目标，会影响之后未匹配职责或规则的请求；不会为这条上下文记录创建节点规则。'
   const legacyStage = Boolean(route.selected_stage) && Number(route.workflow_metadata_version) !== 2
-  if (route.selection_source === 'node_override' || route.lock_scope || legacyStage) {
+  if (['node_override', 'node_override_path'].includes(route.selection_source) || route.lock_scope || legacyStage) {
     return `${scope} 此记录还显示独立覆盖、锁定范围或旧版阶段路由；改职责目标不能证明会控制这条路由。`
   }
   return scope
@@ -854,15 +889,10 @@ function addNodeRule() {
 }
 
 function applyNodeRule(item) {
-  const rules = [...config.value.node_overrides]
-  if (editingNodeRuleIndex.value === null) {
-    rules.push({ ...item })
-  } else if (rules[editingNodeRuleIndex.value]) {
-    rules[editingNodeRuleIndex.value] = { ...item }
-  } else {
-    return
-  }
-  config.value.node_overrides = rules
+  const next = applyNodeOverrideRule(config.value, item, { editingIndex: editingNodeRuleIndex.value })
+  if (!next) return
+  config.value.node_bindings = next.node_bindings
+  config.value.node_overrides = next.node_overrides
   closeNodeRuleEditor()
 }
 
@@ -873,7 +903,7 @@ function closeNodeRuleEditor() {
 }
 
 function isObservedCustomRule(observation) {
-  return observation?.selection_source === 'node_override' && !observation.unknown_reason
+  return ['node_override', 'node_override_path'].includes(observation?.selection_source) && !observation.unknown_reason
 }
 
 function hasCustomRuleForObservation(observation) {
@@ -1171,7 +1201,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
 
             <section class="rounded-lg border border-line-2 p-3">
               <div class="flex flex-wrap items-start justify-between gap-2">
-                <div><h4 class="text-[12px] font-semibold text-ink">Auto 节点目录与路由证据</h4><p class="mt-1 text-[11px] text-ink-4">完整身份按 definition_id、definition_revision、node_path 原值归并。进程观察与日志历史分开计数；两者可能覆盖同一请求，不相加。快捷操作先更新草稿，点击本节下方“保存”才提交配置。</p></div>
+                <div><h4 class="text-[12px] font-semibold text-ink">Auto 节点目录与路由证据</h4><p class="mt-1 text-[11px] text-ink-4">完整身份按 definition_id、definition_revision、node_path 原值归并；path-only 规则按完全相同的 node_path 跨工作流定义匹配。进程观察与日志历史分开计数；两者可能覆盖同一请求，不相加。快捷操作先更新草稿，点击本节下方“保存”才提交配置。</p></div>
                 <button type="button" class="shrink-0 rounded border border-line-2 bg-surface px-2.5 py-1.5 text-[10px] text-ink-2 disabled:opacity-50" :disabled="evidenceLoading" @click="refreshEvidence">{{ evidenceLoading ? '正在读取证据…' : '刷新路由证据' }}</button>
               </div>
               <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-ink-4">
@@ -1259,7 +1289,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                     <button type="button" class="rounded-md bg-primary px-3 py-2 text-[10px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="!canApplyBatchQuickRule" @click="applyBatchQuickRule">{{ batchActionLabel }}</button>
                   </div>
                   <p v-if="batchQuickPreview?.kind === 'binding'" class="mt-2 text-[10px] leading-4 text-ink-3" :title="batchQuickPreview.modelId">将写入职责绑定 {{ batchQuickPreview.duty.label }}；目标与等级沿用当前职责配置：{{ batchQuickPreview.targetLabel }} / {{ describeEffort(batchQuickPreview.effort) }}。<span v-if="selectedBatchObservations.some((card) => nodeOverrideForObservation(card.latestRoute))" class="text-warning-fg">同身份独立覆盖会被删除。</span></p>
-                  <p v-else-if="batchQuickPreview?.kind === 'override'" class="mt-2 text-[10px] leading-4 text-ink-3" :title="batchQuickPreview.modelId">将使用 {{ batchQuickPreview.targetLabel }} / {{ describeEffort(batchQuickPreview.effort) }}；等级取目标配置的默认值。已存在的同身份独立规则会被更新。</p>
+                  <p v-else-if="batchQuickPreview?.kind === 'override'" class="mt-2 text-[10px] leading-4 text-ink-3" :title="batchQuickPreview.modelId">将使用 {{ batchQuickPreview.targetLabel }} / {{ describeEffort(batchQuickPreview.effort) }}；等级取目标配置的默认值。已存在的同身份独立规则会被更新；path-only 身份会替换并删除同身份职责绑定，完整三元组身份保留职责绑定并由独立规则优先。若规则冲突涉及 path-only 身份，批量应用会被阻止；不同完整三元组之间可共用路径。</p>
                   <p v-if="batchValidationErrors.length" class="mt-2 text-[10px] leading-4 text-danger" role="alert">{{ batchValidationErrors.join('；') }}</p>
                 </section>
                 <article v-for="card in filteredCatalogCards" :key="card.key" class="rounded-md border border-line-2 p-2.5 text-[10px] leading-4 text-ink-3">
@@ -1280,8 +1310,8 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                     <span>历史日志：{{ historyError ? (historyAvailable ? `读取失败，旧数据 ${card.historyCount} 条` : '读取失败，状态未知') : historyData ? `${card.historyCount} 条聚合记录` : '状态未知' }}</span>
                   </div>
                   <details class="mt-1">
-                    <summary class="cursor-pointer text-[10px] text-ink-4">{{ card.identityComplete ? '核对完整稳定身份' : '核对上下文（不是节点身份）' }}</summary>
-                    <div v-if="card.identityComplete" class="mt-1 break-all font-mono">definition_id={{ card.latestRoute.definition_id }} · definition_revision={{ card.latestRoute.definition_revision }} · node_path={{ card.latestRoute.node_path }}</div>
+                    <summary class="cursor-pointer text-[10px] text-ink-4">{{ card.identityComplete ? (isPathOnlyNodeIdentity(card.latestRoute) ? '核对路径规则身份' : '核对完整稳定身份') : '核对上下文（不是节点身份）' }}</summary>
+                    <div v-if="card.identityComplete" class="mt-1 break-all font-mono">definition_id={{ card.latestRoute.definition_id || '（path-only）' }} · definition_revision={{ card.latestRoute.definition_revision || '（path-only）' }} · node_path={{ card.latestRoute.node_path }}<p v-if="isPathOnlyNodeIdentity(card.latestRoute)" class="mt-1 text-[9px] text-warning-fg">该规则按完全相同的 node_path 跨定义匹配；路径歧义时使用默认目标。iter-N 按原值匹配。</p></div>
                     <div v-else class="mt-1 space-y-0.5">
                       <p>这些字段只用于区分观察上下文，不能作为独立节点规则身份。</p>
                       <p v-for="entry in autoNodeContextEntries(card.latestRoute)" :key="entry.key" class="break-all">{{ entry.label }}={{ entry.value }}</p>
@@ -1312,7 +1342,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                   </details>
                   <div v-if="card.identityComplete" class="mt-2 space-y-2">
                     <div v-if="nodeOverrideForObservation(card.latestRoute)" class="flex flex-wrap items-center justify-between gap-2 rounded border border-warning-tint-line bg-warning-tint px-2 py-1.5 text-warning-fg">
-                      <span>草稿已有独立规则：{{ targetTitle(nodeOverrideForObservation(card.latestRoute)) }} / {{ describeEffort(nodeOverrideForObservation(card.latestRoute).reasoning_effort) }}。可快捷更新；切换到职责会删除此身份的独立覆盖。</span>
+                      <span>草稿已有独立规则：{{ targetTitle(nodeOverrideForObservation(card.latestRoute)) }} / {{ describeEffort(nodeOverrideForObservation(card.latestRoute).reasoning_effort) }}。可快捷更新；切换到职责会删除此身份的独立覆盖。<template v-if="isPathOnlyNodeIdentity(card.latestRoute) && nodeBindingForObservation(card.latestRoute)">更新 path-only 独立规则时也会替换并删除同身份职责绑定。</template></span>
                       <button type="button" class="shrink-0 rounded border border-warning-tint-line bg-surface px-2 py-1 text-[10px] text-ink-2" @click="openNodeRuleEditor(nodeOverrideForObservation(card.latestRoute), nodeOverrideIndex(card.latestRoute))">编辑独立规则</button>
                     </div>
                     <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -1329,13 +1359,13 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                     </div>
                     <template v-if="quickSelectionFor(card)">
                       <p v-if="quickSelectionDetails(quickSelectionFor(card))?.kind === 'binding'" class="text-[10px]" :title="quickSelectionDetails(quickSelectionFor(card)).modelId">将写入职责绑定 {{ quickSelectionDetails(quickSelectionFor(card)).duty.label }}；目标与等级沿用当前职责配置：{{ quickSelectionDetails(quickSelectionFor(card)).targetLabel }} / {{ describeEffort(quickSelectionDetails(quickSelectionFor(card)).effort) }}。<span v-if="nodeOverrideForObservation(card.latestRoute)" class="text-warning-fg">提交后会删除同身份独立覆盖。</span></p>
-                      <p v-else-if="quickSelectionDetails(quickSelectionFor(card))?.kind === 'override'" class="text-[10px]" :title="quickSelectionDetails(quickSelectionFor(card)).modelId">{{ nodeOverrideForObservation(card.latestRoute) ? '将更新该身份已有独立规则' : '将添加独立节点规则' }}：{{ quickSelectionDetails(quickSelectionFor(card)).targetLabel }} / {{ describeEffort(quickSelectionDetails(quickSelectionFor(card)).effort) }}；等级取目标配置的默认值。<span v-if="nodeBindingForObservation(card.latestRoute)" class="text-warning-fg">独立规则优先于已有职责绑定。</span></p>
+                      <p v-else-if="quickSelectionDetails(quickSelectionFor(card))?.kind === 'override'" class="text-[10px]" :title="quickSelectionDetails(quickSelectionFor(card)).modelId">{{ nodeOverrideForObservation(card.latestRoute) ? '将更新该身份已有独立规则' : '将添加独立节点规则' }}：{{ quickSelectionDetails(quickSelectionFor(card)).targetLabel }} / {{ describeEffort(quickSelectionDetails(quickSelectionFor(card)).effort) }}；等级取目标配置的默认值。<span v-if="isPathOnlyNodeIdentity(card.latestRoute) && nodeBindingForObservation(card.latestRoute)" class="text-warning-fg">应用时会替换并删除同身份职责绑定。</span><span v-else-if="nodeBindingForObservation(card.latestRoute)" class="text-warning-fg">完整三元组下保留职责绑定，由独立规则优先。</span></p>
                       <p v-if="quickRuleValidationErrors(card.latestRoute, quickSelectionFor(card)).length" class="text-danger" role="alert">{{ quickRuleValidationErrors(card.latestRoute, quickSelectionFor(card)).join('；') }}</p>
                     </template>
-                    <p v-if="nodeBindingForObservation(card.latestRoute)" class="text-[9px] text-ink-4">当前草稿已有职责绑定 {{ nodeBindingForObservation(card.latestRoute).duty }}；独立规则优先于职责绑定。</p>
+                    <p v-if="nodeBindingForObservation(card.latestRoute)" class="text-[9px] text-ink-4">当前草稿已有职责绑定 {{ nodeBindingForObservation(card.latestRoute).duty }}；<template v-if="isPathOnlyNodeIdentity(card.latestRoute)">选择独立目标后会替换并删除此绑定。</template><template v-else>完整三元组下由独立规则优先，绑定仍保留。</template></p>
                   </div>
                   <div v-else class="mt-2 rounded border border-warning-tint-line bg-warning-tint px-2 py-1.5 text-warning-fg">
-                    <p>缺少完整合法稳定身份；此卡只代表上下文，不能创建节点绑定或覆盖。</p>
+                    <p>没有可用的节点路径身份；此卡只代表上下文，不能创建节点绑定或覆盖。</p>
                     <ul class="mt-1 list-disc pl-4"><li v-for="error in nodeIdentityErrors(card.latestRoute)" :key="error">{{ error }}</li></ul>
                     <p class="mt-1">{{ cardTargetScopeText(card) }}</p>
                     <button type="button" class="mt-1 rounded border border-warning-tint-line bg-surface px-2.5 py-1 text-[10px] text-ink-2" @click="configureCardTarget(card)">{{ cardCurrentDuty(card) ? `定位职责目标：${cardCurrentDuty(card).label}` : '定位默认目标' }}</button>
@@ -1352,7 +1382,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                     <div><strong class="text-ink-2">{{ nodeTitle(item) }}</strong><span v-if="nodeWorkflowName(item)" class="ml-1 text-ink-4">· {{ nodeWorkflowName(item) }}</span> → {{ duties.find((duty) => duty.key === item.duty)?.label || item.duty }}</div>
                     <div class="mt-0.5">用途：{{ nodeUsage(item) }} · 依据：{{ nodeEvidenceLabel(item) }}<span v-if="evidenceProvenance(item)"> · {{ evidenceProvenance(item) }}</span></div>
                     <div class="mt-0.5" :title="bindingTargetFullId(item)">职责目标与等级：{{ bindingTargetLabel(item) }}</div>
-                    <details class="mt-1"><summary class="cursor-pointer text-[9px] text-ink-4">核对完整身份</summary><div class="break-all font-mono">definition_id={{ item.definition_id }} · definition_revision={{ item.definition_revision }} · node_path={{ item.node_path }}</div></details>
+                    <details class="mt-1"><summary class="cursor-pointer text-[9px] text-ink-4">核对{{ isPathOnlyNodeIdentity(item) ? '路径规则身份' : '完整身份' }}</summary><div class="break-all font-mono">definition_id={{ item.definition_id || '（path-only）' }} · definition_revision={{ item.definition_revision || '（path-only）' }} · node_path={{ item.node_path }}</div><p v-if="isPathOnlyNodeIdentity(item)" class="mt-1 text-[9px] text-warning-fg">跨工作流定义匹配完全相同的 node_path；iter-N 按原值匹配。</p></details>
                   </div>
                   <button type="button" class="text-danger" @click="removeNodeBinding(item)">删除</button>
                 </div>
@@ -1362,22 +1392,22 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                   <h5 class="text-[11px] font-semibold text-ink-2">自定义节点规则（{{ config.node_overrides.length }}）</h5>
                   <button type="button" class="rounded border border-line-2 bg-surface px-2.5 py-1 text-[10px] text-ink-2" @click="addNodeRule">新增规则</button>
                 </div>
-                <p class="mt-1 text-[10px] leading-4 text-ink-4">自定义规则按稳定身份优先匹配；未命中时继续现有职责绑定/声明规则与固定默认目标链路。观察状态按完整身份匹配本进程记录：“本进程尚未观察”不代表节点不存在，也不表示当前仍在运行或新规则已生效。</p>
+                <p class="mt-1 text-[10px] leading-4 text-ink-4">完整三元组规则按身份精确匹配，同身份独立覆盖优先于职责绑定；path-only 规则仅在 definition 身份缺失时按 node_path 匹配，切换为独立目标会替换并删除同身份职责绑定。完整三元组与 path-only 身份共用路径会让缺少 definition 身份的请求歧义并使用默认目标，新增或编辑规则时会阻止此类冲突；不同完整三元组之间可共用路径。iter-N 按原值精确匹配，不做自动删除。观察状态按对应身份匹配本进程记录：“本进程尚未观察”不代表节点不存在，也不表示当前仍在运行或新规则已生效。</p>
                 <p class="mt-1 text-[10px] leading-4 text-ink-4">外层保存后，新执行实例采用新规则；进行中的实例继续沿用已有目标。</p>
-                <p v-if="config.node_overrides.length" class="mt-1 text-[10px] leading-4 text-warning-fg">独立节点规则优先于同一身份的职责绑定。</p>
+                <p v-if="config.node_overrides.length" class="mt-1 text-[10px] leading-4 text-warning-fg">path-only 独立规则会替换同身份职责绑定；完整三元组的独立覆盖优先于同身份职责绑定，绑定仍保留。</p>
                 <div v-for="(item, index) in config.node_overrides" :key="observationIdentity(item)" class="flex flex-wrap items-center justify-between gap-2 py-1 text-[10px]">
                   <div class="min-w-0">
                     <div><strong class="text-ink-2">{{ nodeTitle(item) }}</strong><span v-if="nodeWorkflowName(item)" class="ml-1 text-ink-4">· {{ nodeWorkflowName(item) }}</span> → {{ targetTitle(item) }} / {{ describeEffort(item.reasoning_effort) }}</div>
                     <div class="mt-0.5">用途：{{ nodeUsage(item) }} · 依据：{{ nodeEvidenceLabel(item) }}<span v-if="evidenceProvenance(item)"> · {{ evidenceProvenance(item) }}</span></div>
                     <div class="mt-0.5 text-[9px] text-ink-4">{{ observationsError ? '观察状态未知（读取失败）' : hasCurrentProcessObservation(item) ? '本进程已观察' : '本进程尚未观察' }}</div>
-                    <details class="mt-1"><summary class="cursor-pointer text-[9px] text-ink-4">核对完整身份</summary><div class="break-all font-mono">definition_id={{ item.definition_id }} · definition_revision={{ item.definition_revision }} · node_path={{ item.node_path }}</div></details>
+                    <details class="mt-1"><summary class="cursor-pointer text-[9px] text-ink-4">核对{{ isPathOnlyNodeIdentity(item) ? '路径规则身份' : '完整身份' }}</summary><div class="break-all font-mono">definition_id={{ item.definition_id || '（path-only）' }} · definition_revision={{ item.definition_revision || '（path-only）' }} · node_path={{ item.node_path }}</div><p v-if="isPathOnlyNodeIdentity(item)" class="mt-1 text-[9px] text-warning-fg">跨工作流定义匹配完全相同的 node_path；iter-N 按原值匹配。</p></details>
                   </div>
                   <div class="flex shrink-0 items-center gap-2">
                     <button type="button" class="rounded border border-line-2 bg-surface px-2 py-1 text-[10px] text-ink-2" @click="openNodeRuleEditor(item, index)">编辑</button>
                     <button type="button" class="text-danger" @click="removeNodeOverride(item)">删除</button>
                   </div>
                 </div>
-                <p v-if="!config.node_overrides.length" class="mt-2 text-[10px] text-ink-4">尚无自定义节点规则。可手工新增未观察节点的完整身份。</p>
+                <p v-if="!config.node_overrides.length" class="mt-2 text-[10px] text-ink-4">尚无自定义节点规则。可手工新增完整身份或 path-only 规则。</p>
               </div>
             </section>
 
@@ -1400,6 +1430,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
     :open="nodeRuleEditorOpen"
     :models="models"
     :groups="groups"
+    :bindings="config.node_bindings"
     :rules="config.node_overrides"
     :editing-index="editingNodeRuleIndex"
     :draft="nodeRuleDraft"
@@ -1472,7 +1503,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
               <p v-else class="mt-1 break-words text-base font-semibold text-ink">{{ activeDescription.observation.selected_duty || '未确认' }}<span v-if="activeObservedDuty?.label && activeObservedDuty.label !== activeDescription.observation.selected_duty" class="ml-1 text-sm font-normal text-ink-3">（{{ activeObservedDuty.label }}）</span></p>
               <p v-if="!activeDescription.activityOnly && activeDescription.observation.selected_duty" class="mt-1 text-ink-3">{{ activeObservedDuty?.description?.purpose || '观察记录保留了该 selected_duty 值，但没有匹配到已知职责说明。' }}</p>
               <p v-else-if="activeDescription.activityOnly" class="mt-1 text-[11px] text-ink-4">活动记录的名称或工作流标题只作参考，不参与职责判断。</p>
-              <p v-else-if="isObservedCustomRule(activeDescription.observation)" class="mt-1 text-[11px] text-ink-4">该观察没有 selected_duty；source=node_override 表示请求匹配了自定义节点规则。职责未确认不代表规则未生效。</p>
+              <p v-else-if="isObservedCustomRule(activeDescription.observation)" class="mt-1 text-[11px] text-ink-4">该观察没有 selected_duty；source=node_override 或 node_override_path 表示请求匹配了自定义节点规则。职责未确认不代表规则未生效。</p>
               <p v-else class="mt-1 text-[11px] text-ink-4">当前实际用途未确认。节点名称和 task_type 只作参考，不会被用来推断路由职责。</p>
             </section>
             <section>

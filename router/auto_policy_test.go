@@ -169,9 +169,132 @@ func TestAutoGroupDefaultsMetadataAndFallbackProviderValidation(t *testing.T) {
 		t.Fatalf("group-only metadata omitted fallback: %#v", metadata)
 	}
 	r.models[2].Provider = "anthropic"
-	r.autoConfig.DutyModels["implementation"] = store.AutoDutyTarget{ModelID: "gpt", ReasoningEffort: "none"}
+	r.autoConfig.DutyModels["implementation"] = store.AutoDutyTarget{ModelID: "gpt", ReasoningEffort: "xhigh"}
 	if err := ValidateAutoRoutingConfig(r.autoConfig, r.models, r.groups); err == nil || !strings.Contains(err.Error(), "backup") {
 		t.Fatalf("fallback provider was not checked: %v", err)
+	}
+}
+
+func TestForgetAutoClearsOnlyTheManualBranchExecutionLock(t *testing.T) {
+	r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoPolicyConfig())
+	main := autoPolicyConversation()
+	main.ConversationID = "shared-session"
+	main.ContinuationStateKey = "shared-session"
+	main.WorkflowExecutionID = "same-execution-id"
+	main.WorkflowStage, main.WorkflowStageProvided = "run", true
+	if route, err := r.ResolveAuto(main); err != nil || route.Model.ID != "fast" {
+		t.Fatalf("main execution route=(%#v, %v)", route, err)
+	}
+
+	branch := *main
+	branch.ContinuationStateKey = "branch|shared-session|code"
+	branch.WorkflowStage = "implement"
+	if route, err := r.ResolveAuto(&branch); err != nil || route.Model.ID != "reasoning" {
+		t.Fatalf("branch execution route=(%#v, %v)", route, err)
+	}
+	mainExecutionKey := autoExecutionLockKey(main)
+	branchExecutionKey := autoExecutionLockKey(&branch)
+	if mainExecutionKey == branchExecutionKey {
+		t.Fatal("execution locks for separate branches share a key")
+	}
+
+	// A manual raw request knows the session and branch metadata, but its parser
+	// intentionally does not infer a workflow execution ID.
+	manual := &converter.ParsedConversation{ConversationID: main.ConversationID, ContinuationStateKey: main.ContinuationStateKey}
+	r.ForgetAuto(manual)
+	if _, exists := r.autoLocks[mainExecutionKey]; exists {
+		t.Fatal("manual model selection left its branch execution lock active")
+	}
+	if _, exists := r.autoLocks[branchExecutionKey]; !exists {
+		t.Fatal("manual model selection cleared another branch execution lock")
+	}
+
+	config := autoPolicyConfig()
+	config.StageModels.Run = "replacement"
+	setAutoPolicyConfig(t, r, config)
+	if route, err := r.ResolveAuto(main); err != nil || route.Model.ID != "replacement" {
+		t.Fatalf("next Auto after manual model selection reused the stale execution: (%#v, %v)", route, err)
+	}
+}
+
+func TestNativeContinuationLocksGenerationAndIgnoresLateActivityExecution(t *testing.T) {
+	r := newAutoPolicyTestRouter(t, autoPolicyModels(), autoPolicyConfig())
+	conv := autoPolicyConversation()
+	conv.ConversationID = "native-session"
+	conv.AgentMode = "vibe"
+	conv.AgentContinuationID = "native-continuation-1"
+	conv.AgentContinuationProvenance = converter.AgentContinuationProvenanceNativeRaw
+	// The Responses cache keeps its existing conversation-only key for vibe mode.
+	conv.ContinuationStateKey = "native-session"
+	conv.WorkflowStage, conv.WorkflowStageProvided = "run", true
+	conv.WorkflowExecutionID = "observed-execution-1"
+
+	lockKey := autoNativeContinuationLockKey(conv)
+	if lockKey == "" || autoExecutionLockKey(conv) != "" || autoScopeKey(conv) != lockKey {
+		t.Fatalf("native scope was not separated from activity execution: scope=%q execution=%q", autoScopeKey(conv), autoExecutionLockKey(conv))
+	}
+	first, err := r.ResolveAuto(conv)
+	if err != nil || first.Model.ID != "fast" || first.AutoLockScope != "native_continuation" {
+		t.Fatalf("first native continuation route=%+v err=%v", first, err)
+	}
+	if lock, ok := r.autoLocks[lockKey]; !ok || lock.ScopeKey != lockKey || lock.ExecutionID != "" {
+		t.Fatalf("native continuation snapshot was not stored independently: %#v, exists=%t", lock, ok)
+	}
+	if first.AutoExecutionID != "observed-execution-1" {
+		t.Fatalf("activity execution ID was not kept as observation data: route=%+v", first)
+	}
+
+	conv.WorkflowStage = "implement"
+	conv.WorkflowExecutionID = "observed-execution-2"
+	lock := r.autoLocks[lockKey]
+	lock.LastUsed = time.Now().Add(-autoLockIdleLimit - time.Minute)
+	r.autoLocks[lockKey] = lock
+	if got := autoNativeContinuationLockKey(conv); got != lockKey {
+		t.Fatalf("late activity changed native key: got %q want %q", got, lockKey)
+	}
+	continued, err := r.ResolveAuto(conv)
+	if err != nil || continued.Model.ID != "fast" || continued.AutoLockScope != "native_continuation" ||
+		continued.AutoStage != first.AutoStage || continued.AutoSelectionSource != first.AutoSelectionSource || continued.AutoExecutionID != "observed-execution-2" {
+		t.Fatalf("late activity changed locked generation: route=%+v err=%v", continued, err)
+	}
+
+	next := *conv
+	next.AgentContinuationID = "native-continuation-2"
+	next.WorkflowStage = "implement"
+	next.WorkflowExecutionID = "observed-execution-3"
+	nextRoute, err := r.ResolveAuto(&next)
+	if err != nil || nextRoute.Model.ID != "reasoning" || nextRoute.AutoLockScope != "native_continuation" {
+		t.Fatalf("new native continuation did not select from current metadata: route=%+v err=%v", nextRoute, err)
+	}
+	if autoNativeContinuationLockKey(&next) == lockKey {
+		t.Fatal("different native continuations shared a lock key")
+	}
+	otherMode := *conv
+	otherMode.AgentMode = "plan"
+	if autoNativeContinuationLockKey(&otherMode) == lockKey {
+		t.Fatal("different agent modes shared a lock key")
+	}
+	otherConversation := *conv
+	otherConversation.ConversationID = "another-session"
+	if autoNativeContinuationLockKey(&otherConversation) == lockKey {
+		t.Fatal("different conversations shared a lock key")
+	}
+	emptyNative := *conv
+	emptyNative.AgentContinuationID = ""
+	if autoNativeContinuationLockKey(&emptyNative) != "" || autoExecutionLockKey(&emptyNative) != "" {
+		t.Fatal("empty native continuation was replaced with an activity execution lock")
+	}
+	legacyBridge := *conv
+	legacyBridge.AgentContinuationProvenance = converter.AgentContinuationProvenanceProxyBridge
+	if autoExecutionLockKey(&legacyBridge) == "" {
+		t.Fatal("legacy bridge execution-lock behavior was not preserved")
+	}
+
+	manual := &converter.ParsedConversation{ConversationID: conv.ConversationID, AgentMode: conv.AgentMode,
+		AgentContinuationID: conv.AgentContinuationID, AgentContinuationProvenance: converter.AgentContinuationProvenanceNativeRaw}
+	r.ForgetAuto(manual)
+	if _, exists := r.autoLocks[lockKey]; exists {
+		t.Fatal("manual model selection left the native continuation lock active")
 	}
 }
 

@@ -101,7 +101,11 @@ func TestParseAutoRoutingConfigRejectsLegacyAndInvalidInput(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ParseAutoRoutingConfig(%q) unexpectedly succeeded", raw)
 			}
-			if name == "missing mode" || name == "missing mode with unknown field" || name == "empty mode" || name == "task rules mode" {
+			if name == "task rules mode" {
+				if !strings.Contains(err.Error(), "legacy task_rules Auto configuration is unsupported") || !strings.Contains(err.Error(), "stage_fixed") {
+					t.Fatalf("task_rules error = %v", err)
+				}
+			} else if name == "missing mode" || name == "missing mode with unknown field" || name == "empty mode" {
 				if !strings.Contains(err.Error(), "legacy Auto configuration") || !strings.Contains(err.Error(), "stage_fixed") {
 					t.Fatalf("migration error = %v", err)
 				}
@@ -310,6 +314,81 @@ func TestParseAutoRoutingConfigV2PreservesMaximumStableIdentityWithoutTrimming(t
 	}
 }
 
+func TestAutoRoutingPathOnlyNodeRules(t *testing.T) {
+	config, err := ParseAutoRoutingConfig(v2AutoRoutingRaw(AutoRoutingLayoutStandard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.NodeBindings = append(config.NodeBindings, AutoNodeBinding{
+		NodePath: "review-loop/review", Duty: "code_review",
+	})
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseAutoRoutingConfig(string(encoded))
+	if err != nil {
+		t.Fatalf("path-only binding rejected: %v", err)
+	}
+	if err := ValidateAutoRoutingConfig(parsed, v2AutoRoutingModels(AutoRoutingLayoutStandard)); err != nil {
+		t.Fatalf("path-only binding failed validation: %v", err)
+	}
+	if got := parsed.NodeBindings[0]; got.DefinitionID != "" || got.DefinitionRevision != "" || got.NodePath != "review-loop/review" {
+		t.Fatalf("path-only identity was changed: %+v", got)
+	}
+
+	parsed.NodeOverrides = append(parsed.NodeOverrides, AutoNodeOverride{
+		NodePath: "review-loop/review", ModelID: "m1",
+	})
+	encoded, err = json.Marshal(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAutoRoutingConfig(string(encoded)); err != nil {
+		t.Fatalf("path-only override rejected: %v", err)
+	}
+	if err := ValidateAutoRoutingConfig(parsed, v2AutoRoutingModels(AutoRoutingLayoutStandard)); err != nil {
+		t.Fatalf("path-only override failed validation: %v", err)
+	}
+
+	for name, identity := range map[string]struct{ definitionID, revision, path string }{
+		"missing path":           {"", "", ""},
+		"definition without rev": {"definition", "", "node"},
+		"revision without def":   {"", "revision", "node"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := AutoRoutingConfig{Version: AutoRoutingVersion, Mode: AutoRoutingModeDutyFixed,
+				Layout: AutoRoutingLayoutStandard, DutyModels: map[string]AutoDutyTarget{},
+				NodeBindings: []AutoNodeBinding{{DefinitionID: identity.definitionID, DefinitionRevision: identity.revision,
+					NodePath: identity.path, Duty: "code_review"}}, NodeOverrides: []AutoNodeOverride{}}
+			if err := ValidateAutoRoutingConfig(invalid, nil); err == nil {
+				t.Fatal("invalid node identity unexpectedly validated")
+			}
+		})
+	}
+
+	duplicate := parsed
+	duplicate.NodeBindings = append(append([]AutoNodeBinding(nil), parsed.NodeBindings...), parsed.NodeBindings[0])
+	encoded, err = json.Marshal(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAutoRoutingConfig(string(encoded)); err == nil || !strings.Contains(err.Error(), "duplicate node_bindings identity") {
+		t.Fatalf("duplicate path-only identity error = %v", err)
+	}
+
+	coexist := parsed
+	coexist.NodeBindings = append(append([]AutoNodeBinding(nil), parsed.NodeBindings...), AutoNodeBinding{
+		DefinitionID: "workflow", DefinitionRevision: "rev-1", NodePath: "review-loop/review", Duty: "design",
+	})
+	encoded, err = json.Marshal(coexist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAutoRoutingConfig(string(encoded)); err != nil {
+		t.Fatalf("path-only and workflow-scoped identities should remain distinct entries: %v", err)
+	}
+}
 func v2AutoRoutingRaw(layout string) string {
 	targets := make(map[string]AutoDutyTarget)
 	for _, duty := range AutoDutyNames(layout) {

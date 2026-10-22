@@ -115,29 +115,30 @@ type KiroReasoningConfig struct {
 
 // ParsedConversation 是一次解析后的结构化会话，后续所有转换都基于此
 type ParsedConversation struct {
-	ModelID                    string
-	ConversationID             string
-	ProfileArn                 string
-	ChatTriggerType            string
-	AgentTaskType              string
-	AgentMode                  string
-	AgentContinuationID        string
-	WorkflowStage              string
-	WorkflowStageSource        string
-	WorkflowStageProvided      bool
-	WorkflowID                 string
-	WorkflowMetadataVersion    int
-	WorkflowNodeID             string
-	WorkflowDefinitionID       string
-	WorkflowDefinitionRevision string
-	WorkflowNodePath           string
-	WorkflowTaskType           string
-	WorkflowExecutionID        string
-	Origin                     string
-	PromptAffinityKey          string
-	ContinuationStateKey       string
-	IsClassifier               bool   // intent-classification 请求
-	SystemText                 string // 从 history[0] 提取的系统提示
+	ModelID                     string
+	ConversationID              string
+	ProfileArn                  string
+	ChatTriggerType             string
+	AgentTaskType               string
+	AgentMode                   string
+	AgentContinuationID         string
+	AgentContinuationProvenance string
+	WorkflowStage               string
+	WorkflowStageSource         string
+	WorkflowStageProvided       bool
+	WorkflowID                  string
+	WorkflowMetadataVersion     int
+	WorkflowNodeID              string
+	WorkflowDefinitionID        string
+	WorkflowDefinitionRevision  string
+	WorkflowNodePath            string
+	WorkflowTaskType            string
+	WorkflowExecutionID         string
+	Origin                      string
+	PromptAffinityKey           string
+	ContinuationStateKey        string
+	IsClassifier                bool   // intent-classification 请求
+	SystemText                  string // 从 history[0] 提取的系统提示
 
 	// 当前消息
 	CurrentContent          string
@@ -159,6 +160,11 @@ type ParsedConversation struct {
 	TopP            *float64
 	ReasoningEffort string
 }
+
+const (
+	AgentContinuationProvenanceNativeRaw   = "native_raw"
+	AgentContinuationProvenanceProxyBridge = "proxy_bridge"
+)
 
 type ParsedHistoryEntry struct {
 	// 用户侧

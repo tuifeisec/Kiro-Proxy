@@ -12,16 +12,19 @@ func TestParseKiroRawResponsesManualRoutingOptionalMetadataAndScope(t *testing.T
 		conversation string
 		mode         string
 		continuation string
+		provenance   string
 		wantStateKey string
 	}{
 		{
-			name: "without metadata",
-			body: `{"model":"local-id","input":[]}`,
+			name:       "without metadata",
+			body:       `{"model":"local-id","input":[]}`,
+			provenance: AgentContinuationProvenanceNativeRaw,
 		},
 		{
 			name:         "partial metadata",
 			body:         `{"model":"local-id","input":[],"metadata":{"kiro:conversation_id":" conv-1 "}}`,
 			conversation: "conv-1",
+			provenance:   AgentContinuationProvenanceNativeRaw,
 			wantStateKey: "conv-1",
 		},
 		{
@@ -30,7 +33,17 @@ func TestParseKiroRawResponsesManualRoutingOptionalMetadataAndScope(t *testing.T
 			conversation: "conv-2",
 			mode:         "plan",
 			continuation: "branch-2",
+			provenance:   AgentContinuationProvenanceProxyBridge,
 			wantStateKey: buildContinuationStateKey("conv-2", "plan", "branch-2"),
+		},
+		{
+			name:         "native continuation metadata",
+			body:         `{"model":"local-id","input":[],"metadata":{"kiro:conversation_id":"conv-3","kiro:agent_mode":"plan","kiro:agent_continuation_id":"native-3"}}`,
+			conversation: "conv-3",
+			mode:         "plan",
+			continuation: "native-3",
+			provenance:   AgentContinuationProvenanceNativeRaw,
+			wantStateKey: buildContinuationStateKey("conv-3", "plan", "native-3"),
 		},
 	}
 	for _, test := range tests {
@@ -41,7 +54,7 @@ func TestParseKiroRawResponsesManualRoutingOptionalMetadataAndScope(t *testing.T
 			if err != nil {
 				t.Fatalf("ParseKiroRawResponsesManualRouting: %v", err)
 			}
-			if conv.ModelID != "local-id" || conv.ConversationID != test.conversation || conv.AgentMode != test.mode || conv.AgentContinuationID != test.continuation {
+			if conv.ModelID != "local-id" || conv.ConversationID != test.conversation || conv.AgentMode != test.mode || conv.AgentContinuationID != test.continuation || conv.AgentContinuationProvenance != test.provenance {
 				t.Fatalf("parsed routing values = %+v", conv)
 			}
 			if conv.PromptAffinityKey != test.conversation || conv.ContinuationStateKey != test.wantStateKey {
@@ -73,6 +86,10 @@ func TestParseKiroRawResponsesManualRoutingRejectsInvalidInputAndReferences(t *t
 		{name: "bad conversation metadata", body: `{"model":"local-id","input":[],"metadata":{"kiro:conversation_id":1}}`},
 		{name: "bad agent mode metadata", body: `{"model":"local-id","input":[],"metadata":{"kiro:agent_mode":false}}`},
 		{name: "bad continuation metadata", body: `{"model":"local-id","input":[],"metadata":{"kiro:proxy_continuation_id":null}}`},
+		{name: "bad native continuation metadata", body: `{"model":"local-id","input":[],"metadata":{"kiro:agent_continuation_id":false}}`},
+		{name: "conflicting continuation metadata", body: `{"model":"local-id","input":[],"metadata":{"kiro:agent_continuation_id":"native","kiro:proxy_continuation_id":"proxy"}}`},
+		{name: "bad native continuation metadata", body: `{"model":"local-id","input":[],"metadata":{"kiro:agent_continuation_id":false}}`},
+		{name: "conflicting continuation metadata", body: `{"model":"local-id","input":[],"metadata":{"kiro:agent_continuation_id":"native","kiro:proxy_continuation_id":"proxy"}}`},
 		{name: "duplicate key", body: `{"model":"local-id","model":"local-id","input":[]}`},
 		{name: "trailing object", body: `{"model":"local-id","input":[]} {}`},
 		{name: "invalid effort", body: `{"model":"local-id","input":[],"reasoning":{"effort":"ultra"}}`},

@@ -14,7 +14,7 @@ import (
 
 func TestDutyAutoGroupRecordsActualMemberAfterCapacityDispatch(t *testing.T) {
 	env := newAutoStageIntegrationEnv(t)
-	group := &store.ModelGroup{ID: "duty-group", Name: "Duty GPT group", Enabled: true, MaxAttempts: 2, FirstByteTimeoutMS: 1000,
+	group := &store.ModelGroup{ID: "duty-group", Name: "Duty GPT group", Enabled: true, MaxAttempts: 2, FirstByteTimeoutMS: 10000,
 		Members: []store.ModelGroupMember{{ModelID: "run", Priority: 0, MaxConcurrency: 1}, {ModelID: "manual", Priority: 1, MaxConcurrency: 1}}}
 	if err := env.db.CreateModelGroup(group); err != nil {
 		t.Fatal(err)

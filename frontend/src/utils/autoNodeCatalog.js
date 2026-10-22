@@ -70,16 +70,21 @@ export function nodeIdentityErrors(record) {
   const errors = []
   for (const field of IDENTITY_FIELDS) {
     const value = record?.[field.key]
-    if (typeof value !== 'string' || !value) {
-      errors.push(`${field.label} 缺失，不能创建快捷规则。`)
+    if (typeof value !== 'string') {
+      errors.push(`${field.label} 必须是字符串，不能创建快捷规则。`)
       continue
     }
+    if (field.key === 'node_path' && !value) errors.push('node_path 缺失，不能创建快捷规则。')
     const hasBoundaryNEL = value.charCodeAt(0) === 0x85 || value.charCodeAt(value.length - 1) === 0x85
     if (value !== value.trim() || hasBoundaryNEL) errors.push(`${field.label} 含首尾空白，不能创建快捷规则。`)
     if (/[\0\r\n]/.test(value)) errors.push(`${field.label} 含 NUL、CR 或 LF，不能创建快捷规则。`)
     if (new TextEncoder().encode(value).length > field.maxBytes) {
       errors.push(`${field.label} 超过 ${field.maxBytes} 个 UTF-8 字节，不能创建快捷规则。`)
     }
+  }
+  if (typeof record?.definition_id === 'string' && typeof record?.definition_revision === 'string' &&
+    Boolean(record.definition_id) !== Boolean(record.definition_revision)) {
+    errors.push('definition_id 与 definition_revision 必须同时存在；两者都为空时按 node_path 配置。')
   }
   return [...new Set(errors)]
 }

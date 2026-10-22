@@ -150,44 +150,76 @@ func TestKiroBridgeStatusDamagedRecordPreservesError(t *testing.T) {
 }
 
 func TestKiroBridgeRestartPolicyReflectsSettingsAndSubmittedPlan(t *testing.T) {
-	matching := kiroLaunchSnapshot{ProxyMode: ModeForward, BridgeEnabled: true, BundleSHA256: "bundle", AdapterSHA256: "adapter"}
-	disabled := kiroLaunchSnapshot{ProxyMode: ModeCapture, BridgeEnabled: false}
-	changed := matching
-	changed.BundleSHA256 = "old-bundle"
+	matching := kiroLaunchSnapshot{ProxyMode: ModeForward, CAInjected: true, BridgeEnabled: false, BundleSHA256: "bundle", AdapterSHA256: "adapter"}
+	changedBundle := matching
+	changedBundle.BundleSHA256 = "old-bundle"
+	changedAdapter := matching
+	changedAdapter.AdapterSHA256 = "old-adapter"
+	oldBridge := matching
+	oldBridge.BridgeEnabled = true
+	capture := kiroLaunchSnapshot{ProxyMode: ModeCapture, CAInjected: true}
+	missingCA := matching
+	missingCA.CAInjected = false
+	wrongMode := matching
+	wrongMode.ProxyMode = ModeCapture
 	for _, tc := range []struct {
-		name, installation, mode, reason  string
-		owned, routing, required, restart bool
-		snapshot                          *kiroLaunchSnapshot
+		name, installation, mode, reason string
+		owned, restart                   bool
+		snapshot                         *kiroLaunchSnapshot
 	}{
-		{"unconfigured", "record_previous", ModeForward, "proxy_unconfigured", false, true, false, false, nil},
-		{"capture no plan", "record_previous", ModeCapture, "capture", true, true, false, true, nil},
-		{"capture disables bridge", "verified_current", ModeCapture, "capture", true, true, false, true, &matching},
-		{"capture already submitted", "record_previous", ModeCapture, "capture", true, true, false, false, &disabled},
-		{"routing disabled", "verified_current", ModeForward, "routing_disabled", true, false, false, true, &matching},
-		{"routing disabled already submitted", "record_previous", ModeForward, "routing_disabled", true, false, false, false, &disabled},
-		{"unverified current", "record_current", ModeForward, "", true, true, true, true, &matching},
-		{"old bridge", "record_previous", ModeForward, "", true, true, true, true, &matching},
-		{"verified no plan", "verified_current", ModeForward, "", true, true, true, true, nil},
-		{"enable after capture", "verified_current", ModeForward, "", true, true, true, true, &disabled},
-		{"file changed", "verified_current", ModeForward, "", true, true, true, true, &changed},
-		{"matching submitted plan", "verified_current", ModeForward, "", true, true, true, false, &matching},
+		{"unconfigured", "unknown", ModeForward, "proxy_unconfigured", false, false, nil},
+		{"no launch snapshot", "unknown", ModeForward, "activity_routing", true, false, nil},
+		{"matching launch snapshot", "error", ModeForward, "activity_routing", true, false, &matching},
+		{"capture snapshot matches", "legacy_previous", ModeCapture, "capture", true, false, &capture},
+		{"old bridge is irrelevant", "legacy_previous", ModeForward, "activity_routing", true, false, &oldBridge},
+		{"bundle changed is irrelevant", "error", ModeForward, "activity_routing", true, false, &changedBundle},
+		{"adapter changed is irrelevant", "unsupported", ModeForward, "activity_routing", true, false, &changedAdapter},
+		{"CA injection changed", "verified_current", ModeForward, "launch_settings_changed", true, true, &missingCA},
+		{"proxy mode changed", "verified_current", ModeForward, "launch_settings_changed", true, true, &wrongMode},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			status := kiroBridgeStatus{Installation: tc.installation, BundleSHA256: "bundle", ExpectedAdapterSHA256: "adapter", Message: "mock file identity"}
-			applyKiroBridgePolicy(&status, tc.owned, tc.routing, tc.mode, tc.snapshot)
-			if status.Required != tc.required || status.RestartRequired != tc.restart || status.Reason != tc.reason || status.LastLaunch != tc.snapshot || status.RestartReason == "" {
+			status := kiroBridgeStatus{
+				Required: true, Reason: "stale", Installation: tc.installation,
+				Message: "mock file identity", RestartRequired: true, RestartReason: "stale",
+				BundleSHA256: "bundle", ExpectedAdapterSHA256: "adapter",
+			}
+			applyKiroBridgePolicy(&status, tc.owned, tc.mode, tc.snapshot)
+			if status.Required || status.RestartRequired != tc.restart || status.Reason != tc.reason || status.Installation != "not_required" || status.LastLaunch != tc.snapshot || status.RestartReason == "" {
 				t.Fatalf("status = %+v", status)
 			}
-			if tc.name == "matching submitted plan" && !strings.Contains(status.RestartReason, "仍需实际请求验证") {
-				t.Fatalf("submitted plan must not claim actual loading: %q", status.RestartReason)
+			if !strings.Contains(status.Message, "不依赖") {
+				t.Fatalf("bridge status must explain that activity routing does not depend on it: %q", status.Message)
 			}
 		})
 	}
 }
 
+func TestKiroProxyOwnershipErrorIsVisibleInStatusJSON(t *testing.T) {
+	status := kiroProxyStatus{}
+	bridge := kiroBridgeStatus{}
+	status.StageBridge = &bridge
+	want := "interface lookup denied"
+	markKiroProxyOwnershipUnknown(&status, &bridge, errors.New(want))
+
+	if status.Error != "识别 Kiro 代理归属失败："+want || bridge.Reason != "proxy_status_unknown" || bridge.RestartReason != status.Error {
+		t.Fatalf("ownership error status = %+v, bridge = %+v", status, bridge)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["error"] != status.Error {
+		t.Fatalf("status JSON error = %v, want %q", payload["error"], status.Error)
+	}
+}
+
 func TestKiroLaunchStatusRecordsOnlySuccessfulSubmission(t *testing.T) {
 	s := &Server{}
-	plan := kiroLaunchPlan{proxyMode: ModeForward, env: []string{kiroStageBridgeEnv + "=1"},
+	plan := kiroLaunchPlan{proxyMode: ModeForward, caInjected: true, env: []string{kiroStageBridgeEnv + "=0"},
 		stageInstall: &kiroStageInstallPlan{candidateHash: "mock-bundle", adapterHash: "mock-adapter"}}
 	called := false
 	if err := s.launchKiroWithStatusUsing(plan, nil, func(got kiroLaunchPlan, logger *TrafficLogger) error {
@@ -200,7 +232,7 @@ func TestKiroLaunchStatusRecordsOnlySuccessfulSubmission(t *testing.T) {
 		t.Fatalf("launch error = %v, called = %t", err, called)
 	}
 	snapshot := s.kiroLaunchStatus.load()
-	if snapshot == nil || snapshot.ProxyMode != ModeForward || !snapshot.BridgeEnabled || snapshot.BundleSHA256 != "mock-bundle" || snapshot.AdapterSHA256 != "mock-adapter" {
+	if snapshot == nil || snapshot.ProxyMode != ModeForward || !snapshot.CAInjected || snapshot.BridgeEnabled || snapshot.BundleSHA256 != "mock-bundle" || snapshot.AdapterSHA256 != "mock-adapter" {
 		t.Fatalf("submitted snapshot = %+v", snapshot)
 	}
 	if _, err := time.Parse(time.RFC3339Nano, snapshot.SubmittedAt); err != nil {

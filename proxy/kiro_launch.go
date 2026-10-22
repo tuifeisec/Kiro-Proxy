@@ -20,6 +20,7 @@ type kiroLaunchPlan struct {
 	env          []string
 	stageInstall *kiroStageInstallPlan
 	proxyMode    string
+	caInjected   bool
 }
 
 type kiroLaunchPreparer func(injectCA bool) (kiroLaunchPlan, error)
@@ -139,7 +140,7 @@ func buildWindowsKiroLaunchPlan(executable, certPath string, injectCA bool, inhe
 	if err != nil {
 		return kiroLaunchPlan{}, fmt.Errorf("获取 Kiro.exe 绝对路径失败: %w", err)
 	}
-	plan := kiroLaunchPlan{platform: "windows", executable: absPath}
+	plan := kiroLaunchPlan{platform: "windows", executable: absPath, caInjected: injectCA}
 	if injectCA {
 		absCertPath, err := validateKiroCACertificate(certPath)
 		if err != nil {
@@ -169,7 +170,7 @@ func buildDarwinKiroLaunchPlan(appPath, openPath, certPath string, injectCA bool
 	if err != nil {
 		return kiroLaunchPlan{}, fmt.Errorf("获取 open 命令绝对路径失败: %w", err)
 	}
-	plan := kiroLaunchPlan{platform: "darwin", executable: absOpenPath, args: darwinKiroOpenArgs("", false)}
+	plan := kiroLaunchPlan{platform: "darwin", executable: absOpenPath, args: darwinKiroOpenArgs("", false), caInjected: injectCA}
 	if injectCA {
 		absCertPath, err := validateKiroCACertificate(certPath)
 		if err != nil {

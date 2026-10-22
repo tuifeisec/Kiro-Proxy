@@ -126,7 +126,7 @@ certs/ca.key
 
 安装 CA 只更新操作系统的证书信任，不写入用户级、机器级或登录会话级的 `NODE_EXTRA_CA_CERTS`。管理面板配置或重启使用本程序代理的 Kiro 时，将校验后的 CA 绝对路径传给该 Kiro 进程；代理归属按实际监听地址和端口判断，支持 `localhost` 与 IPv4 回环地址，以及 LAN 模式下仍可访问服务的本机 IPv4 地址。还原原始代理时不额外注入本程序 CA。代理进程自身和其他程序的环境保持不变。证书读取、程序定位、旧进程退出或启动失败时，接口返回实际错误；未确认旧 Kiro 已退出时取消启动，不报告重启成功。
 
-Windows 阶段路由的一键配置和重启会先只读分析 Kiro 扩展的 JavaScript 结构，在已验证的结构族内自动适配变量改名、等价引号、格式和无关代码更新。首次适配保留完整语法、AST 形状、绑定和注入校验，必要结构改变时明确拒绝。已完整验证并安装的同一文件使用完整 SHA256 和当前适配器、验证程序身份核对缓存，避免每次启动重新分析；Windows 持久凭据使用当前用户 DPAPI 保护。预检失败不停止或修改 Kiro，安装继续保留完整备份和原子替换。首次适配与重复预检的性能分别测量，详见[预检性能与缓存契约](docs/2026-10-14-kiro-stage-performance.md)。
+Kiro 的一键配置和重启保留代理 CA 注入与进程验证，不再预检、安装或启用 JavaScript 阶段桥接。Auto 使用原生请求 continuation 维持同一轮模型稳定，activity 在本地停发前提供异步节点观察。首轮没有节点证据时使用已配置 default，具体边界见[无补丁 Auto 契约](docs/2026-10-20-activity-driven-auto-routing.md)。
 
 旧版本可能遗留指向已移动或删除文件的用户级 `NODE_EXTRA_CA_CERTS`，导致其他 Node 命令提示 `Ignoring extra certs`。清理前先记录原值，只删除已经核实属于本程序的失效值，不覆盖其他软件设置的证书路径。已运行的终端和 IDE 保留原环境，需要重新启动相应宿主才能使用清理后的环境。
 
@@ -137,6 +137,7 @@ router.DetectProtocol 根据 Kiro 域名和路径识别请求：
 - 旧 AWS 域名：识别 generateAssistantResponse、ListAvailableModels 和 getUsageLimits。
 - 新版 runtime.*.kiro.dev：根路径会读取请求体确认是否为对话请求。
 - management.*.kiro.dev：处理模型列表和用量限制。
+- Kiro runtime 的 `POST /agents/activity` 在本地丢弃并返回空 `204`，转发和抓包模式均不向官方发送活动正文；不新增模型请求统计。详见[活动停发契约](docs/2026-10-17-kiro-activity-suppression.md)。
 - 其他目标请求按 kiro-passthrough 原样放行。
 
 代理有两种模式：
@@ -148,13 +149,15 @@ router.DetectProtocol 根据 Kiro 域名和路径识别请求：
 
 模式通过 PUT /api/proxy-mode 切换，值为 forward 或 capture。
 
+活动上报停发在两种模式下均生效；该路径不记录活动正文，抓包模式也不放行到官方服务。
+
 ## 模型路由
 
 ### Auto 与本地估算积分
 
-转发模式支持按明确任务字段和能力规则选择实际模型。在管理面板“模型配置”的 Auto 内置默认配置行点击“配置”，在弹窗中设置“Auto 按任务选模”：指定默认模型，以及图片、高推理、长上下文、快速模型等能力角色，或添加任务字段到模型的对应规则。Auto 是固定入口，不能删除、测试或停用；关闭按任务选模时保留兼容默认路由。任务规则按顺序匹配，首条命中生效；无需创建名为 Auto 的分组。同一聊天的新任务重新选模；当前消息含工具结果的连续回合保持已选模型，主会话与独立 agent 分支分别记忆，以保留工具与缓存连续性；单次执行失败不跨模型接管。
+转发模式下，管理面板的 Auto 配置使用固定职责或兼容阶段策略，明确指定 default、各职责目标和节点规则。raw Responses 的 Auto 必须启用有效策略；策略未启用、配置无效或目标不可用时返回明确错误，不放行官方，也不静默改用其它候选。无需创建名为 Auto 的分组。无补丁请求按原生 continuation 保持同轮模型稳定；节点观察、职责与路径规则的选择边界见下方“[Kiro Auto 职责路由](#kiro-auto-职责路由)”。
 
-启用策略后 Kiro 列表显示 `Auto（按任务选模）`，请求标识仍是 `auto`。未启用时显示 `Auto（默认路由）`，沿用此前同名/默认候选路由及组内故障转移，不能视为任务选模。规则只作用于 Kiro 的 Auto 主生成请求，不覆盖手动模型或独立 Classifier 设置。Kiro 官方 Auto 的内部算法未公开；本地策略、配置方式及验证边界见 [Auto 官方说明与任务路由复核](docs/2026-10-06-auto-task-routing.md)。
+请求标识仍是 `auto`。规则只作用于 Kiro 的 Auto 主生成请求，不覆盖手动模型或独立 Classifier。旧 SDK 入口保留策略关闭时的兼容默认候选行为，该行为不适用于 raw Responses。Kiro 官方 Auto 的内部算法未公开；历史方案见 [Auto 官方说明与任务路由复核](docs/2026-10-06-auto-task-routing.md)，当前行为以[无补丁 Auto 契约](docs/2026-10-20-activity-driven-auto-routing.md)为准。
 
 价格配置以 `USD / 百万 Token` 为单位。本地估算积分为包含缓存读写和本地倍率的配置费用除以 `0.04 USD/Credit`；它不等于 Kiro 官方账单。管理界面 Credits 四舍五入显示两位小数，内部计算和累计保留原始精度；请求明细的 USD 费用分项显示六位小数。Kiro 用量接口返回本地自然月的累计积分，保留小数精度。旧库升级时在事务中备份并一次性转换历史积分；升级后不能混用旧版程序写入同一数据库。
 
@@ -270,3 +273,15 @@ git status --short
 - 构建生成的 .exe、.syso 和前端 dist/。
 
 .gitignore 已按上述本地运行产物配置，同时保留 build/windows/kiro-proxy.rc 和 build/windows/kiro-proxy.ico 这两个 Windows 资源源文件。
+
+## Kiro Auto 职责路由
+
+转发模式下，Kiro runtime 的 raw `model=auto` 请求进入本地固定路由，不再因缺少桥接头而放给官方。正常启动不修改 Kiro JavaScript，不依赖桥接结构匹配。
+
+原生 `kiro:agent_continuation_id` 与会话、模式共同绑定一轮模型选择，同一 continuation 内保持模型稳定；手动选模清除对应分支的 Auto 锁。activity 每 3 秒异步批量上报，代理在本地返回空 204，仅提取有界节点观察，按同流 seq 排除乱序与重放，子流不覆盖父流。
+
+已有且无冲突的节点观察可供新 continuation 初选；首轮缺少观察时使用用户已配置的 default，并记录默认原因。activity 不是当前请求的同步节点身份，不能保证每个节点首轮都精准按职责选模，也不会为了等 activity 固定阻塞请求。
+
+节点规则支持完整 definition 三元组或明确的路径规则（definition_id 与 definition_revision 同时为空）。三元组精确匹配优先；缺少 definition 时，路径唯一命中才使用，歧义则落 default。路径按原始分段编码，保留 repeat 的 iter-N；配置了职责目标仍需明确的节点绑定，不按裸节点名猜职责。
+
+详见[无补丁 Auto 与 activity 观察契约](docs/2026-10-20-activity-driven-auto-routing.md)。存量桥接工具只保留兼容诊断与严格校验，不参与正常启动。

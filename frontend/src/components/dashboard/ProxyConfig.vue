@@ -24,7 +24,7 @@ let pollTimer = null
 let statusRefreshTimer = null
 
 const stageBridge = computed(() => kiroStatus.value?.stage_bridge || null)
-const bridgeIssue = computed(() => ['error', 'unsupported', 'unknown'].includes(stageBridge.value?.installation))
+const proxyStatusIssue = computed(() => Boolean(kiroStatus.value?.error))
 const actionLabel = computed(() => {
   if (kiroStatus.value?.proxy_mode === 'capture') return '转发并重启 Kiro'
   const installation = stageBridge.value?.installation
@@ -179,7 +179,7 @@ onUnmounted(() => {
 
     <div v-if="kiroStatus" class="mb-2 flex items-center justify-between gap-2 px-0.5 text-[12px] text-ink-2">
       <span class="font-medium">{{ kiroStatus.proxy_mode === 'capture' ? '抓包模式' : kiroStatus.proxy_mode === 'forward' ? '转发模式' : '模式未知' }}</span>
-      <span v-if="bridgeIssue" class="text-danger" role="alert" :title="stageBridge.message || ''">配置需检查</span>
+      <span v-if="proxyStatusIssue" class="text-danger" role="alert" :title="kiroStatus.error">配置需检查</span>
       <span v-else-if="stageBridge?.restart_required" class="text-warning" role="status">需重启 Kiro</span>
     </div>
 

@@ -60,24 +60,24 @@ func ParseKiroRawResponsesRouting(body []byte) (*ParsedConversation, error) {
 	if err != nil {
 		return nil, errors.New("raw Responses agent mode metadata must be a string")
 	}
-	continuationID, err := requiredRawString(metadata, "kiro:proxy_continuation_id")
+	continuationID, continuationProvenance, err := rawAgentContinuation(metadata)
 	if err != nil {
-		return nil, errors.New("raw Responses continuation metadata must be a string")
+		return nil, errors.New("raw Responses continuation metadata is invalid")
 	}
-	currentToolResultsRaw, exists := metadata["kiro:proxy_current_tool_results"]
-	if !exists {
-		return nil, errors.New("raw Responses current tool results metadata is required")
+	var currentToolResults int64
+	var currentToolContinuation *bool
+	if raw, exists := metadata["kiro:proxy_current_tool_results"]; exists {
+		currentToolResults, err = decodeNonNegativeInteger(raw)
+		if err != nil {
+			return nil, errors.New("raw Responses current tool results metadata must be a nonnegative integer")
+		}
+		functionCallOutputCount := countRawFunctionCallOutputs(input)
+		if currentToolResults > int64(functionCallOutputCount) {
+			return nil, errors.New("raw Responses current tool results exceed input function_call_output items")
+		}
+		hasCurrentToolResults := currentToolResults > 0
+		currentToolContinuation = &hasCurrentToolResults
 	}
-	currentToolResults, err := decodeNonNegativeInteger(currentToolResultsRaw)
-	if err != nil {
-		return nil, errors.New("raw Responses current tool results metadata must be a nonnegative integer")
-	}
-
-	functionCallOutputCount := countRawFunctionCallOutputs(input)
-	if currentToolResults > int64(functionCallOutputCount) {
-		return nil, errors.New("raw Responses current tool results exceed input function_call_output items")
-	}
-	hasCurrentToolResults := currentToolResults > 0
 
 	effort, err := rawResponsesReasoningEffort(root)
 	if err != nil {
@@ -96,16 +96,51 @@ func ParseKiroRawResponsesRouting(body []byte) (*ParsedConversation, error) {
 	agentMode = strings.TrimSpace(agentMode)
 	continuationID = strings.TrimSpace(continuationID)
 	return &ParsedConversation{
-		ModelID:                 model,
-		ConversationID:          conversationID,
-		AgentMode:               agentMode,
-		AgentContinuationID:     continuationID,
-		PromptAffinityKey:       conversationID,
-		ContinuationStateKey:    buildContinuationStateKey(conversationID, agentMode, continuationID),
-		ReasoningEffort:         effort,
-		CurrentToolContinuation: &hasCurrentToolResults,
-		RawResponsesHasImages:   hasImages,
+		ModelID:                     model,
+		ConversationID:              conversationID,
+		AgentMode:                   agentMode,
+		AgentContinuationID:         continuationID,
+		AgentContinuationProvenance: continuationProvenance,
+		PromptAffinityKey:           conversationID,
+		ContinuationStateKey:        buildContinuationStateKey(conversationID, agentMode, continuationID),
+		ReasoningEffort:             effort,
+		CurrentToolContinuation:     currentToolContinuation,
+		RawResponsesHasImages:       hasImages,
 	}, nil
+}
+
+// rawAgentContinuation reads Kiro's native continuation identity while
+// retaining compatibility with the older private bridge metadata key.
+func rawAgentContinuation(metadata map[string]json.RawMessage) (string, string, error) {
+	var nativeID, proxyID string
+	_, proxyContinuationPresent := metadata["kiro:proxy_continuation_id"]
+	_, proxyToolResultsPresent := metadata["kiro:proxy_current_tool_results"]
+	if raw, exists := metadata["kiro:agent_continuation_id"]; exists {
+		value, err := decodeRawString(raw)
+		if err != nil {
+			return "", "", errors.New("native continuation is not a string")
+		}
+		nativeID = strings.TrimSpace(value)
+	}
+	if raw, exists := metadata["kiro:proxy_continuation_id"]; exists {
+		value, err := decodeRawString(raw)
+		if err != nil {
+			return "", "", errors.New("proxy continuation is not a string")
+		}
+		proxyID = strings.TrimSpace(value)
+	}
+	if nativeID != "" && proxyID != "" && nativeID != proxyID {
+		return "", "", errors.New("native and proxy continuation metadata conflict")
+	}
+	if nativeID != "" {
+		return nativeID, AgentContinuationProvenanceNativeRaw, nil
+	}
+	if proxyContinuationPresent || proxyToolResultsPresent {
+		return proxyID, AgentContinuationProvenanceProxyBridge, nil
+	}
+	// Raw Kiro Responses without either private bridge field follow the native
+	// activity-driven contract, including when Kiro supplies no continuation.
+	return "", AgentContinuationProvenanceNativeRaw, nil
 }
 
 func decodeRawJSONObject(raw []byte) (map[string]json.RawMessage, error) {

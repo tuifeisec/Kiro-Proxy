@@ -153,6 +153,7 @@ func buildKiroStageStructuralCandidateWithProfiles(original []byte, profiles []k
 		}
 	}
 	index := buildKiroStageContextIndex(analysis.Tokens)
+
 	selected, plans, err := selectKiroStageStructuralProfile(analysis, index, profiles)
 	if err != nil {
 		return nil, err

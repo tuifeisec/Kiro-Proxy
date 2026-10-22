@@ -197,6 +197,36 @@ func TestKiroStageContextBindingIdentity(t *testing.T) {
 	}
 }
 
+func TestKiroStageStructuralProfileRejectsPartialHookMatch(t *testing.T) {
+	original := []byte("const alpha = 1;")
+	analysis, err := analyzeKiroStageJS(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var present, missing kiroStagePatternToken
+	for _, token := range analysis.Tokens {
+		if token.Name == "alpha" {
+			present = kiroStagePatternToken{Key: token.Key, Shape: token.Shape}
+			break
+		}
+	}
+	if present.Key == "" {
+		t.Fatal("fixture variable token not found")
+	}
+	missing = kiroStagePatternToken{Key: "P:missing-token"}
+	profile := kiroStageStructureProfile{Family: "strict-fixture", Hooks: []kiroStageStructureHook{
+		{Name: "required-present", Context: []kiroStagePatternToken{present}, ValidateOnly: true},
+		{Name: "required-missing", Context: []kiroStagePatternToken{missing}, ValidateOnly: true},
+	}}
+	before := append([]byte(nil), original...)
+	if _, err := buildKiroStageStructuralCandidateWithProfiles(original, []kiroStageStructureProfile{profile}, "fixture-adapter"); err == nil {
+		t.Fatal("profile with a missing required hook was accepted")
+	}
+	if !bytes.Equal(original, before) {
+		t.Fatal("rejected profile modified the source")
+	}
+}
+
 func TestKiroStageStructuralUpdateAndLegacyInstall(t *testing.T) {
 	original := kiroStageRealOriginal(t, "KIRO_STAGE_TEST_BUNDLE_130")
 	manifest, err := readKiroStageManifest("kiro_stage_bridge_130_manifest.json")

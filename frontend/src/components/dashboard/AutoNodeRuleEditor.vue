@@ -6,6 +6,7 @@ import {
   isAutoTargetSelectable,
   nodeIdentityComplete,
   observationIdentity,
+  pathOnlyNodeRuleConflictMessage,
   resolveAutoTarget,
 } from '../../utils/autoDutyConfig.js'
 import { getAutoNodeDescription } from '../../utils/autoNodeDescriptions.js'
@@ -14,6 +15,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   models: { type: Array, default: () => [] },
   groups: { type: Array, default: () => [] },
+  bindings: { type: Array, default: () => [] },
   rules: { type: Array, default: () => [] },
   editingIndex: { type: Number, default: null },
   draft: {
@@ -77,10 +79,11 @@ const validationErrors = computed(() => {
 
   for (const field of identityFields) {
     const value = draftValue.value[field.key]
-    if (typeof value !== 'string' || !value) {
-      errors.push(`${field.label}不能为空。`)
+    if (typeof value !== 'string') {
+      errors.push(`${field.label}必须是字符串。`)
       continue
     }
+    if (field.key === 'node_path' && !value) errors.push('node_path不能为空。')
     const hasNELAtBoundary = value.charCodeAt(0) === 0x85 || value.charCodeAt(value.length - 1) === 0x85
     if (value !== value.trim() || hasNELAtBoundary) errors.push(`${field.label}不能有首尾空白；字段会按原值保存。`)
     if (/[\0\r\n]/.test(value)) errors.push(`${field.label}不能包含 NUL、CR 或 LF。`)
@@ -88,13 +91,24 @@ const validationErrors = computed(() => {
       errors.push(`${field.label}不能超过 ${field.maxBytes} 个 UTF-8 字节。`)
     }
   }
+  if (typeof draftValue.value.definition_id === 'string' && typeof draftValue.value.definition_revision === 'string' &&
+    Boolean(draftValue.value.definition_id) !== Boolean(draftValue.value.definition_revision)) {
+    errors.push('definition_id 和 definition_revision 必须同时填写；两者都留空时，规则按 node_path 跨工作流定义匹配。')
+  }
 
   if (identityValid && props.rules.some((rule, index) => (
     index !== props.editingIndex &&
     nodeIdentityComplete(rule) &&
     observationIdentity(rule) === observationIdentity(draftValue.value)
   ))) {
-    errors.push('完整节点身份已存在于其他规则中。')
+    errors.push('相同节点路径身份已存在于其他规则中。')
+  }
+  if (identityValid) {
+    const conflict = pathOnlyNodeRuleConflictMessage({
+      node_bindings: props.bindings,
+      node_overrides: props.rules,
+    }, draftValue.value, props.editingIndex)
+    if (conflict) errors.push(conflict)
   }
 
   if (!draftValue.value.model_id) {
@@ -237,7 +251,7 @@ onBeforeUnmount(() => {
       <header class="flex shrink-0 items-start justify-between gap-4 border-b border-line-2 px-4 py-3 sm:px-5">
         <div>
           <h2 :id="titleId" class="text-sm font-semibold text-ink">{{ editing ? '编辑自定义节点规则' : '新增自定义节点规则' }}</h2>
-          <p class="mt-1 text-[11px] text-ink-4">快捷操作直接使用观察身份；此处用于手工新增完整身份或编辑独立规则。</p>
+          <p class="mt-1 text-[11px] text-ink-4">可使用完整三元组身份，或留空 definition_id 与 definition_revision，按 node_path 配置跨工作流定义匹配的规则。</p>
         </div>
         <button type="button" aria-label="关闭规则编辑" class="shrink-0 rounded-md border border-line-2 bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-hover" @click="closeEditor">关闭</button>
       </header>
@@ -250,7 +264,7 @@ onBeforeUnmount(() => {
         </section>
 
         <details class="rounded-md border border-line-2 p-3">
-          <summary ref="firstIdentityInput" class="cursor-pointer text-[11px] font-medium text-ink-2">核对或编辑完整稳定身份</summary>
+            <summary ref="firstIdentityInput" class="cursor-pointer text-[11px] font-medium text-ink-2">核对或编辑节点身份</summary>
           <div class="mt-3 grid gap-3">
             <label class="grid gap-1 text-[11px] text-ink-3">
               <span>工作流定义 ID（definition_id）</span>
@@ -264,7 +278,7 @@ onBeforeUnmount(() => {
               <span>节点路径（node_path）</span>
               <input v-model="draftValue.node_path" type="text" autocomplete="off" class="ui-control-h ui-control px-2.5 text-[12px] text-ink" />
             </label>
-            <p class="text-[10px] leading-4 text-ink-4">三项共同标识一个节点，须与实际工作流一致。字段会按输入原值保存。</p>
+            <p class="text-[10px] leading-4 text-ink-4">填写两项 definition 字段时按完整三元组精确匹配；同身份职责绑定会保留，由独立规则优先。两项都留空时按完全相同的 node_path 跨定义匹配；保存 path-only 独立规则会替换并删除同身份职责绑定。若完整三元组与 path-only 身份共用路径，缺少 definition 身份的请求会歧义并使用默认目标，因此不能新增或保存该冲突规则；不同完整三元组之间可共用路径。activity 的 node_path 保留 iter-N 原值，不会自动移除。字段会按输入原值保存。</p>
           </div>
         </details>
 

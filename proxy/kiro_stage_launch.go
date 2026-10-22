@@ -8,38 +8,19 @@ import (
 const kiroStageBridgeEnv = "KIRO_PROXY_STAGE_BRIDGE"
 
 func (s *Server) prepareKiroStageLaunch(injectCA bool) (kiroLaunchPlan, error) {
-	plan, err := prepareKiroLaunchPlan(injectCA)
+	return prepareKiroStageLaunchPlan(injectCA, GetProxyMode(), os.Environ(), prepareKiroLaunchPlan, s.logger)
+}
+
+func prepareKiroStageLaunchPlan(injectCA bool, mode string, inherited []string, prepare kiroLaunchPreparer, logger *TrafficLogger) (kiroLaunchPlan, error) {
+	plan, err := prepare(injectCA)
 	if err != nil {
 		return plan, err
 	}
-	mode := GetProxyMode()
 	plan.proxyMode = mode
-	enabled := injectCA && mode == ModeForward && s.router != nil && s.router.StageRoutingEnabled()
-	if s.logger != nil {
-		reason := "Auto 职责路由未启用"
-		if !injectCA {
-			reason = "Kiro 未使用本代理 CA"
-		} else if mode == ModeCapture {
-			reason = "抓包模式，下次启动关闭桥接并跳过安装"
-		} else if enabled {
-			reason = "转发模式且 Auto 职责路由已启用，将预检桥接"
-		}
-		s.logger.Info("kiro-stage-bridge", reason)
+	if logger != nil {
+		logger.Info("kiro-stage-bridge", "activity 驱动 Auto 路由不依赖阶段桥接；跳过桥接预检与安装")
 	}
-	if enabled && plan.platform == "windows" {
-		install, err := prepareKiroStageInstall(plan.executable)
-		if err != nil {
-			if s.logger != nil {
-				s.logger.Error("kiro-stage-bridge", "安装预检失败: "+err.Error())
-			}
-			return kiroLaunchPlan{}, err
-		}
-		plan.stageInstall = install
-		if s.logger != nil {
-			s.logger.Info("kiro-stage-bridge", "安装预检通过: "+install.target+" SHA256="+install.expectedHash+" 候选SHA256="+install.candidateHash)
-		}
-	}
-	return withKiroStageBridge(plan, enabled, os.Environ()), nil
+	return withKiroStageBridge(plan, false, inherited), nil
 }
 
 func withKiroStageBridge(plan kiroLaunchPlan, enabled bool, inherited []string) kiroLaunchPlan {

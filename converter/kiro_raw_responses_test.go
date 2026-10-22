@@ -41,6 +41,54 @@ func TestParseKiroRawResponsesRoutingExtractsBoundMetadata(t *testing.T) {
 	}
 }
 
+// 桥接未安装时客户端原始 body 不携带 kiro:proxy_* 键，缺失按无续轮状态解析。
+func TestParseKiroRawResponsesRoutingWithoutBridgeMetadata(t *testing.T) {
+	body := []byte(`{"model":"auto","input":[],"metadata":{"kiro:conversation_id":"conv-plain","kiro:agent_mode":"vibe"}}`)
+	conv, err := ParseKiroRawResponsesRouting(body)
+	if err != nil {
+		t.Fatalf("ParseKiroRawResponsesRouting: %v", err)
+	}
+	if conv.ConversationID != "conv-plain" || conv.AgentMode != "vibe" || conv.AgentContinuationID != "" {
+		t.Fatalf("routing metadata = %+v", conv)
+	}
+	if conv.CurrentToolContinuation != nil {
+		t.Fatalf("tool continuation marker = %v, want unknown", *conv.CurrentToolContinuation)
+	}
+}
+
+func TestParseKiroRawResponsesRoutingUsesNativeContinuationProvenance(t *testing.T) {
+	tests := []struct {
+		name           string
+		metadata       string
+		wantID         string
+		wantProvenance string
+		wantErr        bool
+	}{
+		{name: "native only", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe","kiro:agent_continuation_id":"native-1"}`, wantID: "native-1", wantProvenance: AgentContinuationProvenanceNativeRaw},
+		{name: "native and same proxy", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe","kiro:agent_continuation_id":" native-1 ","kiro:proxy_continuation_id":"native-1"}`, wantID: "native-1", wantProvenance: AgentContinuationProvenanceNativeRaw},
+		{name: "proxy compatibility", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe","kiro:proxy_continuation_id":"proxy-1"}`, wantID: "proxy-1", wantProvenance: AgentContinuationProvenanceProxyBridge},
+		{name: "legacy tool marker only", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe","kiro:proxy_current_tool_results":0}`, wantProvenance: AgentContinuationProvenanceProxyBridge},
+		{name: "empty native falls back to proxy", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe","kiro:agent_continuation_id":" ","kiro:proxy_continuation_id":"proxy-1"}`, wantID: "proxy-1", wantProvenance: AgentContinuationProvenanceProxyBridge},
+		{name: "raw without continuation is native source", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe"}`, wantProvenance: AgentContinuationProvenanceNativeRaw},
+		{name: "conflicting identities", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe","kiro:agent_continuation_id":"native-1","kiro:proxy_continuation_id":"proxy-1"}`, wantErr: true},
+		{name: "native identity type", metadata: `{"kiro:conversation_id":"conv","kiro:agent_mode":"vibe","kiro:agent_continuation_id":null}`, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conv, err := ParseKiroRawResponsesRouting(rawResponsesRoutingBodyWithMetadata("auto", `[]`, test.metadata, ""))
+			if test.wantErr {
+				if err == nil || conv != nil {
+					t.Fatalf("expected rejection, got conv=%+v err=%v", conv, err)
+				}
+				return
+			}
+			if err != nil || conv.AgentContinuationID != test.wantID || conv.AgentContinuationProvenance != test.wantProvenance {
+				t.Fatalf("continuation identity = (%q, %q), want (%q, %q), err=%v", conv.AgentContinuationID, conv.AgentContinuationProvenance, test.wantID, test.wantProvenance, err)
+			}
+		})
+	}
+}
+
 func TestParseKiroRawResponsesRoutingRequiresCompleteMetadataAndSingleObject(t *testing.T) {
 	valid := rawResponsesRoutingBody("auto", "0", `[]`, "")
 	tests := []struct {
@@ -57,9 +105,7 @@ func TestParseKiroRawResponsesRoutingRequiresCompleteMetadataAndSingleObject(t *
 		{name: "wrong conversation type", body: rawResponsesRoutingBodyWithMetadata("auto", `[]`, `{"kiro:conversation_id":7,"kiro:agent_mode":"","kiro:proxy_continuation_id":"","kiro:proxy_current_tool_results":0}`, "")},
 		{name: "missing agent mode", body: rawResponsesRoutingBodyWithMetadata("auto", `[]`, `{"kiro:conversation_id":"conv-raw","kiro:proxy_continuation_id":"","kiro:proxy_current_tool_results":0}`, "")},
 		{name: "wrong agent mode type", body: rawResponsesRoutingBodyWithMetadata("auto", `[]`, `{"kiro:conversation_id":"conv-raw","kiro:agent_mode":false,"kiro:proxy_continuation_id":"","kiro:proxy_current_tool_results":0}`, "")},
-		{name: "missing continuation", body: rawResponsesRoutingBodyWithMetadata("auto", `[]`, `{"kiro:conversation_id":"conv-raw","kiro:agent_mode":"vibe","kiro:proxy_current_tool_results":0}`, "")},
 		{name: "wrong continuation type", body: rawResponsesRoutingBodyWithMetadata("auto", `[]`, `{"kiro:conversation_id":"conv-raw","kiro:agent_mode":"vibe","kiro:proxy_continuation_id":7,"kiro:proxy_current_tool_results":0}`, "")},
-		{name: "missing current tool count", body: rawResponsesRoutingBodyWithMetadata("auto", `[]`, `{"kiro:conversation_id":"conv-raw","kiro:agent_mode":"vibe","kiro:proxy_continuation_id":""}`, "")},
 		{name: "wrong count type", body: rawResponsesRoutingBody("auto", `1.0`, `[]`, "")},
 		{name: "negative count", body: rawResponsesRoutingBody("auto", `-1`, `[]`, "")},
 		{name: "input not array", body: rawResponsesRoutingBody("auto", "0", `"text"`, "")},

@@ -542,9 +542,6 @@ func readIdentityFields(fields map[string]json.RawMessage, path string) (AutoNod
 			return AutoNodeBinding{}, err
 		}
 		*target = value
-		if *target == "" {
-			return AutoNodeBinding{}, fmt.Errorf("%s.%s must be non-empty for a stable node identity", path, name)
-		}
 		if *target != strings.TrimSpace(*target) {
 			return AutoNodeBinding{}, fmt.Errorf("%s.%s must not have leading or trailing whitespace", path, name)
 		}
@@ -552,6 +549,12 @@ func readIdentityFields(fields map[string]json.RawMessage, path string) (AutoNod
 		if len(*target) > limit || strings.ContainsAny(*target, "\x00\r\n") {
 			return AutoNodeBinding{}, fmt.Errorf("%s.%s exceeds the stable identity limit", path, name)
 		}
+	}
+	if result.NodePath == "" {
+		return AutoNodeBinding{}, fmt.Errorf("%s.node_path must be non-empty for a node identity", path)
+	}
+	if (result.DefinitionID == "") != (result.DefinitionRevision == "") {
+		return AutoNodeBinding{}, fmt.Errorf("%s.definition_id and definition_revision must both be set or both be empty", path)
 	}
 	return result, nil
 }
@@ -605,6 +608,10 @@ func decodeEffort(raw json.RawMessage, name string) (string, error) {
 
 func autoNodeIdentity(definitionID, revision, path string) string {
 	return definitionID + "\x00" + revision + "\x00" + path
+}
+
+func validAutoNodeIdentity(definitionID, revision, path string) bool {
+	return path != "" && ((definitionID == "" && revision == "") || (definitionID != "" && revision != ""))
 }
 
 // ValidateAutoRoutingConfig validates references and the selected layout.
@@ -686,8 +693,8 @@ func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model, groupSe
 		seenBindings := make(map[string]struct{}, len(config.NodeBindings))
 		for index, binding := range config.NodeBindings {
 			key := autoNodeIdentity(binding.DefinitionID, binding.DefinitionRevision, binding.NodePath)
-			if binding.DefinitionID == "" || binding.DefinitionRevision == "" || binding.NodePath == "" {
-				return fmt.Errorf("node_bindings[%d] must have a complete stable identity", index)
+			if !validAutoNodeIdentity(binding.DefinitionID, binding.DefinitionRevision, binding.NodePath) {
+				return fmt.Errorf("node_bindings[%d] must have a complete workflow identity or a path-only identity", index)
 			}
 			if _, exists := seenBindings[key]; exists {
 				return fmt.Errorf("duplicate node_bindings identity at index %d", index)
@@ -700,8 +707,8 @@ func ValidateAutoRoutingConfig(config AutoRoutingConfig, models []Model, groupSe
 		seenOverrides := make(map[string]struct{}, len(config.NodeOverrides))
 		for index, override := range config.NodeOverrides {
 			key := autoNodeIdentity(override.DefinitionID, override.DefinitionRevision, override.NodePath)
-			if override.DefinitionID == "" || override.DefinitionRevision == "" || override.NodePath == "" {
-				return fmt.Errorf("node_overrides[%d] must have a complete stable identity", index)
+			if !validAutoNodeIdentity(override.DefinitionID, override.DefinitionRevision, override.NodePath) {
+				return fmt.Errorf("node_overrides[%d] must have a complete workflow identity or a path-only identity", index)
 			}
 			if _, exists := seenOverrides[key]; exists {
 				return fmt.Errorf("duplicate node_overrides identity at index %d", index)

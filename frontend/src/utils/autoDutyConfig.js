@@ -174,9 +174,13 @@ function parseNodeArray(value, kind, dutyKeys) {
       : ['definition_id', 'definition_revision', 'node_path', 'model_id', 'reasoning_effort']
     requireExactFields(item, fields, `${kind}[${index}]`)
     for (const field of ['definition_id', 'definition_revision', 'node_path']) {
-      if (typeof item[field] !== 'string' || !item[field].trim() || item[field] !== item[field].trim()) {
-        throw configError(`中的 ${kind}[${index}].${field} 必须是非空、无首尾空格的字符串`)
+      if (typeof item[field] !== 'string' || item[field] !== item[field].trim()) {
+        throw configError(`中的 ${kind}[${index}].${field} 必须是无首尾空格的字符串`)
       }
+    }
+    if (!item.node_path) throw configError(`中的 ${kind}[${index}].node_path 必须是非空字符串`)
+    if (Boolean(item.definition_id) !== Boolean(item.definition_revision)) {
+      throw configError(`中的 ${kind}[${index}].definition_id 和 definition_revision 必须同时填写或同时留空`)
     }
     const identity = identityKey(item)
     if (seen.has(identity)) throw configError(`中的 ${kind} 含重复节点身份`)
@@ -447,9 +451,12 @@ export function validateAutoDutyConfig(config, models, groups = []) {
 }
 
 export function nodeIdentityComplete(observation) {
-  return ['definition_id', 'definition_revision', 'node_path'].every((field) => (
-    typeof observation?.[field] === 'string' && observation[field].trim() !== '' && observation[field] === observation[field].trim()
-  ))
+  const definitionId = observation?.definition_id
+  const revision = observation?.definition_revision
+  const nodePath = observation?.node_path
+  if (typeof definitionId !== 'string' || typeof revision !== 'string' || typeof nodePath !== 'string') return false
+  if (definitionId !== definitionId.trim() || revision !== revision.trim() || nodePath !== nodePath.trim() || !nodePath) return false
+  return Boolean(definitionId) === Boolean(revision)
 }
 
 export function applyDutyForLayout(config, layout, resolutions = {}) {
@@ -510,6 +517,70 @@ export function layoutMergeConflicts(config) {
 
 export function observationIdentity(observation) {
   return identityKey(observation)
+}
+
+export function isPathOnlyNodeIdentity(observation) {
+  return nodeIdentityComplete(observation) && observation.definition_id === ''
+}
+
+export function applyNodeBindingRule(config, item) {
+  const identity = observationIdentity(item)
+  return {
+    ...config,
+    node_bindings: [
+      ...config.node_bindings.filter((existing) => observationIdentity(existing) !== identity),
+      { ...item },
+    ],
+    node_overrides: config.node_overrides.filter((existing) => observationIdentity(existing) !== identity),
+  }
+}
+
+export function applyNodeOverrideRule(config, item, { editingIndex = null, upsertIdentity = false } = {}) {
+  const identity = observationIdentity(item)
+  const nodeOverrides = [...config.node_overrides]
+  if (editingIndex !== null) {
+    if (!Number.isInteger(editingIndex) || editingIndex < 0 || editingIndex >= nodeOverrides.length) return null
+    nodeOverrides[editingIndex] = { ...item }
+  } else if (upsertIdentity) {
+    const existingIndex = nodeOverrides.findIndex((existing) => observationIdentity(existing) === identity)
+    if (existingIndex < 0) nodeOverrides.push({ ...item })
+    else nodeOverrides[existingIndex] = { ...item }
+  } else {
+    nodeOverrides.push({ ...item })
+  }
+
+  return {
+    ...config,
+    node_bindings: isPathOnlyNodeIdentity(item)
+      ? config.node_bindings.filter((existing) => observationIdentity(existing) !== identity)
+      : config.node_bindings,
+    node_overrides: nodeOverrides,
+  }
+}
+
+export function pathOnlyNodeRuleConflictMessage(config, observation, ignoredOverrideIndex = null) {
+  if (!nodeIdentityComplete(observation)) return ''
+  const observationIsPathOnly = isPathOnlyNodeIdentity(observation)
+  const identity = observationIdentity(observation)
+  const conflicts = []
+  for (const item of config.node_bindings) {
+    if (item.node_path === observation.node_path && observationIdentity(item) !== identity) conflicts.push(item)
+  }
+  config.node_overrides.forEach((item, index) => {
+    if (index === ignoredOverrideIndex) return
+    if (item.node_path === observation.node_path && observationIdentity(item) !== identity) conflicts.push(item)
+  })
+  const relevantConflicts = observationIsPathOnly
+    ? conflicts
+    : conflicts.filter((item) => isPathOnlyNodeIdentity(item))
+  if (!relevantConflicts.length) return ''
+  const identities = [...new Set(relevantConflicts.map((item) => (
+    isPathOnlyNodeIdentity(item)
+      ? 'path-only identity'
+      : `definition_id=${item.definition_id} · definition_revision=${item.definition_revision}`
+  )))]
+  const subject = observationIsPathOnly ? 'path-only 路径规则' : '完整三元组规则'
+  return `${subject} node_path=${observation.node_path} 与其它身份（${identities.join('；')}）共用路径；缺少 definition 身份的请求会产生歧义并使用默认目标，请先消除冲突。`
 }
 
 // 同一节点可以保留多次配置下的观察；编辑键用节点身份，渲染键用完整记录。

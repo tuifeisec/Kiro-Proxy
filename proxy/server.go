@@ -38,32 +38,34 @@ var upgrader = websocket.Upgrader{
 
 // Server 代理服务器（MITM + Web UI）
 type Server struct {
-	cfg                  *rules.Config
-	proxy                *goproxy.ProxyHttpServer
-	hub                  *Hub
-	logger               *TrafficLogger
-	router               *router.Router
-	forwarder            *Forwarder
-	stats                *store.Stats
-	db                   *store.DB
-	apiServer            *api.Server
-	staticFS             fs.FS // 嵌入的前端静态文件
-	uiServer             *http.Server
-	mitmServer           *http.Server
-	startMu              sync.Mutex
-	serverMu             sync.Mutex
-	uiRunning            atomic.Bool
-	mitmRunning          atomic.Bool
-	closing              atomic.Bool
-	classifierMu         sync.RWMutex
-	conversationModels   map[string]conversationModelEntry
-	conversationPrunedAt time.Time
-	lastMainModel        string
-	licenseClient        licenseChecker
-	responsesFallbackMu  sync.Mutex
-	responsesFallback    map[string]fallbackResponseState
-	closeOnce            sync.Once
-	kiroLaunchStatus     kiroLaunchTracker
+	cfg                    *rules.Config
+	proxy                  *goproxy.ProxyHttpServer
+	hub                    *Hub
+	logger                 *TrafficLogger
+	router                 *router.Router
+	forwarder              *Forwarder
+	stats                  *store.Stats
+	db                     *store.DB
+	apiServer              *api.Server
+	staticFS               fs.FS // 嵌入的前端静态文件
+	uiServer               *http.Server
+	mitmServer             *http.Server
+	startMu                sync.Mutex
+	serverMu               sync.Mutex
+	uiRunning              atomic.Bool
+	mitmRunning            atomic.Bool
+	closing                atomic.Bool
+	classifierMu           sync.RWMutex
+	conversationModels     map[string]conversationModelEntry
+	conversationPrunedAt   time.Time
+	lastMainModel          string
+	licenseClient          licenseChecker
+	responsesFallbackMu    sync.Mutex
+	responsesFallback      map[string]fallbackResponseState
+	closeOnce              sync.Once
+	kiroLaunchStatus       kiroLaunchTracker
+	kiroActivityRoutesOnce sync.Once
+	kiroActivityRoutes     *kiroActivityRoutingStore
 }
 
 // NewServer 创建并初始化代理服务器

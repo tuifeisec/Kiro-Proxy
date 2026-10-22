@@ -121,6 +121,18 @@ func TestStageRawRuntimeBoundaryAndPrivateMetadataRemoval(t *testing.T) {
 				SetProxyMode(ModeForward)
 			}
 			resp := serveRawStage(t, env, tc.req)
+			if tc.name == "no header" {
+				// 无头 raw auto 按 v0 元数据落 default 本地兜底，不放行官方；
+				// 本地转发的请求同样不得携带私有头或私有 metadata。
+				if resp.Code != 200 || resp.Body.String() == "passthrough" {
+					t.Fatalf("headerless auto bypassed local routing: %d %s", resp.Code, resp.Body.String())
+				}
+				routed := <-env.requests
+				if routed.Model != "upstream-default" || len(routed.WorkflowHeaderValues) > 0 {
+					t.Fatalf("headerless auto routed = %+v, want upstream-default without private header", routed)
+				}
+				return
+			}
 			if resp.Code != 200 || resp.Body.String() != "passthrough" {
 				t.Fatalf("boundary changed: %d %s", resp.Code, resp.Body.String())
 			}
@@ -132,7 +144,7 @@ func TestStageRawRuntimeBoundaryAndPrivateMetadataRemoval(t *testing.T) {
 			}
 		})
 	}
-	if hits != 3 {
+	if hits != 2 {
 		t.Fatalf("passthrough calls=%d", hits)
 	}
 	select {
@@ -157,7 +169,7 @@ func TestStageRawRuntimeBoundaryAndPrivateMetadataRemoval(t *testing.T) {
 			t.Fatalf("invalid candidate not rejected: %d %s", resp.Code, resp.Body.String())
 		}
 	}
-	if hits != 3 {
+	if hits != 2 {
 		t.Fatalf("invalid stage request fell through to official Mock: %d", hits)
 	}
 }

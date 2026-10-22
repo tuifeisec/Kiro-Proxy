@@ -81,6 +81,9 @@ func TestBuildWindowsKiroLaunchPlanValidatesPathsAndUsesChildEnvironment(t *test
 	if got := environmentValue(plan.env, kiroExtraCACertEnv, true); got != wantCert {
 		t.Fatalf("child CA path = %q, want %q", got, wantCert)
 	}
+	if !plan.caInjected {
+		t.Fatal("Windows launch plan must record proxy CA injection")
+	}
 	if got := environmentValue(parentEnv, kiroExtraCACertEnv, true); got != "older" {
 		t.Fatalf("parent environment was changed: NODE_EXTRA_CA_CERTS = %q", got)
 	}
@@ -91,6 +94,9 @@ func TestBuildWindowsKiroLaunchPlanValidatesPathsAndUsesChildEnvironment(t *test
 	}
 	if noInjection.env != nil {
 		t.Fatalf("restore launch should inherit the parent environment, got explicit child env %v", noInjection.env)
+	}
+	if noInjection.caInjected {
+		t.Fatal("restore launch must record that proxy CA is not injected")
 	}
 }
 
@@ -150,6 +156,9 @@ func TestBuildDarwinKiroLaunchPlanCreatesDocumentedOpenArguments(t *testing.T) {
 	if withoutCA.env != nil {
 		t.Fatalf("open process env must inherit normally, got %v", withoutCA.env)
 	}
+	if withoutCA.caInjected {
+		t.Fatal("launch without CA must record no CA injection")
+	}
 
 	withCA, err := buildDarwinKiroLaunchPlan(appPath, openPath, certPath, true)
 	if err != nil {
@@ -162,6 +171,9 @@ func TestBuildDarwinKiroLaunchPlanCreatesDocumentedOpenArguments(t *testing.T) {
 	want := []string{"-n", "--env", kiroExtraCACertEnv + "=" + absCert, "-a", "Kiro"}
 	if !equalStrings(withCA.args, want) {
 		t.Fatalf("configured open args = %#v, want %#v", withCA.args, want)
+	}
+	if !withCA.caInjected {
+		t.Fatal("launch with CA must record CA injection")
 	}
 }
 

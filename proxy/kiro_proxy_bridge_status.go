@@ -27,6 +27,7 @@ type kiroBridgeStatus struct {
 type kiroLaunchSnapshot struct {
 	SubmittedAt   string `json:"submitted_at"`
 	ProxyMode     string `json:"proxy_mode"`
+	CAInjected    bool   `json:"ca_injected"`
 	BridgeEnabled bool   `json:"bridge_enabled"`
 	BundleSHA256  string `json:"bundle_sha256"`
 	AdapterSHA256 string `json:"adapter_sha256"`
@@ -56,7 +57,7 @@ func (t *kiroLaunchTracker) clear() {
 func (t *kiroLaunchTracker) record(plan kiroLaunchPlan, submitted time.Time) {
 	snapshot := &kiroLaunchSnapshot{
 		SubmittedAt: submitted.UTC().Format(time.RFC3339Nano),
-		ProxyMode:   plan.proxyMode, BridgeEnabled: kiroStageBridgeEnabledInEnv(plan.env),
+		ProxyMode:   plan.proxyMode, CAInjected: plan.caInjected, BridgeEnabled: kiroStageBridgeEnabledInEnv(plan.env),
 	}
 	if plan.stageInstall != nil {
 		snapshot.BundleSHA256 = plan.stageInstall.candidateHash
@@ -84,28 +85,29 @@ func (s *Server) kiroProxyStatus(target string) kiroProxyStatus {
 	status := getKiroProxyStatus(target)
 	mode := GetProxyMode()
 	status.ProxyMode = mode
-	bridge := inspectInstalledKiroBridge()
+	bridge := kiroBridgeStatus{Installation: "not_required", Message: "Auto 路由使用 activity 元数据，不依赖 Kiro 阶段桥接。"}
 	status.StageBridge = &bridge
 	if status.Error != "" {
+		bridge.Reason = "proxy_status_unknown"
 		bridge.RestartReason = "无法读取 Kiro 代理归属：" + status.Error
-		status.StageBridge = &bridge
 		return status
 	}
 	// 启动和状态查询使用相同的归属判定，兼容 localhost 和局域网别名。
 	boundTarget := fmt.Sprintf("http://%s:%d", s.proxyBindHost(), s.cfg.Proxy.Port)
 	owned, err := kiroCAInjectionDecision(status.CurrentProxy, boundTarget)
 	if err != nil {
-		bridge.Installation = "error"
-		bridge.Message = "识别 Kiro 代理归属失败：" + err.Error()
-		bridge.RestartReason = bridge.Message
-		status.StageBridge = &bridge
+		markKiroProxyOwnershipUnknown(&status, &bridge, err)
 		return status
 	}
 	status.Configured = owned
-	routingEnabled := s.router != nil && s.router.StageRoutingEnabled()
-	applyKiroBridgePolicy(&bridge, owned, routingEnabled, mode, s.kiroLaunchStatus.load())
-	status.StageBridge = &bridge
+	applyKiroBridgePolicy(&bridge, owned, mode, s.kiroLaunchStatus.load())
 	return status
+}
+
+func markKiroProxyOwnershipUnknown(status *kiroProxyStatus, bridge *kiroBridgeStatus, err error) {
+	status.Error = "识别 Kiro 代理归属失败：" + err.Error()
+	bridge.Reason = "proxy_status_unknown"
+	bridge.RestartReason = status.Error
 }
 
 func inspectInstalledKiroBridge() kiroBridgeStatus {
@@ -199,32 +201,33 @@ func classifyKiroBridge(current []byte, target string, manifests []kiroStageMani
 	return status
 }
 
-func applyKiroBridgePolicy(status *kiroBridgeStatus, owned, routing bool, mode string, snapshot *kiroLaunchSnapshot) {
-	status.Required = owned && mode == ModeForward && routing
+func applyKiroBridgePolicy(status *kiroBridgeStatus, owned bool, mode string, snapshot *kiroLaunchSnapshot) {
+	status.Required = false
+	status.RestartRequired = false
+	status.Reason = "activity_routing"
+	status.RestartReason = "最近启动快照的 CA 注入和代理模式与当前设置一致；Auto 路由不依赖桥接。"
+	status.Message = "Auto 路由使用 activity 元数据，不依赖 Kiro 阶段桥接。"
 	status.LastLaunch = snapshot
-	switch {
-	case !owned:
-		status.Reason = "proxy_unconfigured"
-		status.RestartReason = "先配置 Kiro 代理地址，才能应用本代理的桥接启动设置。"
+	status.Installation = "not_required"
+	if snapshot == nil {
+		if !owned {
+			status.Reason = "proxy_unconfigured"
+		}
+		status.RestartReason = "Auto 路由无需桥接；本进程没有 Kiro 启动快照，CA 注入和代理模式同步状态未知。"
 		return
-	case mode == ModeCapture:
-		status.Reason = "capture"
-	case !routing:
-		status.Reason = "routing_disabled"
 	}
-	status.RestartRequired = true
-	switch {
-	case status.Required && status.Installation != "verified_current":
-		status.RestartReason = "需要重启以预检并应用当前桥接；" + status.Message
-	case snapshot == nil:
-		status.RestartReason = "本代理尚无最近启动计划记录，重启以应用当前设置；运行加载状态未核实。"
-	case snapshot.BridgeEnabled != status.Required:
-		status.RestartReason = "最近提交的启动计划与当前桥接设置不同，需要重启同步。"
-	case status.Required && (snapshot.ProxyMode != mode || snapshot.BundleSHA256 != status.BundleSHA256 || snapshot.AdapterSHA256 != status.ExpectedAdapterSHA256):
-		status.RestartReason = "桥接文件或模式与最近提交的启动计划不同，需要重启同步。"
-	default:
-		status.RestartRequired = false
-		status.RestartReason = "最近提交的启动计划与桥接设置一致；当前进程加载状态仍需实际请求验证。"
+	if snapshot.ProxyMode != mode || snapshot.CAInjected != owned {
+		status.RestartRequired = true
+		status.Reason = "launch_settings_changed"
+		status.RestartReason = fmt.Sprintf("最近启动快照与当前代理状态不一致（CA 注入=%t/%t，模式=%s/%s），需重启 Kiro。",
+			snapshot.CAInjected, owned, snapshot.ProxyMode, mode)
+		return
+	}
+	if !owned {
+		status.Reason = "proxy_unconfigured"
+	}
+	if mode == ModeCapture {
+		status.Reason = "capture"
 	}
 }
 

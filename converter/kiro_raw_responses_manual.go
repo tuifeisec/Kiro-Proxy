@@ -44,6 +44,7 @@ func ParseKiroRawResponsesManualRouting(body []byte) (*ParsedConversation, error
 	}
 
 	var conversationID, agentMode, continuationID string
+	continuationProvenance := AgentContinuationProvenanceNativeRaw
 	if metadataRaw, exists := root["metadata"]; exists {
 		metadata, err := decodeRawJSONObject(metadataRaw)
 		if err != nil {
@@ -57,9 +58,9 @@ func ParseKiroRawResponsesManualRouting(body []byte) (*ParsedConversation, error
 		if err != nil {
 			return nil, errors.New("raw Responses agent mode metadata must be a string")
 		}
-		continuationID, err = optionalRawString(metadata, "kiro:proxy_continuation_id")
+		continuationID, continuationProvenance, err = rawAgentContinuation(metadata)
 		if err != nil {
-			return nil, errors.New("raw Responses continuation metadata must be a string")
+			return nil, errors.New("raw Responses continuation metadata is invalid")
 		}
 	}
 
@@ -81,13 +82,14 @@ func ParseKiroRawResponsesManualRouting(body []byte) (*ParsedConversation, error
 	agentMode = strings.TrimSpace(agentMode)
 	continuationID = strings.TrimSpace(continuationID)
 	return &ParsedConversation{
-		ModelID:               model,
-		ConversationID:        conversationID,
-		AgentMode:             agentMode,
-		AgentContinuationID:   continuationID,
-		PromptAffinityKey:     conversationID,
-		ContinuationStateKey:  buildContinuationStateKey(conversationID, agentMode, continuationID),
-		ReasoningEffort:       effort,
-		RawResponsesHasImages: hasImages,
+		ModelID:                     model,
+		ConversationID:              conversationID,
+		AgentMode:                   agentMode,
+		AgentContinuationID:         continuationID,
+		AgentContinuationProvenance: continuationProvenance,
+		PromptAffinityKey:           conversationID,
+		ContinuationStateKey:        buildContinuationStateKey(conversationID, agentMode, continuationID),
+		ReasoningEffort:             effort,
+		RawResponsesHasImages:       hasImages,
 	}, nil
 }
