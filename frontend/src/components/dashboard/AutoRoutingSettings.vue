@@ -33,6 +33,8 @@ import {
   autoNodeContextEntries,
   autoNodeIdentityKey,
   buildAutoNodeCatalog,
+  buildAutoRequestDiagnostics,
+  autoRouteSelectionLabel,
   nodeIdentityErrors,
 } from '../../utils/autoNodeCatalog.js'
 import {
@@ -138,6 +140,7 @@ const dirty = computed(() => (
   migrationActive.value || (snapshot.value !== null && JSON.stringify(config.value) !== snapshot.value)
 ))
 const catalogCards = computed(() => buildAutoNodeCatalog(observations.value, historyData.value?.items || []))
+const requestDiagnostics = computed(() => buildAutoRequestDiagnostics(observations.value, historyData.value?.items || []))
 const catalogByIdentity = computed(() => new Map(catalogCards.value
   .filter((card) => card.identityComplete)
   .map((card) => [card.identityKey, card])))
@@ -604,12 +607,12 @@ function nodeDescription(record) {
 }
 
 function nodeTitle(record) {
-  const description = nodeDescription(record)
-  if (description.nodeId) return description.nodeId
   const route = record?.latestRoute || record
-  if (route?.node_id) return route.node_id
-  const path = String(route?.node_path || '')
-  return path.split('/').filter(Boolean).at(-1) || '节点名未提供'
+  const description = nodeDescription(record)
+  if (description.known && description.nodeId) return description.nodeId
+  if (typeof route?.node_id === 'string' && route.node_id) return route.node_id
+  const path = typeof route?.node_path === 'string' ? route.node_path : ''
+  return path.split('/').filter(Boolean).at(-1) || '节点标识不完整'
 }
 
 function cardWorkflowName(card) {
@@ -669,7 +672,7 @@ function catalogSearchText(card) {
 }
 
 function cardFilterLabel(card) {
-  if (!card.identityComplete) return '缺身份；仅按上下文展示'
+  if (!card.identityComplete) return '节点身份不完整'
   if (nodeOverrideForObservation(card.latestRoute)) return '已有独立规则'
   if (nodeBindingForObservation(card.latestRoute)) return '已有职责绑定'
   return '待配置'
@@ -677,11 +680,12 @@ function cardFilterLabel(card) {
 
 function routeSummary(record) {
   if (!record) return '没有可显示的路由记录'
-  const duty = record.selected_duty || '职责未确认'
+  const selection = autoRouteSelectionLabel(record)
+  const duty = record.selected_duty ? ` · selected_duty=${record.selected_duty}` : ''
   const source = record.selection_source ? ` · source=${record.selection_source}` : ''
   const taskType = record.task_type ? ` · task_type=${record.task_type}` : ''
   const reason = record.unknown_reason ? ` · 原因=${routeReasonText(record.unknown_reason)}（${record.unknown_reason}）` : ''
-  return `${duty} → ${observedTargetLabel(record)} / ${record.effective_effort || '上游默认'}${source}${taskType}${reason}`
+  return `${selection}：${observedTargetLabel(record)} / ${record.effective_effort || '上游默认'}${duty}${source}${taskType}${reason}`
 }
 
 function sourceReference(record, prefix = 'source') {
@@ -1205,9 +1209,10 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                 <button type="button" class="shrink-0 rounded border border-line-2 bg-surface px-2.5 py-1.5 text-[10px] text-ink-2 disabled:opacity-50" :disabled="evidenceLoading" @click="refreshEvidence">{{ evidenceLoading ? '正在读取证据…' : '刷新路由证据' }}</button>
               </div>
               <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-ink-4">
-                <span>进程观察：{{ observationsError ? (observationsAvailable ? `本次读取失败，保留上次成功的 ${observations.length} 条` : '读取失败') : `${observations.length} 条变体` }}</span>
+                <span>进程观察：{{ observationsError ? (observationsAvailable ? `本次读取失败，保留上次成功的 ${observations.length} 条路由观察` : '读取失败') : `${observations.length} 条路由观察` }}</span>
                 <span>历史日志：{{ historyError ? (historyAvailable ? `本次读取失败，保留上次成功的 ${historyData?.route_count ?? 0} 条记录` : '读取失败') : historyData ? `${historyData.route_count} 条 Auto 路由记录` : '尚未读取' }}</span>
-                <span v-if="historyData">活动记录 {{ historyData.activity_count }} 条（不是节点数） · 返回目录项 {{ historyData.items.length }} 条</span>
+                <span v-if="historyData">历史活动记录 {{ historyData.activity_count }} 条可解析活动正文（停发实现不保存 activity 正文；0 不表示运行期没有 activity）</span>
+                <span>节点卡片 {{ catalogCards.length }} 张（仅从带节点线索的记录生成）</span>
               </div>
               <div v-if="observationsError" class="mt-2 rounded border border-danger-tint-line bg-danger-tint px-2.5 py-2 text-[11px] text-danger" role="alert">
                 <p>进程观察读取失败：{{ observationsError }}</p>
@@ -1218,8 +1223,8 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                 <p class="mt-1 text-[10px]">{{ historyAvailable ? '页面保留上次成功读取的历史，并标为旧数据。' : '没有成功读取过历史日志；不能将空列表解释为没有节点。' }}</p>
               </div>
               <section v-if="historyData" class="mt-2 rounded-md border border-line-2 bg-surface-2 p-2.5 text-[10px] text-ink-3">
-                <p>历史覆盖：成功解析 {{ historyData.route_count }} 条 Auto 路由记录、{{ historyData.activity_count }} 条活动记录；当前返回 {{ historyData.items.length }} 个目录项。进程观察与历史记录分别展示，不合并成总调用数。</p>
-                <p v-if="historyData.items_truncated" class="mt-1 text-warning-fg">历史目录项达到返回上限，未返回的路由变体不会出现在卡片中。</p>
+                <p>历史覆盖：成功解析 {{ historyData.route_count }} 条 Auto 路由记录、{{ historyData.activity_count }} 条含正文的历史活动记录。停发实现不保存 activity 正文，因此该活动数为 0 时不能判断运行期是否收到 activity。当前节点卡片数 {{ catalogCards.length }}，仅按记录中的节点线索生成。</p>
+                <p v-if="historyData.items_truncated" class="mt-1 text-warning-fg">历史路由记录达到返回上限，未返回的路由变体不会出现在节点卡片中。</p>
                 <p v-if="historyData.context_truncated" class="mt-1 text-warning-fg">活动/关联信息读取不完整，查看警告；工作流标题或请求节选可能不完整。</p>
                 <details v-if="historyData.files.length" class="mt-1.5">
                   <summary class="cursor-pointer text-ink-4">查看日志文件读取状态（{{ historyData.files.length }}）</summary>
@@ -1234,6 +1239,28 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                   </ul>
                 </details>
               </section>
+              <details v-if="requestDiagnostics.length" class="mt-2 rounded-md border border-line-2 bg-surface-2 p-2.5 text-[10px] text-ink-3">
+                <summary class="cursor-pointer font-medium text-ink-2">未提供节点元数据的 Auto 请求（{{ requestDiagnostics.length }} 种选模结果与模式组合）</summary>
+                <p class="mt-1">这些记录有 Auto 选模结果或请求上下文，但没有节点身份，因此单独作为请求诊断展示，不生成节点卡或节点规则。默认目标表示目标已选；unknown_reason 说明为什么没有采用节点或职责规则，不代表模型结果未知。普通 Vibe 请求可能没有 workflow 元数据，不能据此推断 18 项职责。</p>
+                <div class="mt-2 space-y-2">
+                  <details v-for="diagnostic in requestDiagnostics" :key="diagnostic.key" class="rounded border border-line-2 bg-surface p-2">
+                    <summary class="cursor-pointer text-ink-2">{{ diagnostic.latestRoute?.agent_mode || '模式未提供' }} · {{ autoRouteSelectionLabel(diagnostic.latestRoute) }} · 进程 {{ diagnostic.processCount }} 次 · 历史 {{ diagnostic.historyCount }} 条记录 · 涉及 {{ diagnostic.conversationCount }} 个会话</summary>
+                    <p class="mt-1 text-ink-4">同一会话可能跨来源出现，进程次数与历史记录数分别展示，不相加；会话数按 conversation_id 去重，不代表请求数。</p>
+                    <div v-for="record in diagnostic.records" :key="`${record.catalog_source}:${record.catalog_index}`" class="mt-2 border-t border-line-2 pt-2">
+                      <p><strong>{{ record.catalog_source === 'history' ? '历史路由记录' : '当前进程观察' }}</strong><span v-if="record.catalog_source === 'history'"> · {{ sourceReference(record) }}</span><span v-else> · {{ record.count || 0 }} 次，最近 {{ record.last_seen || '时间未提供' }}</span></p>
+                      <p>选模结果={{ autoRouteSelectionLabel(record) }} · target={{ observedTargetLabel(record) }} · effort={{ record.effective_effort || '上游默认' }} · mode={{ record.agent_mode || '未提供' }} · source={{ record.selection_source || '未提供' }}</p>
+                      <p>selected_duty={{ record.selected_duty || '未提供' }} · task_type={{ record.task_type || '未提供' }} · 会话={{ record.conversation_id || '未提供' }}</p>
+                      <p v-if="record.unknown_reason" class="text-warning-fg">未采用节点或职责规则的原因：{{ routeReasonText(record.unknown_reason) }}；原始码：<code>{{ record.unknown_reason }}</code>。此原因不表示模型结果未知。</p>
+                      <div class="mt-1 space-y-0.5">
+                        <p class="text-ink-4">请求上下文：</p>
+                        <p v-for="entry in autoNodeContextEntries(record)" :key="entry.key" class="break-all">{{ entry.label }}={{ entry.value }}</p>
+                        <p class="break-all font-mono">node_id={{ record.node_id || '未提供' }} · definition_id={{ record.definition_id || '未提供' }} · definition_revision={{ record.definition_revision || '未提供' }} · node_path={{ record.node_path || '未提供' }}</p>
+                      </div>
+                      <p v-if="record.catalog_source === 'history' && record.activity_source_file" class="mt-1">关联 activity 来源：{{ sourceReference(record, 'activity_source') }}</p>
+                    </div>
+                  </details>
+                </div>
+              </details>
               <details v-if="historyData" class="mt-2 rounded-md border border-line-2 bg-surface-2 p-2.5 text-[10px] text-ink-3">
                 <summary class="cursor-pointer font-medium text-ink-2">活动线索（没有同会话 Auto 路由证据）<span v-if="activityNodesAvailable"> · {{ filteredActivityNodes.length }} 条匹配</span></summary>
                 <p class="mt-1">这些节点有日志活动，但当前没有同会话、同工作流的 Auto 路由证据。活动条数不代表模型调用数；缺少独立规则匹配身份时，也无法确定它们的职责目标。</p>
@@ -1296,9 +1323,9 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                   <div class="flex flex-wrap items-start justify-between gap-2">
                     <div class="flex min-w-0 items-start gap-2">
                       <input v-if="card.identityComplete" type="checkbox" class="mt-0.5 accent-primary" :checked="isBatchIdentitySelected(card)" :disabled="!canSelectBatchIdentity(card) && !isBatchIdentitySelected(card)" :aria-label="`批量选择 ${nodeTitle(card)}`" @change="setBatchIdentitySelected(card, $event.target.checked)" />
-                      <span v-else class="mt-0.5 rounded border border-warning-tint-line px-1 text-[9px] text-warning-fg" title="上下文不是节点身份">上下文</span>
+                      <span v-else class="mt-0.5 rounded border border-warning-tint-line px-1 text-[9px] text-warning-fg" title="存在节点线索，但身份不完整，不能配置规则">身份不完整</span>
                       <div class="min-w-0">
-                        <div class="flex flex-wrap items-center gap-2"><strong class="text-ink-2">{{ cardWorkflowName(card) || nodeTitle(card) }}</strong><span v-if="cardWorkflowName(card)" class="font-mono text-ink-4">节点 {{ nodeTitle(card) }}</span><span class="rounded border border-line-2 px-1.5 py-0.5 text-[9px]">{{ cardFilterLabel(card) }}</span><span class="rounded border border-line-2 px-1.5 py-0.5 text-[9px]">{{ isObservedCustomRule(card.latestRoute) ? '路由记录命中独立规则' : card.latestRoute?.unknown_reason ? '路由未知' : card.latestRoute?.selected_duty ? '路由记录有职责' : '职责未确认' }}</span></div>
+                        <div class="flex flex-wrap items-center gap-2"><strong class="text-ink-2">{{ cardWorkflowName(card) || nodeTitle(card) }}</strong><span v-if="cardWorkflowName(card)" class="font-mono text-ink-4">节点 {{ nodeTitle(card) }}</span><span class="rounded border border-line-2 px-1.5 py-0.5 text-[9px]">{{ cardFilterLabel(card) }}</span><span class="rounded border border-line-2 px-1.5 py-0.5 text-[9px]">{{ autoRouteSelectionLabel(card.latestRoute) }}</span></div>
                         <p class="mt-1">用途：{{ nodeUsage(card) }} <span class="text-ink-4">· 依据：{{ nodeEvidenceLabel(card) }}<span v-if="evidenceProvenance(card.evidenceRecord)"> · {{ evidenceProvenance(card.evidenceRecord) }}</span></span></p>
                       </div>
                     </div>
@@ -1365,7 +1392,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                     <p v-if="nodeBindingForObservation(card.latestRoute)" class="text-[9px] text-ink-4">当前草稿已有职责绑定 {{ nodeBindingForObservation(card.latestRoute).duty }}；<template v-if="isPathOnlyNodeIdentity(card.latestRoute)">选择独立目标后会替换并删除此绑定。</template><template v-else>完整三元组下由独立规则优先，绑定仍保留。</template></p>
                   </div>
                   <div v-else class="mt-2 rounded border border-warning-tint-line bg-warning-tint px-2 py-1.5 text-warning-fg">
-                    <p>没有可用的节点路径身份；此卡只代表上下文，不能创建节点绑定或覆盖。</p>
+                    <p>存在节点线索，但节点标识不完整，不能创建节点绑定或独立规则。</p>
                     <ul class="mt-1 list-disc pl-4"><li v-for="error in nodeIdentityErrors(card.latestRoute)" :key="error">{{ error }}</li></ul>
                     <p class="mt-1">{{ cardTargetScopeText(card) }}</p>
                     <button type="button" class="mt-1 rounded border border-warning-tint-line bg-surface px-2.5 py-1 text-[10px] text-ink-2" @click="configureCardTarget(card)">{{ cardCurrentDuty(card) ? `定位职责目标：${cardCurrentDuty(card).label}` : '定位默认目标' }}</button>
@@ -1373,8 +1400,9 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                 </article>
                 <p v-if="catalogCards.length && !filteredCatalogCards.length" class="mt-3 text-[11px] text-ink-4">当前搜索和筛选条件没有匹配卡片。</p>
               </div>
-              <p v-else-if="!observationsError && !historyError && evidenceLoaded" class="mt-3 text-[11px] text-ink-4">进程观察与历史日志均未返回路由记录。</p>
-              <p v-else-if="observationsError || historyError" class="mt-3 text-[11px] text-warning-fg">至少一个证据来源读取失败，当前不能判断没有节点。</p>
+              <p v-if="!catalogCards.length && !observationsError && !historyError && evidenceLoaded && (observations.length || (historyData?.route_count ?? 0) > 0)" class="mt-3 text-[11px] text-ink-4">当前记录未提供可识别的节点身份；请查看上方请求诊断（如有），并核对历史返回上限。</p>
+              <p v-else-if="!catalogCards.length && !observationsError && !historyError && evidenceLoaded" class="mt-3 text-[11px] text-ink-4">进程观察与历史日志均未返回 Auto 路由记录。</p>
+              <p v-else-if="!catalogCards.length && (observationsError || historyError)" class="mt-3 text-[11px] text-warning-fg">至少一个证据来源读取失败，当前不能判断没有节点；页面保留的旧数据状态见上方提示。</p>
               <div v-if="config.node_bindings.length" class="mt-3 border-t border-line-2 pt-3">
                 <h5 class="mb-2 text-[11px] font-semibold text-ink-2">已保存职责绑定</h5>
                 <div v-for="item in config.node_bindings" :key="observationIdentity(item)" class="flex flex-wrap items-center justify-between gap-2 py-1 text-[10px]">
@@ -1533,7 +1561,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
             </section>
             <section class="rounded-md border border-line-2 bg-surface-2 p-3">
               <h3 class="font-semibold text-ink">节点用途参考（不决定职责）</h3>
-              <p class="mt-1 text-ink-3"><code class="font-mono">{{ activeNodeDescription?.nodeId || activeDescription.observation.node_id || '节点名未提供' }}</code>：{{ activeNodeDescription?.known && activeNodeDescription?.usage ? activeNodeDescription.usage : '用途待确认' }}</p>
+              <p class="mt-1 text-ink-3"><code class="font-mono">{{ nodeTitle(activeDescription.catalogCard || activeDescription.observation) }}</code>：{{ activeNodeDescription?.known && activeNodeDescription?.usage ? activeNodeDescription.usage : '用途待确认' }}</p>
               <p v-if="activeDescription.activityOnly" class="mt-1 text-[11px] text-ink-4">活动日志中的名称/标题仅作用途参考；本节点没有已关联的 Auto 路由职责。</p>
               <p v-else class="mt-1 text-[11px] text-ink-4">说明依据：{{ activeNodeDescription?.evidenceLabel || '说明依据不足' }}。用途只供核对，不能代替上方的实际 selected_duty 或用于推断路由。</p>
               <p class="mt-2 text-[11px] text-ink-4">同名节点可能来自不同工作流；以上说明按完整身份和可用任务声明解释，不按裸 node_id 归并。此处只解释，不改变职责、模型选择或配置。</p>

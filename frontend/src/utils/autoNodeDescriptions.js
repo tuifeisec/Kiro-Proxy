@@ -227,7 +227,8 @@ const AUTO_NODE_IDENTITY_USAGE = Object.freeze({
 
 const AUTO_ROUTE_REASON_DESCRIPTIONS = Object.freeze({
   task_type_unavailable: '客户端没有提供可用于职责选择的 task_type。',
-  stable_identity_unavailable: '请求缺少完整稳定节点身份，无法匹配节点绑定或覆盖。',
+  stable_identity_unavailable: '请求未提供可匹配规则的节点路径身份；使用已配置的默认目标，不表示实际选模结果未知。',
+  node_path_ambiguous: '同一路径匹配到多个节点规则，无法唯一确定规则；使用已配置的默认目标。',
   metadata_v1: '请求只携带 v1 私有元数据；duty_fixed 按固定默认目标处理。',
   duty_target_missing: '已解析出职责，但该职责尚未配置固定目标。',
   expanded_routine_support_node_unknown: 'expanded 布局无法根据该节点名把 routine_support 细分为 preparation 或 finalization。',

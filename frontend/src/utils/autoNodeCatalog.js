@@ -58,6 +58,32 @@ const ROUTE_FIELDS = Object.freeze([
   'lock_scope',
 ])
 
+const DIAGNOSTIC_VARIANT_FIELDS = Object.freeze([
+  'agent_mode',
+  'workflow_stage',
+  'selected_stage',
+  'agent_task_type',
+  'chat_trigger_type',
+  'task_type',
+  'selected_duty',
+  'selection_source',
+  'unknown_reason',
+  'target_group_id',
+  'target_group_name',
+  'model_config_id',
+  'outbound_model',
+  'effective_effort',
+  'channel_identity',
+  'lock_scope',
+])
+
+const NODE_EVIDENCE_FIELDS = Object.freeze([
+  'node_id',
+  'node_path',
+  'definition_id',
+  'definition_revision',
+])
+
 function textValue(record, key) {
   const value = record?.[key]
   if (value === null || value === undefined) return ''
@@ -106,8 +132,8 @@ function contextKey(record) {
   return hasContext(record) ? JSON.stringify(contextValues(record)) : null
 }
 
-function routeVariantKey(record) {
-  return JSON.stringify(ROUTE_FIELDS.map((key) => textValue(record, key)))
+function routeVariantKey(record, fields = ROUTE_FIELDS) {
+  return JSON.stringify(fields.map((key) => textValue(record, key)))
 }
 
 function sourceLocation(record) {
@@ -183,7 +209,7 @@ function addRecord(cardsByKey, record, source, index) {
   card.records.push({ ...record, catalog_source: source, catalog_index: index })
 }
 
-function finishCard(card) {
+function finishCard(card, variantFields = ROUTE_FIELDS) {
   card.processRecords = card.records.filter((record) => record.catalog_source === 'process')
   card.historyRecords = card.records.filter((record) => record.catalog_source === 'history')
   card.processCount = card.processRecords.reduce((total, record) => total + observationCount(record), 0)
@@ -191,7 +217,7 @@ function finishCard(card) {
 
   const variants = new Map()
   for (const record of card.records) {
-    const key = routeVariantKey(record)
+    const key = routeVariantKey(record, variantFields)
     let variant = variants.get(key)
     if (!variant) {
       variant = { key, records: [], processRecords: [], historyRecords: [] }
@@ -229,12 +255,80 @@ function observationCount(record) {
 export function buildAutoNodeCatalog(processObservations = [], historyItems = []) {
   const cardsByKey = new Map()
   processObservations.forEach((record, index) => {
-    if (record && typeof record === 'object' && !Array.isArray(record)) addRecord(cardsByKey, record, 'process', index)
+    if (record && typeof record === 'object' && !Array.isArray(record) && hasNodeEvidence(record)) {
+      addRecord(cardsByKey, record, 'process', index)
+    }
   })
   historyItems.forEach((record, index) => {
-    if (record && typeof record === 'object' && !Array.isArray(record)) addRecord(cardsByKey, record, 'history', index)
+    if (record && typeof record === 'object' && !Array.isArray(record) && hasNodeEvidence(record)) {
+      addRecord(cardsByKey, record, 'history', index)
+    }
   })
-  return [...cardsByKey.values()].map(finishCard)
+  return [...cardsByKey.values()].map((card) => finishCard(card))
+}
+
+function hasNodeEvidence(record) {
+  return NODE_EVIDENCE_FIELDS.some((key) => {
+    const value = record?.[key]
+    return value !== undefined && value !== null && (typeof value !== 'string' || value !== '')
+  })
+}
+
+function diagnosticGroupKey(record) {
+  return JSON.stringify(DIAGNOSTIC_VARIANT_FIELDS.map((key) => textValue(record, key)))
+}
+
+export function buildAutoRequestDiagnostics(processObservations = [], historyItems = []) {
+  const cardsByKey = new Map()
+  const append = (records, source) => {
+    records.forEach((record, index) => {
+      if (!record || typeof record !== 'object' || Array.isArray(record) || hasNodeEvidence(record)) return
+      const key = `request:${diagnosticGroupKey(record)}`
+      let card = cardsByKey.get(key)
+      if (!card) {
+        card = {
+          key,
+          identityKey: null,
+          contextKey: null,
+          identityComplete: false,
+          contextOnly: false,
+          requestDiagnostic: true,
+          records: [],
+          variants: [],
+        }
+        cardsByKey.set(key, card)
+      }
+      card.records.push({ ...record, catalog_source: source, catalog_index: index })
+    })
+  }
+  append(processObservations, 'process')
+  append(historyItems, 'history')
+
+  return [...cardsByKey.values()].map((card) => {
+    finishCard(card, DIAGNOSTIC_VARIANT_FIELDS)
+    card.conversationCount = new Set(card.records
+      .map((record) => textValue(record, 'conversation_id'))
+      .filter(Boolean)).size
+    return card
+  })
+}
+
+function hasSelectedTarget(record) {
+  return ['target_group_id', 'target_group_name', 'model_config_id', 'outbound_model']
+    .some((key) => textValue(record, key) !== '')
+}
+
+export function autoRouteSelectionLabel(record) {
+  const source = textValue(record, 'selection_source')
+  if (source === 'default' || source === 'legacy_default') {
+    return hasSelectedTarget(record) ? '已选择默认目标' : '选模结果未提供'
+  }
+  if (['node_override', 'node_override_path'].includes(source)) return '已匹配独立规则'
+  if (['node_binding', 'node_binding_path', 'task_type'].includes(source)) return '已匹配职责规则'
+  if (['legacy_stage', 'legacy_node_stage', 'legacy_orchestration'].includes(source)) return '已匹配阶段规则'
+  if (source) return '选模来源未识别'
+  if (hasSelectedTarget(record)) return '已提供目标，来源未提供'
+  return '选模结果未提供'
 }
 
 export function autoNodeContextEntries(record) {

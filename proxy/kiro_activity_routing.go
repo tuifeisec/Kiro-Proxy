@@ -57,16 +57,17 @@ var (
 type kiroActivityParseCategory string
 
 const (
-	kiroActivityCategoryInvalidJSON     kiroActivityParseCategory = "invalid_json"
-	kiroActivityCategoryTrailingData    kiroActivityParseCategory = "trailing_data"
-	kiroActivityCategoryTokenTooLarge   kiroActivityParseCategory = "token_too_large"
-	kiroActivityCategoryEventInvalid    kiroActivityParseCategory = "event_invalid"
-	kiroActivityCategoryEventUnroutable kiroActivityParseCategory = "event_unroutable"
-	kiroActivityCategorySubstream       kiroActivityParseCategory = "substream_ignored"
-	kiroActivityCategorySequence        kiroActivityParseCategory = "sequence_ignored"
-	kiroActivityCategoryBatchLimit      kiroActivityParseCategory = "batch_limit"
-	kiroActivityCategoryPathLimit       kiroActivityParseCategory = "path_limit"
-	kiroActivityCategoryDepthLimit      kiroActivityParseCategory = "depth_limit"
+	kiroActivityCategoryInvalidJSON         kiroActivityParseCategory = "invalid_json"
+	kiroActivityCategoryTrailingData        kiroActivityParseCategory = "trailing_data"
+	kiroActivityCategoryTokenTooLarge       kiroActivityParseCategory = "token_too_large"
+	kiroActivityCategoryEventInvalid        kiroActivityParseCategory = "event_invalid"
+	kiroActivityCategoryEventUnroutable     kiroActivityParseCategory = "event_unroutable"
+	kiroActivityCategoryWorkflowUnavailable kiroActivityParseCategory = "workflow_unavailable"
+	kiroActivityCategorySubstream           kiroActivityParseCategory = "substream_ignored"
+	kiroActivityCategorySequence            kiroActivityParseCategory = "sequence_ignored"
+	kiroActivityCategoryBatchLimit          kiroActivityParseCategory = "batch_limit"
+	kiroActivityCategoryPathLimit           kiroActivityParseCategory = "path_limit"
+	kiroActivityCategoryDepthLimit          kiroActivityParseCategory = "depth_limit"
 )
 
 type kiroActivityParseReport struct {
@@ -866,10 +867,17 @@ func (p *kiroActivityJSONScanner) acceptEvent(event *kiroActivityEvent, allowMis
 	meta := event.meta
 	if !strings.HasPrefix(meta.SessionID, "sess_") || len(meta.SessionID) <= len("sess_") ||
 		!validKiroActivityText(meta.SessionID, kiroActivitySessionIDMaxBytes, false) ||
-		!validKiroActivityText(meta.WorkflowID, kiroActivityWorkflowIDMaxBytes, false) ||
-		!validKiroActivityText(meta.NodeID, kiroActivityNodeIDMaxBytes, false) ||
-		!validKiroActivityText(meta.WorkflowName, kiroActivityWorkflowNameMaxBytes, true) ||
 		!validKiroActivityText(meta.AgentMode, kiroActivityAgentModeMaxBytes, true) {
+		p.report.addCategory(kiroActivityCategoryEventUnroutable)
+		return nil
+	}
+	if event.kiroSeen&activityKiroWorkflow == 0 {
+		p.report.addCategory(kiroActivityCategoryWorkflowUnavailable)
+		return nil
+	}
+	if !validKiroActivityText(meta.WorkflowID, kiroActivityWorkflowIDMaxBytes, false) ||
+		!validKiroActivityText(meta.NodeID, kiroActivityNodeIDMaxBytes, false) ||
+		!validKiroActivityText(meta.WorkflowName, kiroActivityWorkflowNameMaxBytes, true) {
 		p.report.addCategory(kiroActivityCategoryEventUnroutable)
 		return nil
 	}
