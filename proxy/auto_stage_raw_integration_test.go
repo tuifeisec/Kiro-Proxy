@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"kiro-proxy/converter"
-	"kiro-proxy/license"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -32,7 +31,6 @@ func rawStageRequest(t *testing.T, model, conversation, stage string, currentToo
 func rawStageProxy(t *testing.T, env *autoStageIntegrationEnv, passthrough http.Handler) {
 	t.Helper()
 	env.server.forwarder = env.forward
-	env.server.licenseClient = &typesafeClassifierTestLicense{result: license.CheckResult{Authorized: true}}
 	env.server.proxy = goproxy.NewProxyHttpServer()
 	if passthrough != nil {
 		mock := httptest.NewServer(passthrough)

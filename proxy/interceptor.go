@@ -296,17 +296,6 @@ func (s *Server) setupInterceptor() {
 		if !pre.IsClassifier && route.Group != nil {
 			pre.GroupReasoningEffort = route.Group.ReasoningEffort
 		}
-		if result, err := s.licenseClient.CheckCached(); err != nil || !result.Authorized {
-			s.logAutoRequestResult(pre, "authorization_denied", http.StatusForbidden)
-			msg := "未授权，请加入群获取免费授权并在后台添加机器码"
-			if err != nil {
-				msg = "授权检测失败: " + err.Error()
-			} else if result.Tampered {
-				msg = "程序防篡改校验失败，请重新下载官方版本"
-			}
-			s.logger.Error("license", msg)
-			return req, errorResponse(req, http.StatusForbidden, msg)
-		}
 
 		if route.Group != nil {
 			s.logger.InfoWithMeta("router", fmt.Sprintf("路由命中: %s → 分组 %s", pre.SourceModel, route.Group.Name), LogMeta{

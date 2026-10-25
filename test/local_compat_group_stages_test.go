@@ -2,8 +2,10 @@ package test
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
+	"kiro-proxy/proxy"
+	"kiro-proxy/rules"
+	"kiro-proxy/store"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,23 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"kiro-proxy/license"
-	"kiro-proxy/proxy"
-	"kiro-proxy/rules"
-	"kiro-proxy/store"
 )
 
 func TestLocalCompatFallbackAffinityDoesNotBypassPrimaryGroup(t *testing.T) {
-	licenseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(license.CheckResult{
-			Authorized:   true,
-			Registered:   true,
-			VersionValid: true,
-		})
-	}))
-	defer licenseServer.Close()
-	t.Setenv("KIRO_LICENSE_SERVER", licenseServer.URL)
 
 	var primaryCalls atomic.Int32
 	primaryUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

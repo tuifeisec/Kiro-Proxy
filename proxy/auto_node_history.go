@@ -152,9 +152,6 @@ func (s *Server) handleAutoNodeHistory(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireTrafficLogPermission(w) {
-		return
-	}
 	response, err := readAutoNodeHistory(r.Context(), s.cfg.Proxy.LogFile)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusRequestTimeout)

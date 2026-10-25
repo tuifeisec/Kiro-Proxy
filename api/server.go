@@ -75,9 +75,5 @@ func (s *Server) registerRoutesTo(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auto-routing/observations", s.handleAutoRoutingObservations)
 	mux.HandleFunc("/api/test-model", s.handleTestModel)
 	mux.HandleFunc("/api/reload", s.handleReload)
-	mux.HandleFunc("/api/license-info", s.handleLicenseInfo)
-	mux.HandleFunc("/api/advertisements", s.handleAdvertisements)
 	mux.HandleFunc("/api/app-version", s.handleAppVersion)
-	mux.HandleFunc("/api/update-info", s.handleUpdateInfo)
-	mux.HandleFunc("/api/open-external-url", s.handleOpenExternalURL)
 }

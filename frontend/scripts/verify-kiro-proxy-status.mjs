@@ -147,12 +147,10 @@ async function fixture(options = {}) {
         state.restartReason = '代理模式切换后需要重启 Kiro 以应用桥接设置。'
       }
       data = proxyModeStatus(state)
-    } else if (url.pathname === '/api/license-info') data = { authorized: true, traffic_logs: true }
-    else if (url.pathname === '/api/advertisements' || url.pathname.startsWith('/api/model-groups')) data = []
+    } else if (url.pathname.startsWith('/api/model-groups')) data = []
     else if (url.pathname === '/api/models') data = []
     else if (url.pathname === '/api/settings') data = { classifier_model_id: '', auto_routing_config: '{}', typesafe_classifier_config: '{}' }
     else if (url.pathname === '/api/app-version') data = { version: 'mock' }
-    else if (url.pathname === '/api/update-info') data = { available: false }
     else if (url.pathname === '/api/proxy-access-mode') data = { mode: 'local', host: '127.0.0.1', proxy_url: 'http://127.0.0.1:18081' }
     else if (url.pathname === '/api/log-detail') data = { mode: 'summary', max_body: 65536 }
     else if (url.pathname === '/api/stats') data = url.searchParams.get('type') === 'daily' ? { daily: [] } : { credits: 0, total_requests: 0, uptime_seconds: 10 }

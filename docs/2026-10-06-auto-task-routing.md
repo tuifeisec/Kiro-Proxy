@@ -39,7 +39,7 @@
 
 请求解析层已有 `AgentMode`、`AgentTaskType`、`ReasoningEffort`、图片、工具定义、工具结果及主会话/分支的 `ContinuationStateKey`。这些是可以用于本地策略的输入。现有 `simple-task` / `intent-classification` classifier 路由只是转发 Kiro 的独立分类请求，并没有读取分类结果来决定后续主请求模型。
 
-仓库已有 [动态模型路由设计讨论稿](dynamic-model-routing-design.md)，该完整方案仍为讨论稿。此次只实现下述明确范围的轻量规则、角色映射、内存模型锁与日志；没有接入 `/agents/activity`、语义分类、策略发布控制面或跨模型接管，不能视为完整讨论稿全部落地。
+早期动态模型讨论稿已从当前目录清理，历史内容可从 Git 历史恢复。当前行为以[无补丁 Auto 与 activity 观察契约](2026-10-20-activity-driven-auto-routing.md)为准，activity 异步观察不构成首轮同步身份。以下实施和验证记录仅描述本文当时范围。
 
 ## 本地适配方式的选择
 

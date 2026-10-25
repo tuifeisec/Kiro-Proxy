@@ -1,1 +1,0 @@
-var e={login:`登录`},t={auth:e};export{e as auth,t as default};

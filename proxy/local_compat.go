@@ -67,9 +67,6 @@ func (s *Server) handleLocalCompat(w http.ResponseWriter, r *http.Request, api l
 		writeLocalCompatError(w, http.StatusForbidden, "局域网访问未开启")
 		return
 	}
-	if !s.requireLocalCompatLicense(w) {
-		return
-	}
 
 	start := time.Now()
 	body, err := io.ReadAll(io.LimitReader(r.Body, localCompatBodyLimit+1))
@@ -730,23 +727,6 @@ func (s *Server) allowLocalCompatRequest(r *http.Request) bool {
 	}
 	ip := net.ParseIP(strings.TrimSpace(host))
 	return ip != nil && ip.IsLoopback()
-}
-
-func (s *Server) requireLocalCompatLicense(w http.ResponseWriter) bool {
-	result, err := s.licenseClient.CheckCached()
-	if err != nil {
-		writeLocalCompatError(w, http.StatusForbidden, "授权检测失败: "+err.Error())
-		return false
-	}
-	if !result.Authorized {
-		msg := "未授权，请加入群获取免费授权并在后台添加机器码"
-		if result.Tampered {
-			msg = "程序防篡改校验失败，请重新下载官方版本"
-		}
-		writeLocalCompatError(w, http.StatusForbidden, msg)
-		return false
-	}
-	return true
 }
 
 func parseLocalCompatRequest(body []byte) (localCompatRequest, error) {

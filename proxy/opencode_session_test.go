@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 	"io"
 	"kiro-proxy/converter"
-	"kiro-proxy/license"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"kiro-proxy/ua"
@@ -179,11 +178,7 @@ func TestLocalCompatForwardsDistinctStableSessions(t *testing.T) {
 	defer logger.Close()
 	f := NewForwarder(stats, db)
 	defer f.CloseIdleConnections()
-	lc := license.NewClient("http://license.invalid")
-	lc.HTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"authorized":true,"registered":true,"version_valid":true}`))}, nil
-	})
-	s := &Server{db: db, stats: stats, logger: logger, forwarder: f, licenseClient: lc}
+	s := &Server{db: db, stats: stats, logger: logger, forwarder: f}
 	for _, api := range []localCompatAPI{localCompatChat, localCompatResponses, localCompatMessages} {
 		provider := "openai"
 		endpoint := "/v1/chat/completions"

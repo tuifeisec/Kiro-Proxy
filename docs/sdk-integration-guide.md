@@ -1,7 +1,7 @@
 # OpenAI / Claude SDK 接入与测试指南
 
 > 更新时间：2026-07-22
-> 本文是实际操作入口。架构依据见 [sdk-integration-architecture.md](sdk-integration-architecture.md)，代码实施顺序见 [sdk-integration-plan.md](sdk-integration-plan.md)。
+> 本文是实际操作入口。架构依据见 [sdk-integration-architecture.md](sdk-integration-architecture.md)，当前总架构见 [architecture.md](architecture.md)。
 
 ## 1. 推荐接入方式
 
@@ -189,7 +189,7 @@ const message = await anthropic.messages.create({
 console.log(message.content);
 ```
 
-当前本机模式只使用软件授权校验，示例中的 `local-proxy` 是 SDK 所需的占位 key。完成本地 API Token 功能后，统一由 `KIRO_PROXY_TOKEN` 提供真实本地凭证；上游 key 始终由 Kiro Proxy 注入。
+当前本机模式无需软件激活，默认只允许回环地址访问。示例中的 `local-proxy` 是 SDK 所需的占位 key；上游 key 始终由 Kiro Proxy 注入。LAN 访问须按现有设置明确启用；本文关于未来本地 API Token 的规划不代表已交付能力。
 
 ## 5. 代码接入顺序
 
@@ -289,7 +289,7 @@ npm --prefix frontend run build
 npm --prefix test/sdk-compat test
 ```
 
-普通 Go 构建验证完整授权策略，`dev` 构建验证本地源码调试策略。SDK 契约测试不得依赖真实上游额度。
+普通构建与 `dev` 标签构建均无需软件激活。SDK 契约测试不得依赖授权服务器或真实上游额度。
 
 Kiro 缓存回归测试还应固定验证：
 

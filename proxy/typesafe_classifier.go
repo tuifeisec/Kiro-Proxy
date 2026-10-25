@@ -11,18 +11,12 @@ import (
 	"time"
 
 	"kiro-proxy/converter"
-	"kiro-proxy/license"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
 	"kiro-proxy/typesafe"
 
 	json "github.com/goccy/go-json"
 )
-
-// licenseChecker 让分类器的授权边界可在本地 Mock，不改变生产检查。
-type licenseChecker interface {
-	CheckCached() (license.CheckResult, error)
-}
 
 // tryTypesafeClassifier 只消费已识别的 Kiro classifier，不参与主模型选择。
 func (s *Server) tryTypesafeClassifier(req *http.Request, pre *Preflight) (*http.Response, bool) {
@@ -48,9 +42,6 @@ func (s *Server) tryTypesafeClassifier(req *http.Request, pre *Preflight) (*http
 	}
 	if err := store.ValidateTypesafeClassifierConfig(config); err != nil {
 		return errorResponse(req, http.StatusServiceUnavailable, "Typesafe 配置无效: "+err.Error()), true
-	}
-	if resp := s.requireTypesafeClassifierLicense(req); resp != nil {
-		return resp, true
 	}
 	if pre.Conv == nil {
 		return errorResponse(req, http.StatusBadRequest, "missing Kiro classifier conversation"), true
@@ -139,24 +130,6 @@ func isTypesafeIntentClassifier(req *http.Request, pre *Preflight) bool {
 		}
 	}
 	return false
-}
-
-func (s *Server) requireTypesafeClassifierLicense(req *http.Request) *http.Response {
-	if s.licenseClient == nil {
-		return errorResponse(req, http.StatusForbidden, "授权检测不可用")
-	}
-	result, err := s.licenseClient.CheckCached()
-	if err == nil && result.Authorized {
-		return nil
-	}
-	message := "未授权，请加入群获取免费授权并在后台添加机器码"
-	if err != nil {
-		message = "授权检测失败: " + err.Error()
-	} else if result.Tampered {
-		message = "程序防篡改校验失败，请重新下载官方版本"
-	}
-	s.logger.Error("license", message)
-	return errorResponse(req, http.StatusForbidden, message)
 }
 
 func typesafeClassifierModel(config store.TypesafeClassifierConfig, actualModel string) *store.Model {

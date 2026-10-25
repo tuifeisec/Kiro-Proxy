@@ -1,1 +1,0 @@
-import{$n as e,mr as t}from"../jse/index-index-Tdmu65Tj.js";function n(n){let r=t();return e(()=>{r.value=n()},{flush:`sync`}),r}export{n as t};

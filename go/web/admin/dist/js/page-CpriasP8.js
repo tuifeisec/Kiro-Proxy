@@ -1,1 +1,0 @@
-var e={login:`Login`},t={auth:e};export{e as auth,t as default};

@@ -1,15 +1,13 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { getAppVersion } from '../../api/license.js'
-import { useLicense } from '../../composables/useLicense.js'
+import { getAppVersion } from '../../api/app.js'
 import IconDashboard from '../icons/IconDashboard.vue'
 import IconModels from '../icons/IconModels.vue'
 import IconUsage from '../icons/IconUsage.vue'
 import IconLogs from '../icons/IconLogs.vue'
 
 const route = useRoute()
-const { trafficLogAllowed, loadLicenseInfo } = useLicense()
 const appVersion = ref('dev')
 
 const navItems = computed(() => [
@@ -17,12 +15,10 @@ const navItems = computed(() => [
   { path: '/models', label: '模型配置', icon: IconModels },
   { path: '/usage', label: '用量明细', icon: IconUsage },
   { path: '/request-usage', label: '请求统计', icon: IconLogs },
-  ...(trafficLogAllowed.value ? [{ path: '/inspector', label: '流量抓包', icon: IconLogs }] : []),
+  { path: '/inspector', label: '流量抓包', icon: IconLogs },
 ])
 
 onMounted(async () => {
-  loadLicenseInfo()
-
   try {
     const versionInfo = await getAppVersion()
     appVersion.value = versionInfo.version || 'dev'
@@ -57,6 +53,6 @@ onMounted(async () => {
     </nav>
 
     <!-- Bottom version -->
-    <div class="text-ink-4 text-xs select-none">v{{ appVersion }}</div>
+    <a href="https://github.com/tuifeisec/Kiro-Proxy/releases/latest" target="_blank" rel="noopener noreferrer" class="text-ink-4 text-xs select-none hover:text-ink" title="在 GitHub 查看和下载版本">v{{ appVersion }}</a>
   </aside>
 </template>

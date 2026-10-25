@@ -16,23 +16,11 @@ import (
 	"time"
 
 	"kiro-proxy/converter"
-	"kiro-proxy/license"
 	"kiro-proxy/router"
 	"kiro-proxy/store"
 
 	json "github.com/goccy/go-json"
 )
-
-type typesafeClassifierTestLicense struct {
-	result license.CheckResult
-	err    error
-	calls  atomic.Int32
-}
-
-func (f *typesafeClassifierTestLicense) CheckCached() (license.CheckResult, error) {
-	f.calls.Add(1)
-	return f.result, f.err
-}
 
 type typesafeClassifierTestEnv struct {
 	server    *Server
@@ -68,10 +56,10 @@ func newTypesafeClassifierTestEnv(t *testing.T, handler http.HandlerFunc) *types
 		t.Fatal(err)
 	}
 	env.forwarder = NewForwarder(env.stats, env.db)
-	checker := &typesafeClassifierTestLicense{result: license.CheckResult{Authorized: true}}
 	env.server = &Server{
 		db: db, stats: env.stats, logger: env.logger, forwarder: env.forwarder,
-		router: router.New(db), licenseClient: checker,
+
+		router:             router.New(db),
 		conversationModels: make(map[string]conversationModelEntry),
 	}
 	t.Cleanup(func() {
@@ -161,7 +149,6 @@ func TestTryTypesafeClassifierSkipsRequestsOutsideItsBoundary(t *testing.T) {
 		http.Error(w, "unexpected Typesafe request", http.StatusInternalServerError)
 	})
 	env.setConfig(t, true)
-	checker := env.server.licenseClient.(*typesafeClassifierTestLicense)
 
 	tests := []struct {
 		name    string
@@ -200,9 +187,6 @@ func TestTryTypesafeClassifierSkipsRequestsOutsideItsBoundary(t *testing.T) {
 	}
 	if got := env.hits.Load(); got != 0 {
 		t.Fatalf("Typesafe HTTP calls = %d, want 0", got)
-	}
-	if got := checker.calls.Load(); got != 0 {
-		t.Fatalf("license checks = %d, want 0 for requests outside the classifier boundary", got)
 	}
 }
 
@@ -661,7 +645,6 @@ func TestTryTypesafeClassifierDisabledRestoresLegacyClassifierSetting(t *testing
 	if err := env.db.SetSetting("classifier_model_id", "__disabled__"); err != nil {
 		t.Fatal(err)
 	}
-	checker := env.server.licenseClient.(*typesafeClassifierTestLicense)
 
 	resp, handled := env.server.tryTypesafeClassifier(typesafeClassifierTestRequestWithMode("intent-classification"), typesafeClassifierTestPreflight("simple-task", "kiro", true))
 	if resp != nil || handled {
@@ -669,9 +652,6 @@ func TestTryTypesafeClassifierDisabledRestoresLegacyClassifierSetting(t *testing
 	}
 	if !env.server.isClassifierDisabled() {
 		t.Fatal("legacy classifier disabled setting was not preserved")
-	}
-	if env.hits.Load() != 0 || checker.calls.Load() != 0 {
-		t.Fatalf("Typesafe calls=%d, license checks=%d; both should remain zero when disabled", env.hits.Load(), checker.calls.Load())
 	}
 }
 
@@ -695,37 +675,5 @@ func TestTryTypesafeClassifierOverridesLegacyDisabledSetting(t *testing.T) {
 	}
 	if env.hits.Load() != 1 {
 		t.Fatalf("Typesafe HTTP calls = %d, want 1", env.hits.Load())
-	}
-}
-
-func TestTryTypesafeClassifierAuthorizationRejectionDoesNotSendOrMeter(t *testing.T) {
-	SetProxyMode(ModeForward)
-	env := newTypesafeClassifierTestEnv(t, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "unexpected Typesafe request", http.StatusInternalServerError)
-	})
-	env.setConfig(t, true)
-	checker := env.server.licenseClient.(*typesafeClassifierTestLicense)
-	checker.result.Authorized = false
-
-	resp, handled := env.server.tryTypesafeClassifier(typesafeClassifierTestRequestWithMode("intent-classification"), typesafeClassifierTestPreflight("simple-task", "kiro", true))
-	if !handled || resp == nil {
-		t.Fatalf("authorization rejection returned (%v, %v), want a handled response", resp, handled)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("response status = %d, want %d", resp.StatusCode, http.StatusForbidden)
-	}
-	if env.hits.Load() != 0 || checker.calls.Load() != 1 {
-		t.Fatalf("Typesafe calls=%d, license checks=%d; want 0 and 1", env.hits.Load(), checker.calls.Load())
-	}
-	if got := env.stats.Snapshot(); got.TotalRequests != 0 || got.TotalErrors != 0 || got.InputTokens != 0 || got.OutputTokens != 0 || got.Credits != 0 {
-		t.Fatalf("authorization rejection was metered: %+v", got)
-	}
-	page, err := env.db.QueryRequestUsagePage(store.RequestUsageQuery{PageSize: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.Total != 0 {
-		t.Fatalf("request usage rows after authorization rejection = %d, want 0", page.Total)
 	}
 }

@@ -14,7 +14,6 @@ import (
 	"kiro-proxy/api"
 	"kiro-proxy/buildinfo"
 	"kiro-proxy/codex"
-	"kiro-proxy/license"
 	"kiro-proxy/router"
 	"kiro-proxy/rules"
 	"kiro-proxy/store"
@@ -59,7 +58,6 @@ type Server struct {
 	conversationModels     map[string]conversationModelEntry
 	conversationPrunedAt   time.Time
 	lastMainModel          string
-	licenseClient          licenseChecker
 	responsesFallbackMu    sync.Mutex
 	responsesFallback      map[string]fallbackResponseState
 	closeOnce              sync.Once
@@ -121,7 +119,6 @@ func NewServer(cfg *rules.Config, db *store.DB, staticFS fs.FS) (*Server, error)
 		apiServer:          apiSrv,
 		staticFS:           staticFS,
 		conversationModels: make(map[string]conversationModelEntry),
-		licenseClient:      license.NewClient(os.Getenv("KIRO_LICENSE_SERVER")),
 		responsesFallback:  make(map[string]fallbackResponseState),
 	}
 
@@ -320,9 +317,6 @@ func (s *Server) Close() {
 
 // handleWS 处理 WebSocket 升级
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTrafficLogPermission(w) {
-		return
-	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[server] WS 升级失败: %v", err)

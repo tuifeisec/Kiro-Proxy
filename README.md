@@ -4,6 +4,8 @@ Kiro Proxy 是当前项目中的本地代理服务和管理面板。程序监听
 
 项目还在同一个 Web 服务上提供 OpenAI 和 Anthropic 的本地兼容入口。模型配置、请求统计、缓存统计、流量日志和 Kiro 代理设置都由 Vue 前端调用 Go API 完成。
 
+当前架构见 [docs/architecture.md](docs/architecture.md)，下载见 [GitHub Releases](https://github.com/tuifeisec/Kiro-Proxy/releases/latest)。发行版无需软件激活、机器码登记或授权服务器。
+
 ## 实际运行结构
 
 ~~~text
@@ -40,22 +42,22 @@ Web UI/API: 18082
 | converter/ | Kiro 请求解析、OpenAI/Responses/Anthropic/Gemini 转换和流式帧转换 |
 | router/ | 根据 Kiro 模型名解析数据库模型配置 |
 | store/ | SQLite schema、模型配置、请求记录、统计和 Responses 状态 |
-| api/ | Web UI 使用的模型、统计、设置、授权、更新和测试接口 |
+| api/ | Web UI 使用的模型、统计、设置、应用版本和测试接口 |
 | frontend/ | Vue 3 + Vite 管理面板源码 |
 | build/windows/ | Windows .rc 和 .ico 资源源文件 |
-| test/ | 本地授权策略和缓存回归测试 |
+| test/ | 本地兼容入口和缓存回归测试 |
 | docs/ | 项目已有的 SDK 接入、架构和计划文档 |
 
 ## 启动方式
 
 ### 开发版后端
 
-开发版使用非 desktop 入口，会保留控制台窗口；dev 标签只切换本地开发授权策略。
+开发版使用非 desktop 入口，会保留控制台窗口；开发版和发行版均无需软件激活。
 
 ~~~powershell
 npm --prefix frontend install
 npm --prefix frontend run build
-go build -tags dev -o kiro-proxy-dev.exe .
+go build -o kiro-proxy-dev.exe .
 .\kiro-proxy-dev.exe
 ~~~
 
@@ -78,7 +80,7 @@ go run . -config config.yaml -port 18081 -db kiro-proxy.db
 桌面版使用 desktop 标签，启动 WebView 窗口和系统托盘；-no-window 可以只启动后端服务。
 
 ~~~powershell
-go build -tags "desktop dev" -ldflags="-H=windowsgui" -o kiro-proxy-dev.exe .
+go build -tags desktop -ldflags="-H=windowsgui" -o kiro-proxy-dev.exe .
 .\kiro-proxy-dev.exe
 ~~~
 
@@ -88,7 +90,13 @@ go build -tags "desktop dev" -ldflags="-H=windowsgui" -o kiro-proxy-dev.exe .
 build.bat
 ~~~
 
-脚本会构建 frontend/、用 windres 生成 resource_windows.syso，再执行 go build -tags desktop。版本号由脚本交互输入，并通过 -X kiro-proxy/license.AppVersion=... 写入二进制。
+脚本会构建 frontend/、用 windres 生成 resource_windows.syso，再执行 go build -tags desktop。版本号可由参数传入，未传参数时交互输入，并通过 -X kiro-proxy/buildinfo.AppVersion=... 写入二进制。
+
+### macOS 桌面版与 GitHub 发布
+
+在 macOS 上运行 `bash build-mac.sh 2.0.2`；Windows 上运行 `build.bat 2.0.2`。GitHub Actions 的 Release 工作流通过版本参数构建 Windows x64、Apple Silicon 与 Intel Mac 包，构建通过并核验后发布到 Releases。
+
+Mac 版要求 macOS 12 Monterey 或更新系统。分发包未经过 Apple Developer ID 签名和公证，Windows 包未经过 Authenticode 签名，系统可能显示安全提示。私有仓库的 Release 下载需要 GitHub 仓库访问权限。
 
 ## 配置文件
 
@@ -207,7 +215,7 @@ Web UI 由 frontend/dist 嵌入 Go 二进制，后端路由在 proxy/server.go �
 /models           模型配置
 /usage            用量明细
 /request-usage    请求统计、筛选和分页
-/inspector        流量抓包检查器（需要对应日志权限）
+/inspector        流量抓包检查器
 ~~~
 
 主要 HTTP 接口：
@@ -234,7 +242,7 @@ POST http://127.0.0.1:18082/v1/responses
 POST http://127.0.0.1:18082/v1/messages
 ~~~
 
-本地兼容入口默认只允许回环地址访问；把 proxy_access_mode 设置为 lan 后才允许局域网访问。入口还会执行授权检查，并根据请求 API 和模型 Provider 校验路由类型。
+本地兼容入口默认只允许回环地址访问；把 proxy_access_mode 设置为 lan 后才允许局域网访问。入口根据请求 API 和模型 Provider 校验路由类型，无需软件激活或访问授权服务器。
 
 ## 数据和日志
 

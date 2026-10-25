@@ -96,8 +96,7 @@ async function fixture({ models = upstreamModels, settings = {}, failModels = fa
         data = { error: 'Mock 模型列表读取失败' }
       } else data = state.models
     }
-    else if (url.pathname === '/api/license-info') data = { authorized: true, traffic_logs: false }
-    else if (url.pathname === '/api/advertisements' || url.pathname.startsWith('/api/model-groups')) data = []
+    else if (url.pathname.startsWith('/api/model-groups')) data = []
     else if (url.pathname === '/api/stats') data = url.searchParams.get('type') === 'daily' ? { daily: [] } : { credits: 1.25, total_requests: 1, uptime_seconds: 10 }
     else if (url.pathname === '/api/proxy-access-mode') data = { mode: 'local', host: '127.0.0.1' }
     else if (url.pathname === '/api/proxy-mode' || url.pathname === '/api/status') data = { mode: 'forward', status: 'running' }
@@ -105,7 +104,7 @@ async function fixture({ models = upstreamModels, settings = {}, failModels = fa
     else if (url.pathname === '/api/ca-status') data = { installed: true, cert_exists: true }
     else if (url.pathname === '/api/kiro-proxy') data = { configured: true }
     else if (url.pathname === '/api/app-version') data = { version: 'mock' }
-    else if (url.pathname !== '/api/update-info' && url.pathname !== '/api/heartbeat') {
+    else if (url.pathname !== '/api/heartbeat') {
       state.errors.push(`未定义 Mock：${request.method()} ${url.pathname}`)
       status = 500
       data = { error: '未定义 Mock' }

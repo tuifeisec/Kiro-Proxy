@@ -1,7 +1,7 @@
 # OpenAI / Claude SDK 兼容架构
 
 > 更新时间：2026-07-22
-> 实际接入、配置和测试从 [sdk-integration-guide.md](sdk-integration-guide.md) 开始；本文只记录架构判断和模块边界。代码实施顺序见 [sdk-integration-plan.md](sdk-integration-plan.md)。
+> 实际接入、配置和测试从 [sdk-integration-guide.md](sdk-integration-guide.md) 开始；本文只记录架构判断和模块边界。当前总架构见 [architecture.md](architecture.md)。
 
 ## 1. 架构结论
 
@@ -16,17 +16,14 @@ SDK 是调用方，Kiro Proxy 是兼容网关。
 
 ## 2. 系统边界
 
-项目包含两个相对独立的服务：
+项目由一个本地代理程序提供服务；无需软件激活或授权控制面。
 
 1. 根目录桌面代理程序
    - MITM 端口默认 `18081`。
    - Web UI、管理 API、SDK 兼容 API 端口默认 `18082`。
    - SQLite 保存模型、设置、统计和 Responses continuation 状态。
 
-2. `go/cmd/server` 授权控制面
-   - 提供机器授权、版本、哈希、广告和后台管理。
-   - 不参与模型路由和协议转换。
-   - SDK 兼容逻辑不进入该模块。
+原授权后台、机器码和版本哈希白名单已移除。上游 API Key、OAuth 和本地访问边界保持既有语义。
 
 ## 3. 数据调用链
 
@@ -55,7 +52,7 @@ flowchart LR
 | 模块 | 当前职责 | 代码位置 |
 | --- | --- | --- |
 | 服务组合 | 注册 MITM、UI/API 和三个兼容路由 | `proxy/server.go:111` |
-| Kiro 入口 | 拦截、识别协议、授权和选择路由 | `proxy/interceptor.go:62` |
+| Kiro 入口 | 拦截、识别协议和选择路由 | `proxy/interceptor.go:62` |
 | Kiro 解析 | 生成内部会话结构 | `converter/kiro_parse.go:16` |
 | 请求转换 | 生成各 Provider 请求 | `proxy/forwarder_request.go:38` |
 | 公共转发 | 连接、代理、重试、鉴权和 trace | `proxy/forwarder.go:79` |

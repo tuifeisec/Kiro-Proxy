@@ -1,6 +1,5 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { useWebSocket } from '../composables/useWebSocket.js'
 import LogFilter from '../components/inspector/LogFilter.vue'
 import LogList from '../components/inspector/LogList.vue'
@@ -12,8 +11,7 @@ import { useToast } from '../composables/useToast.js'
 import { getProxyMode, updateProxyMode, restartKiroProxy } from '../api/settings.js'
 import { getLogDetail, updateLogDetail } from '../api/logs.js'
 
-const { messages, connected, trafficLogAllowed, clearMessages, refreshTrafficLogPermission } = useWebSocket()
-const router = useRouter()
+const { messages, connected, clearMessages } = useWebSocket()
 
 const selected = ref(null)
 const filter = ref({ search: '', level: '', includeDetail: false })
@@ -114,12 +112,7 @@ async function setLogDetail(mode) {
   }
 }
 
-onMounted(async () => {
-  await refreshTrafficLogPermission()
-  if (!trafficLogAllowed.value) {
-    router.replace('/')
-    return
-  }
+onMounted(() => {
   fetchMode()
   fetchLogDetail()
 })

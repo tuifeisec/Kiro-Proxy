@@ -1,0 +1,131 @@
+name: Build desktop release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '三段数字版本号，例如 1.0.0（不带 v）'
+        required: true
+        default: '2.0.2'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate release identity
+        id: version
+        env:
+          APP_VERSION: ${{ inputs.version }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Commit: $GITHUB_SHA; Version: $APP_VERSION"
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: '1.26.4'
+          cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install and build frontend
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+      - name: Go regression tests
+        run: go test ./...
+      - name: Frontend and bridge regression tests
+        run: node --test test/*.mjs
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            target: windows-amd64
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      APP_VERSION: ${{ needs.test.outputs.version }}
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: '1.26.4'
+          cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Windows C/C++ toolchain
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+      - name: Persist Windows C/C++ toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $mingwBin = Join-Path $env:MSYS2_LOCATION 'mingw64\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $mingwBin 'gcc.exe'))) {
+            throw "MSYS2 action 输出位置不存在 MinGW GCC：$mingwBin"
+          }
+          $mingwBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'CC=gcc' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          'CXX=g++' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Version $env:APP_VERSION
+      - name: Build macOS package
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
+        run: bash ./build-mac.sh "$APP_VERSION"
+      - name: Verify platform regression tests
+        run: go test ./...
+      - name: Smoke test packaged Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node scripts/release-smoke.mjs "build/windows-release/$env:APP_VERSION/kiro-proxy.exe" $env:APP_VERSION $env:GITHUB_SHA
+      - name: Smoke test packaged macOS binary
+        if: runner.os == 'macOS'
+        run: node scripts/release-smoke.mjs "build/mac/$APP_VERSION-$(go env GOARCH)/Kiro Proxy.app/Contents/MacOS/kiro-proxy" "$APP_VERSION" "$GITHUB_SHA"
+      - name: Upload verified release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kiro-proxy-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7

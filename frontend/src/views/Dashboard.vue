@@ -1,6 +1,5 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import AdvertisementList from '../components/common/AdvertisementList.vue'
 import { useStats } from '../composables/useStats.js'
 import { useSmoothNumber } from '../composables/useSmoothNumber.js'
 import StatsCard from '../components/dashboard/StatsCard.vue'
@@ -377,10 +376,6 @@ async function confirmClearStats() {
           </div>
         </div>
       </header>
-
-      <section>
-        <AdvertisementList />
-      </section>
 
       <p v-if="error" class="ui-status-danger rounded-lg border border-danger-tint-line px-3 py-2 text-[12px]">统计加载失败：{{ error }}</p>
       <p v-if="proxyAccessError" class="ui-status-danger rounded-lg border border-danger-tint-line px-3 py-2 text-[12px]">代理模式切换失败：{{ proxyAccessError }}</p>
