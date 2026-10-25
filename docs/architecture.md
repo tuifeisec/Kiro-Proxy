@@ -57,7 +57,9 @@ main.go / main_desktop.go
 
 ## 构建与发布
 
-GitHub Actions 使用隔离的 Windows x64、macOS arm64 和 macOS Intel runner，安装锁文件依赖、构建前端、运行回归、原生编译桌面程序，并生成带 SHA256 的分发包。正式发布前核对三个构建结果、无窗口启动及 API/前端资源验证，再上传同一提交的资产到 Release。
+GitHub Actions 工作流定义了 Windows x64、macOS arm64 和 macOS Intel 构建矩阵，安装锁文件依赖、构建前端、运行回归、原生编译桌面程序，并生成带 SHA256 的分发包。工作流上传 workflow artifacts，不自动发布 Release；正式发布需核验目标平台的原生构建、无窗口启动及 API/前端资源后，再上传同一提交的资产。
+
+当前 v2.0.2 已发布 Windows x64 包，由本机原生编译并验证；macOS 包待补齐。实际可下载平台以 [Release](https://github.com/tuifeisec/Kiro-Proxy/releases/latest) 为准。首次使用见 [Windows 使用指南](windows-guide.md)，配置和开发细节见[技术参考](reference.md)。
 
 Mac 包没有 Apple Developer ID 签名和公证；构建所用 ad-hoc 签名只确保包结构完整，不代表 Apple 认可的开发者身份。Windows 包没有 Authenticode 签名。下载说明须保留此限制；CI 的无窗口启动不等于人工桌面交互验收。
 
@@ -65,4 +67,4 @@ Mac 包没有 Apple Developer ID 签名和公证；构建所用 ad-hoc 签名只
 
 移除未接入主程序的 .vben-template/、旧独立 frontend-inspector/、授权服务 go/ 和 license/，以及已被当前契约取代的早期总规划和架构提案。业务代码、测试、有效特性文档、Windows 资源和依赖锁文件保留。历史版本可从本次提交的父提交恢复；不重写 Git 历史。
 
-本次清理和构建仅在 GitHub 与其 runner 执行，不更新开发机工作区、运行数据库、证书或已存在程序。
+仓库清理先在 GitHub 完成，随后按用户授权将源码修改同步到本机，并完成 Windows 原生构建。源码同步与打包不清理开发机上的历史备份、运行数据库、证书或已存在程序。
