@@ -121,6 +121,7 @@ __pycache__/
 venv/
 
 # Generated documentation and local reference checkouts
+/docs/promotion/
 doc/ai-proxy/
 doc/openai/
 xuexi/

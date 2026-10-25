@@ -36,7 +36,7 @@ Kiro Proxy 是面向 Kiro IDE 的本地模型代理与桌面管理工具。添�
 | macOS · Apple Silicon | 待发布 | 暂无安装包 |
 | macOS · Intel | 待发布 | 暂无安装包 |
 
-Windows 包尚未进行 Authenticode 签名，系统可能显示安全提示。仓库目前为私有仓库，下载时需要登录有访问权限的 GitHub 账号。
+Windows 包尚未进行 Authenticode 签名，系统可能显示安全提示。可从 GitHub Releases 下载 Windows 发行包。
 
 [全部版本](https://github.com/tuifeisec/Kiro-Proxy/releases) · [SHA256 校验文件](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.2/kiro-proxy-v2.0.2-windows-amd64-unsigned.zip.sha256) · [构建清单](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.2/windows-amd64-manifest.json)
 

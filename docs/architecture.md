@@ -43,7 +43,7 @@ main.go / main_desktop.go
 
 上游 API Key、Codex OAuth、系统 CA 信任与本地访问边界继续生效：取消软件激活不改变这些协议和系统要求。SDK 入口默认仅回环访问；显式 LAN 设置继续按现有访问契约工作。
 
-应用版本由 buildinfo.AppVersion 写入，/api/app-version 返回版本和构建身份。更新下载入口指向 GitHub Releases；程序启动不再向原授权服务器请求广告或版本信息。私有仓库的下载需要有仓库访问权限的 GitHub 账号。
+应用版本由 buildinfo.AppVersion 写入，/api/app-version 返回版本和构建身份。更新下载入口指向 GitHub Releases；程序启动不再向原授权服务器请求广告或版本信息。当前公开发行包可从 GitHub Releases 下载。
 
 ## 当前特性契约
 

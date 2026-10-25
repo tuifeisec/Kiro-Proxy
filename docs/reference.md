@@ -94,7 +94,7 @@ Windows 上运行 `build.bat 2.0.2`；macOS 上运行 `bash build-mac.sh 2.0.2`�
 
 当前 v2.0.2 仅发布 Windows x64 包，由本机原生编译并验证；macOS 包待补齐。构建脚本存在不等于对应平台已有可下载产物。
 
-Mac 版要求 macOS 12 Monterey 或更新系统。分发包未经过 Apple Developer ID 签名和公证，Windows 包未经过 Authenticode 签名，系统可能显示安全提示。私有仓库的 Release 下载需要 GitHub 仓库访问权限。
+Mac 版要求 macOS 12 Monterey 或更新系统。分发包未经过 Apple Developer ID 签名和公证，Windows 包未经过 Authenticode 签名，系统可能显示安全提示。发行包可从 GitHub Releases 下载。
 
 ## 配置文件
 
