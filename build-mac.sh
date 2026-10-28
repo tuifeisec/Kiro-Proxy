@@ -67,7 +67,7 @@ PLIST
 plutil -lint "$APP_DIR/Contents/Info.plist"
 MACH_ARCH=x86_64
 if [[ "$APP_ARCH" == arm64 ]]; then MACH_ARCH=arm64; fi
-lipo -verify_arch "$MACH_ARCH" "$MACOS_DIR/kiro-proxy"
+lipo "$MACOS_DIR/kiro-proxy" -verify_arch "$MACH_ARCH"
 BUILD_VERSION_OUTPUT=$(xcrun vtool -show-build "$MACOS_DIR/kiro-proxy")
 printf '%s\n' "$BUILD_VERSION_OUTPUT"
 MIN_OS=$(printf '%s\n' "$BUILD_VERSION_OUTPUT" | awk '$1 == "minos" { print $2 }')
