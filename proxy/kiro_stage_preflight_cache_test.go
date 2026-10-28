@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,9 @@ func stagePreflightMockCandidate(t *testing.T) ([]byte, []byte) {
 }
 
 func TestKiroStagePreflightCachesOnlyVerifiedInstalledBytes(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Kiro 阶段桥接安装仅支持 Windows")
+	}
 	original, candidate := stagePreflightMockCandidate(t)
 	executable, target := writeStagePreflightFixture(t, original)
 	root := t.TempDir()
@@ -139,6 +143,9 @@ func TestKiroStagePreflightRaceDoesNotPublishReceipt(t *testing.T) {
 }
 
 func TestKiroStagePreflightCacheSaveFailureReportsInstalledState(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Kiro 阶段桥接安装仅支持 Windows")
+	}
 	original, candidate := stagePreflightMockCandidate(t)
 	executable, target := writeStagePreflightFixture(t, original)
 	want := errors.New("mock protect receipt denied")
