@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -170,7 +171,7 @@ func TestDutyAutoUnknownIsVisibleAndManualEffortRemainsManual(t *testing.T) {
 func TestFixedAutoEffortOverridesRawBodyAndKeepsOtherReasoningFields(t *testing.T) {
 	model := &store.Model{ModelID: "gpt-fixed", Provider: "openai", ReasoningEffort: "low"}
 	for _, fixed := range []string{"high", ""} {
-		pre := &Preflight{AutoReasoningEffort: &fixed, Conv: &converter.ParsedConversation{ReasoningEffort: "max"}}
+		pre := &Preflight{SourceModel: "auto", AutoReasoningEffort: &fixed, Conv: &converter.ParsedConversation{ModelID: "auto", ReasoningEffort: "max"}}
 		body, err := prepareRawResponsesBody([]byte(`{"model":"auto","input":[],"reasoning":{"effort":"max","summary":"auto"},"prompt_cache_key":"stable-key"}`), pre, model)
 		if err != nil {
 			t.Fatal(err)
@@ -189,5 +190,33 @@ func TestFixedAutoEffortOverridesRawBodyAndKeepsOtherReasoningFields(t *testing.
 		if _, present := outgoing.Reasoning["effort"]; fixed == "" && present {
 			t.Fatal("fixed upstream default still sent a client effort")
 		}
+	}
+}
+
+func TestManualWorkflowEffortIsNotOverriddenByAutoFixedEffort(t *testing.T) {
+	model := &store.Model{ModelID: "gpt-parent", Provider: "openai", BaseURL: "https://example.invalid/v1", Endpoint: "/responses", ReasoningEffort: "high"}
+	fixed := "max"
+	pre := &Preflight{
+		Protocol:            "kiro",
+		SourceModel:         "parent-model",
+		AutoReasoningEffort: &fixed,
+		Conv:                &converter.ParsedConversation{ModelID: "parent-model", ReasoningEffort: "low", CurrentContent: "node request"},
+	}
+	if got := resolveReasoningEffort(pre, model); got != "low" {
+		t.Fatalf("manual workflow effort = %q, want low", got)
+	}
+	body, err := prepareRawResponsesBody([]byte(`{"model":"parent-model","input":[],"reasoning":{"effort":"low","summary":"node"}}`), pre, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte(`"effort":"low"`)) || bytes.Contains(body, []byte(`"effort":"max"`)) {
+		t.Fatalf("manual raw workflow effort was overridden: %s", body)
+	}
+	legacyBody, _, err := convertRequest(pre, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(legacyBody, []byte(`"effort":"low"`)) || bytes.Contains(legacyBody, []byte(`"effort":"max"`)) {
+		t.Fatalf("manual Kiro workflow effort was overridden: %s", legacyBody)
 	}
 }

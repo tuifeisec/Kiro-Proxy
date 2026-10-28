@@ -101,7 +101,8 @@ func TestAutoGroupRawCapacityAndHTTPFallbackPreserveBody(t *testing.T) {
 			const body = `{"model":"auto","input":[{"type":"function_call_output","call_id":"c1","output":"done"}],"reasoning":{"effort":"max","summary":"auto"},"prompt_cache_key":"stable","extension":{"number":9007199254740993}}`
 			req := httptest.NewRequest(http.MethodPost, "http://runtime.local/v1/responses", strings.NewReader(body))
 			pre := rawResponsesTestPre(db, nil, req.URL.Path, body)
-			pre.Conv = &converter.ParsedConversation{ConversationID: "raw-conversation", ReasoningEffort: "max"}
+			pre.SourceModel = "auto"
+			pre.Conv = &converter.ParsedConversation{ModelID: "auto", ConversationID: "raw-conversation", ReasoningEffort: "max"}
 			resp, err := f.ForwardRawResponses(req, pre, route, autoGroupMockLogger(t))
 			if err != nil {
 				t.Fatal(err)

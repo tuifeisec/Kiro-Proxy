@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/goccy/go-json"
+	"kiro-proxy/converter"
 	"kiro-proxy/store"
 )
 
@@ -244,7 +245,7 @@ func TestPrepareRawResponsesUpstreamBodyMatchesFrozenContract(t *testing.T) {
 			var pre *Preflight
 			if fixture.autoReasoningEffort != nil {
 				effort := *fixture.autoReasoningEffort
-				pre = &Preflight{AutoReasoningEffort: &effort}
+				pre = &Preflight{SourceModel: "auto", AutoReasoningEffort: &effort, Conv: &converter.ParsedConversation{ModelID: "auto"}}
 			}
 			input := []byte(fixture.body)
 			original := append([]byte(nil), input...)

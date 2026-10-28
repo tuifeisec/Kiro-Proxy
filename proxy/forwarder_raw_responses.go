@@ -502,7 +502,7 @@ func prepareRawResponsesRoot(body []byte, pre *Preflight, model *store.Model) (m
 			shouldSetEffort = true
 		}
 	}
-	if pre != nil && pre.AutoReasoningEffort != nil && !pre.IsClassifier {
+	if preIsAutoReasoningRequest(pre) && pre.AutoReasoningEffort != nil && !pre.IsClassifier {
 		effort := *pre.AutoReasoningEffort
 		if effort == "" {
 			delete(reasoning, "effort")

@@ -575,7 +575,7 @@ func (s *Server) resolveMainRoute(pre *Preflight) (*router.Route, error) {
 }
 
 func bindAutoReasoningEffort(pre *Preflight, route *router.Route, err error) (*router.Route, error) {
-	if err == nil && pre != nil && !pre.IsClassifier && route != nil && route.AutoEffortFixed {
+	if err == nil && preIsAutoReasoningRequest(pre) && !pre.IsClassifier && route != nil && route.AutoEffortFixed {
 		effort := route.AutoEffort
 		pre.AutoReasoningEffort = &effort
 	}

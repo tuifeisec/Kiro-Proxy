@@ -63,7 +63,7 @@ func buildUpstreamURL(baseURL, endpoint string) string {
 }
 
 func resolveReasoningEffort(pre *Preflight, model *store.Model) string {
-	if pre != nil && !pre.IsClassifier && pre.AutoReasoningEffort != nil {
+	if preIsAutoReasoningRequest(pre) && !pre.IsClassifier && pre.AutoReasoningEffort != nil {
 		return *pre.AutoReasoningEffort
 	}
 	if pre != nil && pre.Conv != nil && !pre.IsClassifier {
@@ -79,6 +79,20 @@ func resolveReasoningEffort(pre *Preflight, model *store.Model) string {
 	}
 	defaultEffort, _ := converter.NormalizeReasoningEffort(model.ReasoningEffort)
 	return defaultEffort
+}
+
+// preIsAutoReasoningRequest keeps Auto's duty-fixed effort scoped to requests
+// that actually entered the Auto domain.  A manual/parent-model workflow can
+// still carry a route object or stale metadata from an Auto-capable path, but
+// its node-level request effort must remain authoritative.
+func preIsAutoReasoningRequest(pre *Preflight) bool {
+	if pre == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(pre.SourceModel), "auto") {
+		return true
+	}
+	return pre.Conv != nil && strings.EqualFold(strings.TrimSpace(pre.Conv.ModelID), "auto")
 }
 
 // convertRequest 将请求体转换为上游格式
