@@ -536,6 +536,19 @@ func prepareRawResponsesRoot(body []byte, pre *Preflight, model *store.Model) (m
 			root["reasoning"] = encodedReasoning
 		}
 	}
+	// The raw entry point can adapt a Responses-shaped request to Chat
+	// Completions.  FAST policy is a Responses capability; do not synthesize
+	// priority for the Chat fallback path. Explicit client fields continue to
+	// follow the existing Chat mapping rules.
+	applyTier := true
+	if model != nil {
+		if _, chat, routeErr := rawResponsesUpstreamURL(model); routeErr == nil && chat {
+			applyTier = false
+		}
+	}
+	if applyTier {
+		applyConfiguredResponsesServiceTierRoot(root, model)
+	}
 	return root, nil
 }
 

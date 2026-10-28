@@ -239,6 +239,17 @@ const endpointOptions = computed(() => {
   return ['/chat/completions', '/responses']
 })
 
+const responsesServiceTierVisible = computed(() => {
+  if (form.value.provider === 'codex') return true
+  if (form.value.provider !== 'openai') return false
+  const endpoint = String(form.value.endpoint || '').toLowerCase()
+  if (endpoint.includes('/responses')) return true
+  if (form.value.disable_auto_suffix) {
+    return String(form.value.base_url || '').toLowerCase().includes('/responses')
+  }
+  return false
+})
+
 const canSyncUpstreamModels = computed(() => {
   return form.value.provider !== 'codex'
     && Boolean(form.value.base_url?.trim())
@@ -665,7 +676,7 @@ async function handleExchangeOAuth() {
             </div>
 
             <div class="mt-2.5 grid grid-cols-1 items-start gap-2.5 border-t border-line-2 pt-2.5 sm:grid-cols-[minmax(180px,.88fr)_minmax(0,1.12fr)]">
-              <div class="grid grid-cols-1 gap-2.5" :class="form.provider === 'codex' ? 'sm:grid-cols-2' : ''">
+              <div class="grid grid-cols-1 gap-2.5" :class="responsesServiceTierVisible ? 'sm:grid-cols-2' : ''">
                 <div>
                   <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink">
                     图片输入
@@ -688,13 +699,13 @@ async function handleExchangeOAuth() {
                   </div>
                 </div>
 
-                <div v-if="form.provider === 'codex'">
+                <div v-if="responsesServiceTierVisible">
                   <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink">
-                    Codex 速度
+                    {{ form.provider === 'codex' ? 'Codex 速度' : 'Responses 速度' }}
                     <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-line text-[9px] font-normal leading-none text-ink-4">
                       i
                       <span class="pointer-events-none absolute bottom-5 left-0 z-20 w-52 rounded-md border border-line bg-tooltip px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-tooltip-text shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-[var(--dur-fast)] delay-0 group-hover:delay-[250ms]">
-                        快速模式会向 Codex 上游发送 service_tier=priority；标准模式不发送该字段
+                        快速模式会在 Responses 请求中发送 service_tier=priority；标准模式不发送该字段
                       </span>
                     </span>
                   </label>

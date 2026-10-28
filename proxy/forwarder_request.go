@@ -150,6 +150,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 		}
 		if err == nil {
 			body = setResponsesStore(body, m.EnableContinuation, isOpenAIResponsesUpstream(m, upstreamURL))
+			body = applyConfiguredResponsesServiceTier(body, m)
 		}
 	default: // chat/completions，或 classifier 请求
 		if !m.DisableAutoSuffix && strings.Contains(endpoint, "/responses") {
@@ -218,6 +219,47 @@ func setResponsesStore(body []byte, store, preserveNumbers bool) []byte {
 		return body
 	}
 	return result
+}
+
+// applyConfiguredResponsesServiceTier applies the model's explicit FAST
+// setting to a native OpenAI Responses request.  The setting is deliberately
+// scoped to the top-level service_tier field: provider-specific Codex request
+// normalization belongs to codex.NewRequestBodyFromResponses and must not be
+// reused for ordinary OpenAI Responses routes.
+//
+// A configured fast tier only supplies the upstream priority tier when the
+// client left the tier unset (or selected the neutral default).  Explicit
+// tiers such as flex or priority are preserved verbatim.
+func applyConfiguredResponsesServiceTier(body []byte, model *store.Model) []byte {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil || root == nil {
+		return body
+	}
+	if !applyConfiguredResponsesServiceTierRoot(root, model) {
+		return body
+	}
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return body
+	}
+	return encoded
+}
+
+func applyConfiguredResponsesServiceTierRoot(root map[string]json.RawMessage, model *store.Model) bool {
+	if root == nil || model == nil || !strings.EqualFold(strings.TrimSpace(model.Provider), "openai") || strings.ToLower(strings.TrimSpace(model.ServiceTier)) != "fast" {
+		return false
+	}
+	if raw, ok := root["service_tier"]; ok {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+			var tier string
+			if json.Unmarshal(trimmed, &tier) != nil || !strings.EqualFold(strings.TrimSpace(tier), "default") {
+				return false
+			}
+		}
+	}
+	root["service_tier"] = json.RawMessage(`"priority"`)
+	return true
 }
 
 func responsesWithSystemRole(body []byte) ([]byte, bool, error) {

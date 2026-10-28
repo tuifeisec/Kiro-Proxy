@@ -691,6 +691,9 @@ func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, mo
 		if err != nil {
 			return nil, err
 		}
+		if !prepared.responsesFallback {
+			prepared.upstreamBody = applyConfiguredResponsesServiceTier(prepared.upstreamBody, model)
+		}
 	}
 	if prepared.responsesFallback {
 		previousMessages, err := s.fallbackMessages(responsesPreviousResponseID(prepared.upstreamBody), sessionID, model.ID, model.Provider)
