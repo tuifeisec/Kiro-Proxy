@@ -49,7 +49,7 @@ Kiro 继续负责工作流编排。主流程选择 Auto 且客户端桥接启用
 
 该通路仅接受启用的 `stage_fixed` 及其有效续轮锁。原生 raw 最小支持范围是 `provider=openai` 且最终端点为 `/responses`；Anthropic/Gemini/Codex 明确报错，不偷偷改协议或改目标。OpenAI 的 chat 端点可按现有规则推导同渠道 `/responses`，上游不支持时原样返回错误。非空 `previous_response_id` 或顶层 `conversation` 暂不支持，必须完整 input，不能删掉服务端引用后继续请求。
 
-原生 raw 不执行历史转换、压缩、缓存键生成或 Responses continuation。只替换目标 `model`、移除两项私有 metadata，并在请求未指定 effort 时应用模型默认 effort；其余 JSON 值、数值精度、数组顺序、未知扩展与已有 cache key 保留。不改用户提供的 effort，不静默降档。响应状态、头和正文/SSE 字节直接交还客户端；本地旁路观察用量，不包装成 Kiro 二进制事件、不追加合成响应事件。读到 EOF、断流或提前关闭都只结算一次并释放单模型并发额度。
+原生 raw 不执行历史转换、压缩、缓存键生成或 Responses continuation。只替换目标 `model`、移除两项私有 metadata，并在请求未指定 effort 时应用模型默认 effort；其余 JSON 值、数值精度、数组顺序、未知扩展与已有 cache key 保留。不改用户提供的 effort，不静默降档。响应状态、头和正文/SSE 字节直接交还客户端；本地旁路观察用量，不包装成 Kiro 二进制事件、不追加合成响应事件。读到 EOF、断流或提前关闭都只结算一次并释放单模型并发额度。MITM 代理在下游连接写失败时可能先关闭响应体、再取消请求 context；已观察到 `response.completed` 等终端事件的提前关闭按成功结算。尚未终端且响应体被下游关闭时按客户端取消结算并保存 `context.Canceled`，不能写成上游断流错误；真实 Read 错误和已观察到的 `response.failed` 等上游失败优先。
 
 已经正常结算的记录不因随后取消而改变。尚未结算时，已观察到的上游失败优先；否则当前请求取消或超时须明确在 `request_usage` 保存 `ctx.Err()`，不能因 Read/Close 的先后变为成功。客户端取消不增加 stats 的上游错误数量，已观察到的上游失败仍计错误；请求记录的未完成结果与上游错误统计口径不同。
 

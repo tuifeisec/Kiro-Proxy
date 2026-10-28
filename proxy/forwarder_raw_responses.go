@@ -562,28 +562,30 @@ func rawJSONNonEmpty(raw json.RawMessage) bool {
 
 type rawResponsesUsageBody struct {
 	io.ReadCloser
-	usage       *requestUsageRecorder
-	status      int
-	isSSE       bool
-	stats       *store.Stats
-	model       *store.Model
-	ctx         context.Context
-	localUsage  localCompatUsage
-	pending     []byte
-	jsonBody    []byte
-	eventType   string
-	terminal    bool
-	failure     bool
-	failureInfo string
-	dropping    bool
-	lease       *modelLease
-	finalized   bool
-	mu          sync.Mutex
-	finishOnce  sync.Once
-	closeOnce   sync.Once
-	closeErr    error
-	stopContext func() bool
-	onOutcome   func(converter.StreamOutcome)
+	usage              *requestUsageRecorder
+	status             int
+	isSSE              bool
+	stats              *store.Stats
+	model              *store.Model
+	ctx                context.Context
+	localUsage         localCompatUsage
+	pending            []byte
+	jsonBody           []byte
+	eventType          string
+	terminal           bool
+	failure            bool
+	failureInfo        string
+	dropping           bool
+	lease              *modelLease
+	finalized          bool
+	closeBeforeEOF     bool
+	closeAfterTerminal bool
+	mu                 sync.Mutex
+	finishOnce         sync.Once
+	closeOnce          sync.Once
+	closeErr           error
+	stopContext        func() bool
+	onOutcome          func(converter.StreamOutcome)
 }
 
 func newRawResponsesUsageBody(body io.ReadCloser, usage *requestUsageRecorder, status int, isSSE bool) *rawResponsesUsageBody {
@@ -632,8 +634,20 @@ func (b *rawResponsesUsageBody) Read(p []byte) (int, error) {
 
 func (b *rawResponsesUsageBody) Close() error {
 	b.closeOnce.Do(func() {
+		b.mu.Lock()
+		if !b.finalized {
+			if b.terminal && !b.failure {
+				b.closeAfterTerminal = true
+			} else {
+				b.closeBeforeEOF = true
+			}
+		}
+		b.mu.Unlock()
 		b.closeErr = b.ReadCloser.Close()
-		b.finish("raw Responses body closed before EOF")
+		// goproxy can close a response body after a downstream write failure and
+		// before it cancels the request context. Treat that close as a client
+		// cancellation unless a terminal event was already observed.
+		b.finish("")
 	})
 	return b.closeErr
 }
@@ -731,6 +745,8 @@ func (b *rawResponsesUsageBody) finish(errorMessage string) {
 		b.finalized = true
 		usage := b.localUsage
 		observedFailure := b.failure
+		closeBeforeEOF := b.closeBeforeEOF
+		closeAfterTerminal := b.closeAfterTerminal
 		ctxErr := error(nil)
 		if b.ctx != nil {
 			ctxErr = b.ctx.Err()
@@ -739,8 +755,15 @@ func (b *rawResponsesUsageBody) finish(errorMessage string) {
 		switch {
 		case observedFailure:
 			errorMessage = b.failureInfo
+		case closeAfterTerminal && errorMessage == "":
+			// A downstream close after response.completed is a complete response;
+			// do not turn it into a transport error when the proxy has not seen EOF.
+			errorMessage = ""
 		case ctxErr != nil:
 			errorMessage = ctxErr.Error()
+			clientCanceled = true
+		case errorMessage == "" && closeBeforeEOF:
+			errorMessage = context.Canceled.Error()
 			clientCanceled = true
 		}
 		stopContext := b.stopContext

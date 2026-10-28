@@ -411,11 +411,11 @@ func TestForwardRawResponsesReadErrorAndEarlyCloseReleaseLease(t *testing.T) {
 			t.Fatalf("lease not released on early close: active=%d", got)
 		}
 		items := rawResponsesUsageItems(t, db)
-		if len(items) != 1 || items[0].Success || items[0].ErrorMessage == "" {
-			t.Fatalf("early close usage not recorded once as failure: %+v", items)
+		if len(items) != 1 || items[0].Success || items[0].ErrorMessage != context.Canceled.Error() {
+			t.Fatalf("early close usage not recorded once as client cancellation: %+v", items)
 		}
-		if snapshot := stats.Snapshot(); snapshot.TotalRequests != 1 || snapshot.TotalErrors != 1 {
-			t.Fatalf("early close stats should be recorded once: %+v", snapshot)
+		if snapshot := stats.Snapshot(); snapshot.TotalRequests != 1 || snapshot.TotalErrors != 0 {
+			t.Fatalf("early close should not count as an upstream error: %+v", snapshot)
 		}
 	})
 }
@@ -672,14 +672,50 @@ func TestRawResponsesCloseSettlesBeforeBlockedReadAndLaterCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Close has synchronously settled the row while the next Read stays blocked.
-	assertRawResponsesFinishAccounting(t, db, stats, f, model, false, true, "raw Responses body closed before EOF")
+	assertRawResponsesFinishAccounting(t, db, stats, f, model, false, false, context.Canceled.Error())
 	cancel()
 	close(underlying.readResume)
 	if err := <-readDone; !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("blocked read returned %v, want closed-pipe after release", err)
 	}
 	_ = observed.Close()
-	assertRawResponsesFinishAccounting(t, db, stats, f, model, false, true, "raw Responses body closed before EOF")
+	assertRawResponsesFinishAccounting(t, db, stats, f, model, false, false, context.Canceled.Error())
+	if got := underlying.closeCalls.Load(); got != 1 {
+		t.Fatalf("underlying body Close calls=%d want 1", got)
+	}
+}
+
+func TestRawResponsesTerminalCloseBeforeEOFSettlesSuccessfully(t *testing.T) {
+	db := rawResponsesTestDB(t)
+	stats := store.NewStats(db)
+	t.Cleanup(stats.Close)
+	model := rawResponsesTestModel("", "openai", "/responses")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := NewForwarder(stats, db)
+	usage := newRequestUsageRecorder(db, time.Now(), model, "/v1/responses", "openai")
+	underlying := newRawResponsesScriptBody([]byte(rawResponsesUsageEvent), nil, true)
+	response := &http.Response{Body: underlying}
+	usage.wrapResponse(response)
+	lease, ok := f.load.acquire(model.ID, 1)
+	if !ok {
+		t.Fatal("failed to acquire model lease")
+	}
+	observed := newRawResponsesUsageBody(response.Body, usage, http.StatusOK, true)
+	observed.lease = lease
+	observed.stats = stats
+	observed.model = model
+	observed.ctx = ctx
+	buffer := make([]byte, len(rawResponsesUsageEvent)+16)
+	if n, err := observed.Read(buffer); err != nil || n != len(rawResponsesUsageEvent) {
+		t.Fatalf("terminal read = (%d, %v), want payload and no error", n, err)
+	}
+	if err := observed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertRawResponsesFinishAccounting(t, db, stats, f, model, true, false, "")
+	_ = observed.Close()
+	assertRawResponsesFinishAccounting(t, db, stats, f, model, true, false, "")
 	if got := underlying.closeCalls.Load(); got != 1 {
 		t.Fatalf("underlying body Close calls=%d want 1", got)
 	}
