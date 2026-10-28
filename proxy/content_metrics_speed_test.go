@@ -102,6 +102,30 @@ func TestContentMetricsSpeedUsesProtocolUsageAndOutputIntervals(t *testing.T) {
 	})
 }
 
+func TestContentMetricsIgnoresOversizedResponsesMetadata(t *testing.T) {
+	base := time.Unix(1_800_000_050, 0)
+	metrics := newContentMetrics(contentMetricOptions{protocol: contentMetricProtocolResponses, start: base})
+	metadata := `{"type":"response.created","response":{"tools":[{"description":"` + strings.Repeat("x", contentMetricMaxDataBytes) + `"}]}}`
+	feedContentMetricEvent(metrics, base, "response.created", metadata)
+	feedContentMetricEvent(metrics, base.Add(time.Second), "response.output_text.delta", `{"type":"response.output_text.delta","delta":"a"}`)
+	feedContentMetricEvent(metrics, base.Add(2*time.Second), "response.output_text.delta", `{"type":"response.output_text.delta","delta":"b"}`)
+	feedContentMetricEvent(metrics, base.Add(3*time.Second), "response.completed", `{"type":"response.completed","response":{"usage":{"output_tokens":10,"output_tokens_details":{"reasoning_tokens":0}}}}`)
+	metrics.finish(true)
+
+	snapshot := metrics.snapshot()
+	if !snapshot.measurementComplete || snapshot.speedOutputTokens != 10 || snapshot.speedDuration != time.Second {
+		t.Fatalf("oversized Responses metadata polluted speed measurement: %+v", snapshot)
+	}
+
+	unsafe := newContentMetrics(contentMetricOptions{protocol: contentMetricProtocolResponses, start: base})
+	feedContentMetricEvent(unsafe, base, "response.output_text.delta", `{"type":"response.output_text.delta","delta":"`+strings.Repeat("x", contentMetricMaxDataBytes)+`"}`)
+	feedContentMetricEvent(unsafe, base.Add(time.Second), "response.completed", `{"type":"response.completed","response":{"usage":{"output_tokens":10}}}`)
+	unsafe.finish(true)
+	if unsafe.snapshot().measurementComplete {
+		t.Fatalf("oversized Responses content was treated as complete: %+v", unsafe.snapshot())
+	}
+}
+
 func TestContentMetricsSpeedMissingZeroAndUnsupportedUsage(t *testing.T) {
 	base := time.Unix(1_800_000_100, 0)
 	makeMetrics := func(t *testing.T, usage string, reasoning bool) contentMetricSnapshot {

@@ -111,8 +111,10 @@ type contentMetrics struct {
 	complete              bool
 	terminalSeen          bool
 	// observationIncomplete is sticky: once a bounded parser limit or invalid
-	// data makes part of the stream unobservable, later valid events cannot
-	// turn the measurement back into a complete observation.
+	// data makes a relevant part of the stream unobservable, later valid events
+	// cannot turn the measurement back into a complete observation. Known
+	// Responses metadata snapshots are explicitly ignored before setting this
+	// flag because they do not carry content or usage needed by the metric.
 	observationIncomplete  bool
 	firstContentHook       func(time.Time, string)
 	firstContentHookCalled bool
@@ -219,7 +221,6 @@ func (m *contentMetrics) appendLineLocked(part []byte) {
 	if len(m.line)+len(part) > contentMetricMaxLineBytes {
 		m.line = nil
 		m.lineTooLarge = true
-		m.observationIncomplete = true
 		return
 	}
 	m.line = append(m.line, part...)
@@ -231,7 +232,6 @@ func (m *contentMetrics) finishLineLocked(now time.Time) {
 	if m.lineTooLarge {
 		m.lineTooLarge = false
 		m.dataTooLarge = true
-		m.observationIncomplete = true
 		return
 	}
 	line = bytes.TrimSuffix(line, []byte{'\r'})
@@ -258,7 +258,6 @@ func (m *contentMetrics) finishLineLocked(now time.Time) {
 		if len(m.data)+len(value)+1 > contentMetricMaxDataBytes {
 			m.data = nil
 			m.dataTooLarge = true
-			m.observationIncomplete = true
 			return
 		}
 		if len(m.data) > 0 {
@@ -279,6 +278,9 @@ func (m *contentMetrics) finishEventLocked(now time.Time) {
 		if m.dataTooLarge && m.firstEventAt.IsZero() {
 			m.firstEventAt = now
 		}
+		if m.dataTooLarge && !contentMetricCanIgnoreOversizedEvent(m.protocol, m.eventType) {
+			m.observationIncomplete = true
+		}
 		return
 	}
 	// The event boundary itself is observable even when its JSON is unknown or
@@ -292,6 +294,9 @@ func (m *contentMetrics) finishEventLocked(now time.Time) {
 		return
 	}
 	if m.dataTooLarge {
+		if !contentMetricCanIgnoreOversizedEvent(m.protocol, m.eventType) {
+			m.observationIncomplete = true
+		}
 		return
 	}
 	var payload map[string]json.RawMessage
@@ -972,6 +977,23 @@ func contentMetricTerminalEvent(protocol contentMetricProtocol, eventType string
 		}
 	}
 	return false
+}
+
+// Responses providers may repeat the full tool schema in metadata events. A
+// single data line can exceed the bounded observer buffer even though the
+// event contains no output, usage, or terminal state. It is safe to discard
+// only these known metadata snapshots; oversized content or terminal events
+// must keep the conservative incomplete result.
+func contentMetricCanIgnoreOversizedEvent(protocol contentMetricProtocol, eventType string) bool {
+	if protocol != contentMetricProtocolResponses {
+		return false
+	}
+	switch eventType {
+	case "codex.response.metadata", "response.created", "response.in_progress":
+		return true
+	default:
+		return false
+	}
 }
 
 func contentMetricProtocolForResponse(resp *http.Response, provider, endpoint string) contentMetricProtocol {
