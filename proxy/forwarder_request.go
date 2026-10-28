@@ -163,8 +163,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 			body, err = converter.KiroToResponses(conv, m.ModelID, reasoningEffort)
 		}
 		if err == nil {
-			body = setResponsesStore(body, m.EnableContinuation, isOpenAIResponsesUpstream(m, upstreamURL))
-			body = applyConfiguredResponsesServiceTier(body, m)
+			body = setResponsesStoreAndServiceTier(body, m.EnableContinuation, isOpenAIResponsesUpstream(m, upstreamURL), m)
 		}
 	default: // chat/completions，或 classifier 请求
 		if !m.DisableAutoSuffix && strings.Contains(endpoint, "/responses") {
