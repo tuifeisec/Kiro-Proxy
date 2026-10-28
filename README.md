@@ -8,9 +8,9 @@
 
 连接 OpenAI、Anthropic、Gemini 与 Codex，在本地面板中完成配置和排查。
 
-**[下载 Windows 版](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.2/kiro-proxy-v2.0.2-windows-amd64-unsigned.zip)** · **[更新说明](https://github.com/tuifeisec/Kiro-Proxy/releases/latest)** · **[使用指南](docs/windows-guide.md)** · **[技术文档](docs/architecture.md)**
+**[下载 Windows 版](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.3/kiro-proxy-v2.0.3-windows-amd64-unsigned.zip)** · **[更新说明](https://github.com/tuifeisec/Kiro-Proxy/releases/latest)** · **[使用指南](docs/windows-guide.md)** · **[技术文档](docs/architecture.md)**
 
-<sub>v2.0.2 · Windows x64 · 无需软件激活</sub>
+<sub>v2.0.3 · Windows x64 · 无需软件激活</sub>
 
 </div>
 
@@ -32,13 +32,13 @@ Kiro Proxy 是面向 Kiro IDE 的本地模型代理与桌面管理工具。添�
 
 | 平台 | 当前版本 | 下载与要求 |
 | :--- | :--- | :--- |
-| **Windows x64** | **v2.0.2 · 已发布** | [下载 ZIP](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.2/kiro-proxy-v2.0.2-windows-amd64-unsigned.zip) · 解压运行 · 需要 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
-| macOS · Apple Silicon | 待发布 | 暂无安装包 |
-| macOS · Intel | 待发布 | 暂无安装包 |
+| **Windows x64** | **v2.0.3 · 已发布** | [下载 ZIP](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.3/kiro-proxy-v2.0.3-windows-amd64-unsigned.zip) · 解压运行 · 需要 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| **macOS · Apple Silicon** | **v2.0.3 · 已发布** | [下载 ZIP](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.3/kiro-proxy-v2.0.3-darwin-arm64-unsigned.zip) · macOS 12.0+ |
+| **macOS · Intel** | **v2.0.3 · 已发布** | [下载 ZIP](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.3/kiro-proxy-v2.0.3-darwin-amd64-unsigned.zip) · macOS 12.0+ |
 
 Windows 包尚未进行 Authenticode 签名，系统可能显示安全提示。可从 GitHub Releases 下载 Windows 发行包。
 
-[全部版本](https://github.com/tuifeisec/Kiro-Proxy/releases) · [SHA256 校验文件](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.2/kiro-proxy-v2.0.2-windows-amd64-unsigned.zip.sha256) · [构建清单](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.2/windows-amd64-manifest.json)
+[全部版本](https://github.com/tuifeisec/Kiro-Proxy/releases) · [SHA256 校验文件](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.3/kiro-proxy-v2.0.3-windows-amd64-unsigned.zip.sha256) · [构建清单](https://github.com/tuifeisec/Kiro-Proxy/releases/download/v2.0.3/windows-amd64-manifest.json)
 
 ## 开始使用
 
@@ -99,7 +99,7 @@ Windows 包尚未进行 Authenticode 签名，系统可能显示安全提示。�
 
 *图 5 · 流量检查器。仅展示明确标注的本地示例正文，不含真实会话或凭据。*
 
-这些是当前版本可用的产品能力；v2.0.2 本次变化见[更新记录](docs/releases/v2.0.2.md#本次更新)。
+这些是当前版本可用的产品能力；v2.0.3 本次变化见 [GitHub Release](https://github.com/tuifeisec/Kiro-Proxy/releases/tag/v2.0.3)。
 
 ## 支持的接入方式
 
