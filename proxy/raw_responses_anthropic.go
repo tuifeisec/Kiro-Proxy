@@ -360,6 +360,7 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 	responseID, model := "resp_anthropic", ""
 	created, terminal := false, false
 	toolIDs := make(map[int]string)
+	toolArguments := make(map[int]*strings.Builder)
 	var usage localCompatUsage
 	write := func(event string, payload interface{}) error {
 		encoded, err := json.Marshal(payload)
@@ -425,7 +426,9 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 			}
 			_ = json.Unmarshal(event["content_block"], &block)
 			if block.Type == "tool_use" {
-				toolIDs[rawIndex(event)] = block.ID
+				idx := rawIndex(event)
+				toolIDs[idx] = block.ID
+				toolArguments[idx] = &strings.Builder{}
 				if err := write("response.output_item.added", map[string]interface{}{"type": "response.output_item.added", "item": map[string]interface{}{"type": "function_call", "id": block.ID, "call_id": block.ID, "name": block.Name, "arguments": "", "status": "in_progress"}}); err != nil {
 					return err
 				}
@@ -449,13 +452,32 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 					return err
 				}
 			case "input_json_delta":
+				if builder := toolArguments[idx]; builder != nil {
+					builder.WriteString(delta.PartialJSON)
+				}
 				if err := write("response.function_call_arguments.delta", map[string]interface{}{"type": "response.function_call_arguments.delta", "item_id": toolIDs[idx], "call_id": toolIDs[idx], "delta": delta.PartialJSON}); err != nil {
 					return err
 				}
 			}
 		case "message_delta":
 			mergeAnthropicUsage(&usage, event["usage"])
+			var delta struct {
+				StopReason string `json:"stop_reason"`
+			}
+			_ = json.Unmarshal(event["delta"], &delta)
+			if delta.StopReason == "max_tokens" {
+				// The terminal event remains response.completed with incomplete status below.
+			}
 		case "message_stop":
+			for idx, id := range toolIDs {
+				arguments := ""
+				if builder := toolArguments[idx]; builder != nil {
+					arguments = builder.String()
+				}
+				if err := write("response.output_item.done", map[string]interface{}{"type": "response.output_item.done", "item": map[string]interface{}{"type": "function_call", "id": id, "call_id": id, "arguments": arguments, "status": "completed"}}); err != nil {
+					return err
+				}
+			}
 			terminal = true
 			if err := write("response.completed", map[string]interface{}{"type": "response.completed", "response": map[string]interface{}{"id": responseID, "object": "response", "status": "completed", "model": model, "usage": responsesUsage(usage)}}); err != nil {
 				return err
