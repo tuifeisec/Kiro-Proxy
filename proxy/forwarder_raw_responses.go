@@ -165,6 +165,13 @@ func prepareRawResponsesUpstreamBody(body []byte, pre *Preflight, model *store.M
 	if chat {
 		return prepareRawResponsesChatRoot(root, model)
 	}
+	if strings.EqualFold(strings.TrimSpace(model.Provider), "openai") {
+		stripped, err := stripProxyReasoningItemsRoot(root, model.ModelID)
+		if err != nil {
+			return nil, err
+		}
+		changed = changed || stripped
+	}
 	if !changed {
 		return prepared, nil
 	}

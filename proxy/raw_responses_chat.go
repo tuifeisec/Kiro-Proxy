@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"kiro-proxy/converter"
 	"kiro-proxy/store"
 
 	json "github.com/goccy/go-json"
@@ -123,6 +124,11 @@ func finishRawResponsesChatRoot(source, chat map[string]json.RawMessage, model *
 			return nil, err
 		}
 		chat["tool_choice"] = choice
+	}
+	if converter.UpstreamRequiresReasoningReplay(rawResponsesUpstreamHost(model), model.ModelID) {
+		if err := fillChatReasoningPlaceholders(chat); err != nil {
+			return nil, err
+		}
 	}
 	encoded, err := json.Marshal(chat)
 	if err != nil {

@@ -53,6 +53,26 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 			return nil, fmt.Errorf("raw Responses instructions must be a string: %w", err)
 		}
 	}
+	// Anthropic 要求同一 assistant 轮里推理块位于 tool_use 之前，并原样回传；
+	// 推理 item 先挂起，附着到紧随其后的 assistant 内容最前面。
+	var pendingThinking []interface{}
+	var skipped reasoningSkipCounts
+	appendUser := func(content interface{}) {
+		skipped.Orphaned += len(pendingThinking)
+		pendingThinking = nil
+		anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "user", "content": content})
+	}
+	appendAssistant := func(blocks []interface{}) {
+		blocks = append(pendingThinking, blocks...)
+		pendingThinking = nil
+		if last := len(anthropicMessages) - 1; last >= 0 && anthropicMessages[last]["role"] == "assistant" {
+			if existing, ok := anthropicMessages[last]["content"].([]interface{}); ok {
+				anthropicMessages[last]["content"] = append(existing, blocks...)
+				return
+			}
+		}
+		anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "assistant", "content": blocks})
+	}
 	for _, message := range messages {
 		itemType := stringField(message, "type")
 		if itemType == "input_text" || itemType == "input_image" {
@@ -64,7 +84,16 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 			if convertedContent == nil {
 				return nil, fmt.Errorf("raw Responses %s cannot be converted to Anthropic", itemType)
 			}
-			anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "user", "content": convertedContent})
+			appendUser(convertedContent)
+			continue
+		}
+		if itemType == "reasoning" {
+			block, skip := anthropicReasoningFromInput(stringField(message, "encrypted_content"))
+			if skip != reasoningKept {
+				skipped.add(skip)
+				continue
+			}
+			pendingThinking = append(pendingThinking, block)
 			continue
 		}
 		if itemType == "function_call" {
@@ -83,7 +112,7 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 					arguments = decoded
 				}
 			}
-			anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "assistant", "content": []interface{}{map[string]interface{}{"type": "tool_use", "id": id, "name": name, "input": arguments}}})
+			appendAssistant([]interface{}{map[string]interface{}{"type": "tool_use", "id": id, "name": name, "input": arguments}})
 			continue
 		}
 		if itemType == "function_call_output" {
@@ -91,7 +120,7 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 			if err != nil {
 				return nil, fmt.Errorf("raw Responses function call output: %w", err)
 			}
-			anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "user", "content": []interface{}{map[string]interface{}{"type": "tool_result", "tool_use_id": callID, "content": decodeRawValue(message["output"])}}})
+			appendUser([]interface{}{map[string]interface{}{"type": "tool_result", "tool_use_id": callID, "content": decodeRawValue(message["output"])}})
 			continue
 		}
 		role, err := rawStringField(message, "role")
@@ -114,21 +143,23 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 			if err != nil {
 				return nil, err
 			}
-			anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "assistant", "content": converted})
+			appendAssistant(converted)
 		case "function_call_output":
 			callID, err := rawStringField(message, "call_id")
 			if err != nil {
 				return nil, err
 			}
-			anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "user", "content": []interface{}{map[string]interface{}{"type": "tool_result", "tool_use_id": callID, "content": content}}})
+			appendUser([]interface{}{map[string]interface{}{"type": "tool_result", "tool_use_id": callID, "content": content}})
 		default:
 			convertedContent := anthropicContent(content)
 			if convertedContent == nil {
 				return nil, fmt.Errorf("raw Responses message content contains blocks unsupported by Anthropic")
 			}
-			anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "user", "content": convertedContent})
+			appendUser(convertedContent)
 		}
 	}
+	skipped.Orphaned += len(pendingThinking)
+	skipped.log("Anthropic", model.ModelID)
 	if len(anthropicMessages) == 0 {
 		return nil, fmt.Errorf("raw Responses request contains no Anthropic messages")
 	}
@@ -262,7 +293,7 @@ func encodeRawArguments(value interface{}) (string, error) {
 	}
 	return string(encoded), nil
 }
-func anthropicAssistantContent(message map[string]json.RawMessage, content interface{}) (interface{}, error) {
+func anthropicAssistantContent(message map[string]json.RawMessage, content interface{}) ([]interface{}, error) {
 	blocks := make([]interface{}, 0, 2)
 	if text, ok := content.(string); ok && text != "" {
 		blocks = append(blocks, map[string]interface{}{"type": "text", "text": text})
@@ -445,6 +476,7 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 	toolIDs := make(map[int]string)
 	toolNames := make(map[int]string)
 	toolArguments := make(map[int]*strings.Builder)
+	var reasoning anthropicStreamReasoning
 	var usage localCompatUsage
 	stopReason := "end_turn"
 	write := func(event string, payload interface{}) error {
@@ -518,9 +550,12 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 			}
 		case "content_block_start":
 			var block struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				Name      string `json:"name"`
+				Thinking  string `json:"thinking"`
+				Signature string `json:"signature"`
+				Data      string `json:"data"`
 			}
 			if err := json.Unmarshal(event["content_block"], &block); err != nil || block.Type == "" {
 				return fail(nil, fmt.Errorf("malformed Anthropic content_block_start"))
@@ -530,7 +565,14 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 			}
 			idx := rawIndex(event)
 			switch block.Type {
-			case "text", "thinking":
+			case "text":
+			case anthropicThinkingBlock, anthropicRedactedThinkingBlock:
+				if reasoning.has(idx) {
+					return fail(nil, fmt.Errorf("Anthropic reasoning block index repeats"))
+				}
+				if err := reasoning.start(write, responseID, idx, anthropicReasoningBlock{Type: block.Type, Thinking: block.Thinking, Signature: block.Signature, Data: block.Data}); err != nil {
+					return err
+				}
 			case "tool_use":
 				if block.ID == "" || block.Name == "" {
 					return fail(nil, fmt.Errorf("Anthropic tool_use is missing id or name"))
@@ -563,7 +605,10 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 					return err
 				}
 			case "thinking_delta":
-				if err := write("response.reasoning_summary_text.delta", map[string]interface{}{"type": "response.reasoning_summary_text.delta", "delta": delta.Thinking}); err != nil {
+				if !reasoning.thinkingOpen(idx) {
+					return fail(nil, fmt.Errorf("Anthropic thinking delta references an unknown block"))
+				}
+				if err := reasoning.appendThinking(write, idx, delta.Thinking); err != nil {
 					return err
 				}
 			case "input_json_delta":
@@ -575,12 +620,18 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 					return err
 				}
 			case "signature_delta":
-				_ = delta.Signature
+				if !reasoning.thinkingOpen(idx) {
+					return fail(nil, fmt.Errorf("Anthropic signature delta references an unknown block"))
+				}
+				reasoning.appendSignature(idx, delta.Signature)
 			default:
 				return fail(nil, fmt.Errorf("Anthropic content delta type %q is unsupported", delta.Type))
 			}
 		case "content_block_stop":
 			if err := ensure(); err != nil {
+				return err
+			}
+			if err := reasoning.finish(write, rawIndex(event)); err != nil {
 				return err
 			}
 		case "message_delta":
@@ -599,6 +650,9 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 			}
 		case "message_stop":
 			if err := ensure(); err != nil {
+				return err
+			}
+			if err := reasoning.finishAll(write); err != nil {
 				return err
 			}
 			indices := make([]int, 0, len(toolIDs))
@@ -666,11 +720,14 @@ func convertAnthropicJSONResponse(source io.Reader) ([]byte, error) {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
 		Content []struct {
-			Type  string      `json:"type"`
-			Text  string      `json:"text"`
-			ID    string      `json:"id"`
-			Name  string      `json:"name"`
-			Input interface{} `json:"input"`
+			Type      string      `json:"type"`
+			Text      string      `json:"text"`
+			ID        string      `json:"id"`
+			Name      string      `json:"name"`
+			Input     interface{} `json:"input"`
+			Thinking  string      `json:"thinking"`
+			Signature string      `json:"signature"`
+			Data      string      `json:"data"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
@@ -685,8 +742,14 @@ func convertAnthropicJSONResponse(source io.Reader) ([]byte, error) {
 	}
 	output := make([]interface{}, 0)
 	var text strings.Builder
-	for _, block := range message.Content {
+	for index, block := range message.Content {
 		switch block.Type {
+		case anthropicThinkingBlock, anthropicRedactedThinkingBlock:
+			item, err := anthropicReasoningOutputItem(anthropicReasoningItemID(message.ID, index), anthropicReasoningBlock{Type: block.Type, Thinking: block.Thinking, Signature: block.Signature, Data: block.Data})
+			if err != nil {
+				return nil, err
+			}
+			output = append(output, item)
 		case "text":
 			text.WriteString(block.Text)
 			output = append(output, map[string]interface{}{"type": "message", "id": message.ID + "_msg", "role": "assistant", "status": "completed", "content": []interface{}{map[string]interface{}{"type": "output_text", "text": block.Text, "annotations": []interface{}{}}}})

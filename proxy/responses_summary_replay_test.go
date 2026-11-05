@@ -19,11 +19,12 @@ func TestResponsesSummaryReplayAcceptedByUpstream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Input []struct {
-				Type    string          `json:"type"`
-				ID      string          `json:"id"`
-				CallID  string          `json:"call_id"`
-				Content json.RawMessage `json:"content"`
-				Summary []struct {
+				Type             string          `json:"type"`
+				ID               string          `json:"id"`
+				CallID           string          `json:"call_id"`
+				EncryptedContent string          `json:"encrypted_content"`
+				Content          json.RawMessage `json:"content"`
+				Summary          []struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
 				} `json:"summary"`
@@ -48,7 +49,11 @@ func TestResponsesSummaryReplayAcceptedByUpstream(t *testing.T) {
 				return
 			}
 		}
-		if len(req.Input) != 12 || req.Input[9].Type != "reasoning" || req.Input[9].ID != "rs_summary" ||
+		// 以 encrypted_content 回放时不能再带上游未保存的 id；否则按 id 回放。
+		sealed := req.Input[9].EncryptedContent != ""
+		if len(req.Input) != 12 || req.Input[9].Type != "reasoning" ||
+			sealed && (req.Input[9].ID != "" || req.Input[9].EncryptedContent != "enc_summary") ||
+			!sealed && req.Input[9].ID != "rs_summary" ||
 			len(req.Input[9].Summary) != 1 || req.Input[9].Summary[0].Type != "summary_text" || req.Input[9].Summary[0].Text != "inspect the file" ||
 			req.Input[10].Type != "function_call" || req.Input[10].CallID != "call_1" ||
 			req.Input[11].Type != "function_call_output" || req.Input[11].CallID != "call_1" {
@@ -95,11 +100,14 @@ func TestResponsesSummaryReplayAcceptedByUpstream(t *testing.T) {
 		converter.ParsedHistoryEntry{HasAssistant: true, ToolUses: []converter.ParsedToolUse{{ToolUseID: "call_1", Name: "read_file", Input: json.RawMessage(`{}`)}}},
 		converter.ParsedHistoryEntry{ToolResults: []converter.ParsedToolResult{{ToolUseID: "call_1", Content: "package example"}}},
 	)
-	// 与已有持久化摘要的字段相同，无需迁移或清除旧会话。
+	// 与已有持久化摘要的字段相同，无需迁移或清除旧会话。Signature 是
+	// Responses 协议 trace 保存的 encrypted_content：Codex 后端固定 store=false，
+	// 不保存输出项，按 id 回放会返回 "Item … not found"（见 magpie
+	// codex_backend.go 对无 encrypted_content 推理的处理），只能以密文回放。
 	history := map[string]converter.ReasoningTrace{
 		converter.ReasoningTurnKey([]string{"call_1"}): {
 			Present: true, Protocol: "responses", WireField: "reasoning_summary_text",
-			Text: "inspect the file", ItemID: "rs_summary",
+			Text: "inspect the file", ItemID: "rs_summary", Signature: "enc_summary",
 		},
 	}
 	for _, provider := range []string{"codex", "openai"} {
@@ -109,6 +117,9 @@ func TestResponsesSummaryReplayAcceptedByUpstream(t *testing.T) {
 			body, url, err := convertRequestWithProtocol(pre, model, history, false)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if provider == "codex" && !bytes.Contains(body, []byte(`"encrypted_content":"enc_summary"`)) {
+				t.Fatalf("Codex stateless replay must use encrypted_content: %s", body)
 			}
 			if status, data := post(t, body, url); status != http.StatusOK {
 				t.Fatalf("replay rejected: status=%d body=%s", status, data)

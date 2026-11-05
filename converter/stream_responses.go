@@ -57,6 +57,7 @@ type ResponsesStreamConverter struct {
 	reasoningSummaryDeltas map[string]bool
 	reasoningID            string
 	reasoningStatus        string
+	reasoningEncrypted     string
 
 	modelID                                                    string
 	maxTokens                                                  int
@@ -158,6 +159,8 @@ func (c *ResponsesStreamConverter) ReasoningTrace() ReasoningTrace {
 	return ReasoningTrace{
 		Present: true,
 		Text:    text, ItemID: c.reasoningID, Status: c.reasoningStatus,
+		// Responses 协议的 Signature 保存上游签发的 encrypted_content，供无状态回放。
+		Signature: c.reasoningEncrypted,
 		WireField: wireField, Protocol: "responses",
 		ToolCallIDs: append([]string(nil), c.toolCallIDs...),
 	}
@@ -399,7 +402,9 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 				Status    string `json:"status"`
-				Content   []struct {
+				// 仅在请求 include reasoning.encrypted_content 时出现。
+				EncryptedContent string `json:"encrypted_content"`
+				Content          []struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
 				} `json:"content"`
@@ -419,6 +424,9 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			}
 			if ev.Item.Status != "" {
 				c.reasoningStatus = ev.Item.Status
+			}
+			if ev.Item.EncryptedContent != "" {
+				c.reasoningEncrypted = ev.Item.EncryptedContent
 			}
 			if c.reasoningText.Len() == 0 {
 				for _, part := range ev.Item.Content {

@@ -239,7 +239,8 @@ type OpenAIRequest struct {
 }
 
 type OpenAIReasoning struct {
-	Effort string `json:"effort,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type OpenAIStreamOpts struct {

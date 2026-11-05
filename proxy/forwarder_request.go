@@ -146,12 +146,14 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 			}
 		}
 	case m.Provider == "codex":
-		body, err = converter.KiroToResponses(conv, m.ModelID, reasoningEffort)
+		body, err = converter.KiroToCodexResponses(conv, m.ModelID, reasoningEffort)
 		if err == nil {
 			body = codex.NewRequestBodyFromResponses(body, m.ServiceTier)
 		}
 	case useResponsesAPI(pre, m):
-		if isOpenAIResponsesUpstream(m, upstreamURL) {
+		if isOfficialOpenAIStatelessResponses(m, upstreamURL) {
+			body, err = converter.KiroToOpenAIResponsesStateless(conv, m.ModelID, reasoningEffort)
+		} else if isOpenAIResponsesUpstream(m, upstreamURL) {
 			body, err = converter.KiroToOpenAIResponsesUpstream(conv, m.ModelID, reasoningEffort, m.EnableContinuation)
 		} else if m.EnableContinuation {
 			body, err = converter.KiroToResponsesForContinuation(conv, m.ModelID, reasoningEffort)

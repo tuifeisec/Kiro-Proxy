@@ -21,6 +21,7 @@ type ResponsesRequest struct {
 	Input              []ReqInput       `json:"input"`
 	Tools              []ReqTool        `json:"tools,omitempty"`
 	Reasoning          *OpenAIReasoning `json:"reasoning,omitempty"`
+	Include            []string         `json:"include,omitempty"`
 	Stream             bool             `json:"stream"`
 	Store              bool             `json:"store"`
 	PromptCacheKey     string           `json:"prompt_cache_key,omitempty"`
@@ -29,17 +30,28 @@ type ResponsesRequest struct {
 }
 
 type ReqInput struct {
-	Type      string      `json:"type"`                // "message" / "function_call" / "function_call_output"
-	Role      string      `json:"role,omitempty"`      // "user" / "assistant"
-	Content   interface{} `json:"content,omitempty"`   // string 或 []ContentPart
-	CallID    string      `json:"call_id,omitempty"`   // function_call / function_call_output 用
-	Name      string      `json:"name,omitempty"`      // function_call 用
-	Arguments string      `json:"arguments,omitempty"` // function_call 用
-	Output    *string     `json:"output,omitempty"`    // function_call_output 用；空字符串也必须显式发送
-	ID        string      `json:"id,omitempty"`        // reasoning item
-	Status    string      `json:"status,omitempty"`    // reasoning item
-	Summary   interface{} `json:"summary,omitempty"`   // reasoning summary
+	Type             string      `json:"type"`                        // "message" / "function_call" / "function_call_output"
+	Role             string      `json:"role,omitempty"`              // "user" / "assistant"
+	Content          interface{} `json:"content,omitempty"`           // string 或 []ContentPart
+	CallID           string      `json:"call_id,omitempty"`           // function_call / function_call_output 用
+	Name             string      `json:"name,omitempty"`              // function_call 用
+	Arguments        string      `json:"arguments,omitempty"`         // function_call 用
+	Output           *string     `json:"output,omitempty"`            // function_call_output 用；空字符串也必须显式发送
+	ID               string      `json:"id,omitempty"`                // reasoning item
+	Status           string      `json:"status,omitempty"`            // reasoning item
+	Summary          interface{} `json:"summary,omitempty"`           // reasoning summary
+	EncryptedContent string      `json:"encrypted_content,omitempty"` // 仅无状态回放的 reasoning item
+
+	// encryptedReasoning 是上游签发的 encrypted_content，只在无状态请求中发出。
+	encryptedReasoning string
 }
+
+// 无状态（store=false）的 OpenAI Responses 不保存输出项，按 id 引用推理会返回
+// "Item with id 'rs_…' not found"；推理必须以上游签发的 encrypted_content 回放。
+const (
+	responsesEncryptedReasoningInclude = "reasoning.encrypted_content"
+	responsesReasoningSummaryAuto      = "auto"
+)
 
 func buildResponsesReasoning(trace *ReasoningTrace) *ReqInput {
 	if trace == nil || strings.TrimSpace(trace.Text) == "" {
@@ -49,6 +61,10 @@ func buildResponsesReasoning(trace *ReasoningTrace) *ReqInput {
 		Type:   "reasoning",
 		ID:     trace.ItemID,
 		Status: trace.Status,
+	}
+	if trace.Protocol == "responses" {
+		// Responses 协议的 trace 用 Signature 保存上游签发的 encrypted_content。
+		item.encryptedReasoning = trace.Signature
 	}
 	if trace.WireField == "reasoning_summary_text" {
 		item.Summary = []map[string]string{{"type": "summary_text", "text": trace.Text}}
@@ -64,6 +80,26 @@ func buildResponsesToolOutput(callID, output string) ReqInput {
 		CallID: callID,
 		Output: &output,
 	}
+}
+
+// statelessResponsesInput 只保留带 encrypted_content 的推理，并去掉上游不再
+// 保存的 id/status 以及输入侧不接受的 content。
+func statelessResponsesInput(input []ReqInput) []ReqInput {
+	result := make([]ReqInput, 0, len(input))
+	for _, item := range input {
+		if item.Type == "reasoning" {
+			if item.encryptedReasoning == "" {
+				continue
+			}
+			item.EncryptedContent = item.encryptedReasoning
+			item.ID, item.Status, item.Content = "", "", nil
+			if item.Summary == nil {
+				item.Summary = []map[string]string{}
+			}
+		}
+		result = append(result, item)
+	}
+	return result
 }
 
 type ReqTool struct {
@@ -82,23 +118,35 @@ type ReqTool struct {
 //   - 保持前缀稳定：[developer(静态system)] + [历史对话] + [动态内容(末尾)]
 //   - 工具定义放在 tools 字段（OpenAI 自动缓存 tools schema）
 func KiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
-	return kiroToResponses(conv, targetModel, reasoningEffort, false, false)
+	return kiroToResponses(conv, targetModel, reasoningEffort, false, false, false)
 }
 
 // KiroToResponsesForContinuation 使用每轮替换的 instructions，避免代理拆出的
 // 动态 developer 尾部滞留在 previous_response_id 的历史输入中。
 // 仅用于明确启用续接的 Kiro 单一 SystemText；普通缓存路径保持原有布局。
 func KiroToResponsesForContinuation(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
-	return kiroToResponses(conv, targetModel, reasoningEffort, true, false)
+	return kiroToResponses(conv, targetModel, reasoningEffort, true, false, false)
 }
 
 // KiroToOpenAIResponsesUpstream 仅用于已确认实际出站 URL 为 OpenAI Responses
 // 的请求，在现有转换流程中应用工具 schema 兼容修复。
 func KiroToOpenAIResponsesUpstream(conv *ParsedConversation, targetModel string, reasoningEffort string, continuation bool) ([]byte, error) {
-	return kiroToResponses(conv, targetModel, reasoningEffort, continuation, true)
+	return kiroToResponses(conv, targetModel, reasoningEffort, continuation, true, false)
 }
 
-func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string, continuation, normalizeSchema bool) ([]byte, error) {
+// KiroToOpenAIResponsesStateless 用于 store=false 的 OpenAI 官方 Responses：请求
+// 推理摘要与 encrypted_content，并只以 encrypted_content 回放推理。自定义中转不
+// 使用它，避免未知字段被拒。
+func KiroToOpenAIResponsesStateless(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+	return kiroToResponses(conv, targetModel, reasoningEffort, false, true, true)
+}
+
+// KiroToCodexResponses 用于固定 store=false 的 Codex 后端，推理回放规则同上。
+func KiroToCodexResponses(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+	return kiroToResponses(conv, targetModel, reasoningEffort, false, false, true)
+}
+
+func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffort string, continuation, normalizeSchema, stateless bool) ([]byte, error) {
 	model := targetModel
 	if model == "" {
 		model = conv.ModelID
@@ -111,6 +159,10 @@ func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 	}
 	if reasoningEffort = strings.TrimSpace(reasoningEffort); reasoningEffort != "" {
 		req.Reasoning = &OpenAIReasoning{Effort: reasoningEffort}
+		if stateless && !strings.EqualFold(reasoningEffort, "none") {
+			req.Reasoning.Summary = responsesReasoningSummaryAuto
+			req.Include = []string{responsesEncryptedReasoningInclude}
+		}
 	}
 
 	// 相同模型、静态 system 和 tools 复用同一个 key，提高跨会话的缓存路由命中率。
@@ -121,6 +173,9 @@ func kiroToResponses(conv *ParsedConversation, targetModel string, reasoningEffo
 		withoutSystem.SystemText = ""
 		input = buildResponsesInputCacheOptimized(&withoutSystem)
 		req.Instructions = conv.SystemText
+	}
+	if stateless {
+		input = statelessResponsesInput(input)
 	}
 	req.Input = input
 	// 工具定义

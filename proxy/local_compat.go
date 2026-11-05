@@ -693,6 +693,10 @@ func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, mo
 		}
 		if !prepared.responsesFallback {
 			prepared.upstreamBody = applyConfiguredResponsesServiceTier(prepared.upstreamBody, model)
+			prepared.upstreamBody, err = stripProxyReasoningItems(prepared.upstreamBody, model.ModelID)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	if prepared.responsesFallback {

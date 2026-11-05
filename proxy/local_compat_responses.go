@@ -291,6 +291,17 @@ func responsesInputToChatMessages(raw json.RawMessage) ([]map[string]interface{}
 		return nil, fmt.Errorf("Responses input must be a string or array: %w", err)
 	}
 	messages := make([]map[string]interface{}, 0, len(items))
+	// 本项目封装的 Chat 推理写回紧随其后的 assistant 消息原字段。
+	var pendingReasoning []chatReasoningSealPayload
+	var skipped reasoningSkipCounts
+	dropPendingReasoning := func() {
+		skipped.Orphaned += len(pendingReasoning)
+		pendingReasoning = nil
+	}
+	takePendingReasoning := func(message map[string]interface{}) {
+		attachChatReasoning(message, pendingReasoning)
+		pendingReasoning = nil
+	}
 	for _, item := range items {
 		var typ, role string
 		_ = json.Unmarshal(item["type"], &typ)
@@ -304,7 +315,13 @@ func responsesInputToChatMessages(raw json.RawMessage) ([]map[string]interface{}
 			if rawContent := item["content"]; len(rawContent) > 0 {
 				content = decodeResponsesContent(rawContent)
 			}
-			messages = append(messages, map[string]interface{}{"role": role, "content": content})
+			message := map[string]interface{}{"role": role, "content": content}
+			if role == "assistant" {
+				takePendingReasoning(message)
+			} else if role != "system" && role != "developer" {
+				dropPendingReasoning()
+			}
+			messages = append(messages, message)
 		case "function_call":
 			var callID, name, arguments string
 			_ = json.Unmarshal(item["call_id"], &callID)
@@ -317,23 +334,36 @@ func responsesInputToChatMessages(raw json.RawMessage) ([]map[string]interface{}
 				last := messages[len(messages)-1]
 				if calls, ok := last["tool_calls"].([]interface{}); last["role"] == "assistant" && ok {
 					last["tool_calls"] = append(calls, call)
+					takePendingReasoning(last)
 					continue
 				}
 			}
-			messages = append(messages, map[string]interface{}{"role": "assistant", "tool_calls": []interface{}{call}})
+			message := map[string]interface{}{"role": "assistant", "tool_calls": []interface{}{call}}
+			takePendingReasoning(message)
+			messages = append(messages, message)
 		case "function_call_output":
+			dropPendingReasoning()
 			var callID string
 			_ = json.Unmarshal(item["call_id"], &callID)
 			content := decodeRawValue(item["output"])
 			messages = append(messages, map[string]interface{}{"role": "tool", "tool_call_id": callID, "content": content})
 		case "reasoning":
-			// Reasoning items are not accepted by Chat Completions. The visible
-			// transcript remains valid without replaying encrypted reasoning.
-			continue
+			// Chat Completions 没有 reasoning item；只有本项目封装的 Chat 推理能还原，
+			// 其他上游的推理无法交给 Chat 上游。
+			var encrypted string
+			_ = json.Unmarshal(item["encrypted_content"], &encrypted)
+			restored, skip := chatReasoningFromInput(encrypted)
+			if skip != reasoningKept {
+				skipped.add(skip)
+				continue
+			}
+			pendingReasoning = append(pendingReasoning, restored)
 		default:
 			return nil, fmt.Errorf("Responses input item type %q is not supported by Chat Completions fallback", typ)
 		}
 	}
+	dropPendingReasoning()
+	skipped.log("Chat Completions", "")
 	return messages, nil
 }
 
@@ -603,6 +633,7 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 	}
 	tools := make(map[int]*streamTool)
 	firstToolIndex, firstToolSeen := 0, false
+	reasoning := chatStreamReasoning{responseID: func() string { return responseID }}
 	writeEvent := func(event string, value interface{}) error {
 		payload, err := json.Marshal(value)
 		if err != nil {
@@ -647,6 +678,7 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 			Choices []struct {
 				FinishReason string `json:"finish_reason"`
 				Delta        struct {
+					chatReasoningDelta
 					Content   string `json:"content"`
 					ToolCalls []struct {
 						Index    int    `json:"index"`
@@ -681,7 +713,17 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 			}
 			return usage, responseID, nil, err
 		}
+		if len(chunk.Choices) > 0 {
+			if field, delta := chunk.Choices[0].Delta.reasoning(); delta != "" {
+				if err := reasoning.append(writeEvent, field, delta); err != nil {
+					return usage, responseID, nil, err
+				}
+			}
+		}
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+			if err := reasoning.close(writeEvent); err != nil {
+				return usage, responseID, nil, err
+			}
 			delta := chunk.Choices[0].Delta.Content
 			text.WriteString(delta)
 			if err := writeEvent("response.output_text.delta", map[string]interface{}{"type": "response.output_text.delta", "delta": delta}); err != nil {
@@ -693,6 +735,11 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 			if chunk.Choices[0].FinishReason != "" {
 				terminalSeen = true
 				finishReason = chunk.Choices[0].FinishReason
+			}
+			if len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+				if err := reasoning.close(writeEvent); err != nil {
+					return usage, responseID, nil, err
+				}
 			}
 			for _, call := range chunk.Choices[0].Delta.ToolCalls {
 				tool := tools[call.Index]
@@ -752,6 +799,9 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 				return usage, responseID, nil, writeErr
 			}
 		}
+		return usage, responseID, nil, err
+	}
+	if err := reasoning.close(writeEvent); err != nil {
 		return usage, responseID, nil, err
 	}
 	status, incompleteReason := chatResponsesCompletionStatus(finishReason)
