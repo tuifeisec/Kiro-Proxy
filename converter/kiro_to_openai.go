@@ -176,6 +176,11 @@ func buildOpenAIAssistantMsg(content string, toolUses []ParsedToolUse, reasoning
 			msg.ReasoningText = &text
 		case "reasoning":
 			msg.Reasoning = &text
+		case ThinkTagWireField:
+			// 推理原本写在正文开头的 <think> 中：按原形态包回正文，不改发上游未用过的推理字段
+			if strings.TrimSpace(reasoning.Text) != "" {
+				msg.Content = thinkOpenTag + reasoning.Text + thinkCloseTag + "\n" + content
+			}
 		default:
 			msg.ReasoningContent = &text
 		}
