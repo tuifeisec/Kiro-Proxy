@@ -295,14 +295,15 @@ type OpenAIFuncDef struct {
 // ── Anthropic 格式 ────────────────────────────────────────────────
 
 type AnthropicRequest struct {
-	Model        string             `json:"model"`
-	Messages     []AnthropicMessage `json:"messages"`
-	System       interface{}        `json:"system,omitempty"` // string 或 []AnthropicBlock
-	Tools        []AnthropicTool    `json:"tools,omitempty"`
-	MaxTokens    int                `json:"max_tokens"`
-	Stream       bool               `json:"stream"`
-	Thinking     *AnthropicThinking `json:"thinking,omitempty"`
-	CacheControl *CacheControl      `json:"cache_control,omitempty"` // 顶层自动缓存（Anthropic 自动将 breakpoint 放在最后一个可缓存 block）
+	Model        string                 `json:"model"`
+	Messages     []AnthropicMessage     `json:"messages"`
+	System       interface{}            `json:"system,omitempty"` // string 或 []AnthropicBlock
+	Tools        []AnthropicTool        `json:"tools,omitempty"`
+	MaxTokens    int                    `json:"max_tokens"`
+	Stream       bool                   `json:"stream"`
+	Thinking     *AnthropicThinking     `json:"thinking,omitempty"`
+	OutputConfig *AnthropicOutputConfig `json:"output_config,omitempty"`
+	CacheControl *CacheControl          `json:"cache_control,omitempty"` // 顶层自动缓存（Anthropic 自动将 breakpoint 放在最后一个可缓存 block）
 }
 
 type AnthropicMessage struct {
@@ -345,4 +346,10 @@ type AnthropicTool struct {
 type AnthropicThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"` // adaptive 形态的思考展示方式（summarized/omitted）
+}
+
+// AnthropicOutputConfig 是 Messages API 的 output_config；此处只使用 effort。
+type AnthropicOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }

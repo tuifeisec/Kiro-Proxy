@@ -488,7 +488,7 @@ func TestEnvironmentContextHasSameCurrentAndHistoryShape(t *testing.T) {
 			return converter.KiroToResponses(conv, "gpt-test", "")
 		}},
 		{name: "anthropic", field: "messages", build: func(conv *converter.ParsedConversation) ([]byte, error) {
-			return converter.KiroToAnthropic(conv, "claude-test", "")
+			return converter.KiroToAnthropic(conv, "claude-test", "", converter.AnthropicRequestOptions{})
 		}},
 		{name: "gemini", field: "contents", build: func(conv *converter.ParsedConversation) ([]byte, error) {
 			return converter.KiroToGemini(conv, "gemini-test", "")

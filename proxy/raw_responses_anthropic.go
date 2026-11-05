@@ -159,15 +159,12 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 			request["tool_choice"] = choice
 		}
 	}
-	thinking, outputConfig, err := rawAnthropicThinkingFields(root, pre, model)
+	effort, err := rawAnthropicWireEffort(root, pre, model)
 	if err != nil {
 		return nil, err
 	}
-	if thinking != nil {
-		request["thinking"] = thinking
-	}
-	if outputConfig != nil {
-		request["output_config"] = outputConfig
+	if err := applyRawResponsesAnthropicThinking(request, model, effort); err != nil {
+		return nil, err
 	}
 	return json.Marshal(request)
 }

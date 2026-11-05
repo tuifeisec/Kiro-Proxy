@@ -65,9 +65,6 @@ func TestModelReasoningCapabilityAPIRejectsInvalidConfig(t *testing.T) {
 		want   string
 	}{
 		{"unknown supported tier", func(m *store.Model) { m.SupportedReasoningEfforts = []string{"ultra"} }, "ultra"},
-		{"anthropic cannot express xhigh", func(m *store.Model) {
-			m.Provider, m.Endpoint, m.SupportedReasoningEfforts = "anthropic", "/messages", []string{"xhigh"}
-		}, "xhigh"},
 		{"default outside declared tiers", func(m *store.Model) {
 			m.SupportedReasoningEfforts, m.ReasoningEffort = []string{"low", "medium"}, "high"
 		}, "默认思考档位"},

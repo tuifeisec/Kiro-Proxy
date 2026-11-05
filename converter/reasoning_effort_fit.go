@@ -29,7 +29,8 @@ var (
 		ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax,
 	}
 	anthropicReasoningEfforts = []string{
-		ReasoningEffortNone, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh,
+		ReasoningEffortNone, ReasoningEffortLow, ReasoningEffortMedium,
+		ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax,
 	}
 	geminiReasoningEfforts = []string{
 		ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh,

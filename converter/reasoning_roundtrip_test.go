@@ -229,7 +229,7 @@ func TestReasoningFieldsAreAbsentWithoutSidecar(t *testing.T) {
 	}}}
 	chat, _ := KiroToOpenAI(conv, "gpt-5.5", "")
 	responses, _ := KiroToResponses(conv, "gpt-5.5", "")
-	anthropic, _ := KiroToAnthropic(conv, "claude", "")
+	anthropic, _ := KiroToAnthropic(conv, "claude", "", AnthropicRequestOptions{})
 	for name, body := range map[string][]byte{"chat": chat, "responses": responses, "anthropic": anthropic} {
 		if strings.Contains(string(body), "reasoning_content") || strings.Contains(string(body), "reasoning_text") ||
 			strings.Contains(string(body), `"type":"reasoning"`) || strings.Contains(string(body), `"type":"thinking"`) {

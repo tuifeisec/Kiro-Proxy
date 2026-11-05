@@ -87,7 +87,7 @@ func sampleConversation(staticSystem, dynamicTail, current string) *converter.Pa
 }
 
 func buildReport(name string, conv *converter.ParsedConversation) report {
-	body, err := converter.KiroToAnthropic(conv, "claude-sonnet-4.5", "")
+	body, err := converter.KiroToAnthropic(conv, "claude-sonnet-4.5", "", converter.AnthropicRequestOptions{})
 	if err != nil {
 		log.Fatalf("%s convert failed: %v", name, err)
 	}

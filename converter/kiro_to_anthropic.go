@@ -1,13 +1,11 @@
 package converter
 
 import (
-	"strings"
-
 	json "github.com/goccy/go-json"
 )
 
 // KiroToAnthropic 将解析好的会话转换为 Anthropic Messages 请求体
-func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffort string, opts AnthropicRequestOptions) ([]byte, error) {
 	model := targetModel
 	if model == "" {
 		model = conv.ModelID
@@ -29,12 +27,18 @@ func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffo
 	if conv.MaxTokens > 0 {
 		req.MaxTokens = conv.MaxTokens
 	}
-	if err := ValidateProviderReasoningEffort("anthropic", reasoningEffort); err != nil {
+	thinking, err := BuildAnthropicThinking(AnthropicThinkingInput{
+		ModelID:       model,
+		UpstreamHost:  opts.UpstreamHost,
+		ThinkingStyle: opts.ThinkingStyle,
+		Effort:        reasoningEffort,
+		MaxTokens:     req.MaxTokens,
+	})
+	if err != nil {
 		return nil, err
 	}
-	if thinking := anthropicThinkingFromEffort(reasoningEffort); thinking != nil {
-		req.Thinking = thinking
-	}
+	req.Thinking = thinking.Thinking
+	req.OutputConfig = thinking.OutputConfig
 
 	// 系统提示只放静态部分，并添加 cache_control。
 	// Kiro 的 system prompt 可能包含 "Here is the last user message:" 动态尾部；
@@ -242,19 +246,4 @@ func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse, reason
 		})
 	}
 	return &AnthropicMessage{Role: "assistant", Content: blocks}
-}
-
-func anthropicThinkingFromEffort(effort string) *AnthropicThinking {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "none":
-		return &AnthropicThinking{Type: "disabled"}
-	case "low":
-		return &AnthropicThinking{Type: "enabled", BudgetTokens: 1024}
-	case "medium":
-		return &AnthropicThinking{Type: "enabled", BudgetTokens: 4096}
-	case "high":
-		return &AnthropicThinking{Type: "enabled", BudgetTokens: 8192}
-	default:
-		return nil
-	}
 }

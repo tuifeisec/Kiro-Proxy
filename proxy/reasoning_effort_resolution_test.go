@@ -43,12 +43,12 @@ func TestResolveReasoningEffortDecisionPriorityAndNearestFit(t *testing.T) {
 		source    reasoningEffortSource
 	}{
 		{"request wins and is kept", reasoningTestPre("high", "low"), reasoningTestModel("openai", "medium"), "high", "high", reasoningEffortSourceRequest},
-		{"group xhigh fits anthropic high", reasoningTestPre("", "xhigh"), reasoningTestModel("anthropic", ""), "xhigh", "high", reasoningEffortSourceGroup},
+		{"group xhigh fits declared anthropic high", reasoningTestPre("", "xhigh"), reasoningTestModel("anthropic", "", "none", "low", "medium", "high"), "xhigh", "high", reasoningEffortSourceGroup},
 		{"request max fits declared tiers", reasoningTestPre("max", ""), reasoningTestModel("openai", "", "low", "medium"), "max", "medium", reasoningEffortSourceRequest},
 		{"request none fits gemini low", reasoningTestPre("none", ""), reasoningTestModel("gemini", ""), "none", "low", reasoningEffortSourceRequest},
 		{"model default", reasoningTestPre("", ""), reasoningTestModel("openai", "low"), "low", "low", reasoningEffortSourceModel},
 		{"nothing configured sends nothing", reasoningTestPre("", ""), reasoningTestModel("openai", ""), "", "", ""},
-		{"auto fixed overrides request and group", auto, reasoningTestModel("anthropic", "low"), "xhigh", "high", reasoningEffortSourceAuto},
+		{"auto fixed overrides request and group", auto, reasoningTestModel("anthropic", "low", "none", "low", "medium", "high"), "xhigh", "high", reasoningEffortSourceAuto},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestConvertRequestUsesWireEffortAndHonorsDisabledField(t *testing.T) {
 		contains string
 		absent   []string
 	}{
-		{"anthropic xhigh maps to high budget", reasoningTestModel("anthropic", ""), "xhigh", `"thinking":{"type":"enabled","budget_tokens":8192}`, nil},
+		{"anthropic xhigh maps to declared high budget", reasoningTestModel("anthropic", "", "none", "low", "medium", "high"), "xhigh", `"thinking":{"type":"enabled","budget_tokens":8192}`, nil},
 		{"gemini none maps to low budget", reasoningTestModel("gemini", ""), "none", `"thinkingConfig":{"thinkingBudget":1024}`, nil},
 		{"openai chat declared tiers", reasoningTestModel("openai", "", "low", "medium"), "max", `"reasoning_effort":"medium"`, nil},
 		{"codex declared tiers", reasoningTestModel("codex", "", "high"), "low", `"effort":"high"`, nil},
@@ -168,7 +168,7 @@ func TestConvertRequestUsesWireEffortAndHonorsDisabledField(t *testing.T) {
 
 func TestBindUsageReasoningEffortRecordsRequestedWireAndSource(t *testing.T) {
 	usage := newRequestUsageRecorder(nil, time.Now(), nil, "/", "kiro")
-	model := reasoningTestModel("anthropic", "")
+	model := reasoningTestModel("anthropic", "", "none", "low", "medium", "high")
 	bindUsageReasoningEffort(usage, reasoningTestPre("", "xhigh"), model)
 	if usage.item.ReasoningEffort != "high" || usage.item.RequestedReasoningEffort != "xhigh" || usage.item.ReasoningEffortSource != "group" {
 		t.Fatalf("usage decision = wire %q requested %q source %q", usage.item.ReasoningEffort, usage.item.RequestedReasoningEffort, usage.item.ReasoningEffortSource)

@@ -123,11 +123,11 @@ Here is the last user message:
 		},
 	}
 
-	body1, err := KiroToAnthropic(conv1, "", "")
+	body1, err := KiroToAnthropic(conv1, "", "", AnthropicRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}
-	body2, err := KiroToAnthropic(conv2, "", "")
+	body2, err := KiroToAnthropic(conv2, "", "", AnthropicRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}
@@ -193,7 +193,7 @@ Here is the last user message:
 		ToolsHash: "anthropic-test-tools",
 	}
 
-	body, err := KiroToAnthropic(conv, "claude-sonnet-4.5", "medium")
+	body, err := KiroToAnthropic(conv, "claude-sonnet-4.5", "medium", AnthropicRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestAnthropic_RollingCacheBreakpointOnLastToolResult(t *testing.T) {
 		}},
 	}
 
-	body, err := KiroToAnthropic(conv, "", "")
+	body, err := KiroToAnthropic(conv, "", "", AnthropicRequestOptions{})
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestAnthropic_EnvironmentContextPreservesCurrentMessage(t *testing.T) {
 		CurrentContent: "帮我写测试\n\n<EnvironmentContext>\n<file name=\"app_test.go\" />\n</EnvironmentContext>",
 	}
 
-	body, err := KiroToAnthropic(conv, "", "")
+	body, err := KiroToAnthropic(conv, "", "", AnthropicRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}

@@ -17,7 +17,7 @@ const OPENAI_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
 const PROVIDER_REASONING_EFFORTS = {
   openai: OPENAI_EFFORTS,
   codex: OPENAI_EFFORTS,
-  anthropic: ['none', 'low', 'medium', 'high'],
+  anthropic: OPENAI_EFFORTS,
   gemini: ['low', 'medium', 'high'],
 }
 

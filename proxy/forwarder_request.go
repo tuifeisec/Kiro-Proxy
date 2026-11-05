@@ -116,6 +116,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 		return nil, upstreamURL, err
 	}
 	reasoningEffort := decision.Wire
+	upstreamHost := converter.UpstreamHostOf(upstreamURL)
 	convertChat := func() ([]byte, error) {
 		if isOpenAIChatUpstream(m, upstreamURL) {
 			return converter.KiroToOpenAIChatUpstream(conv, m.ModelID, reasoningEffort)
@@ -130,7 +131,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 		upstreamURL = responsesToChatURL(upstreamURL)
 		body, err = convertChat()
 	case m.Provider == "anthropic":
-		body, err = converter.KiroToAnthropic(conv, m.ModelID, reasoningEffort)
+		body, err = converter.KiroToAnthropic(conv, m.ModelID, reasoningEffort, converter.AnthropicRequestOptions{UpstreamHost: upstreamHost, ThinkingStyle: m.ThinkingStyle})
 	case m.Provider == "gemini":
 		body, err = converter.KiroToGemini(conv, m.ModelID, reasoningEffort)
 		if !m.DisableAutoSuffix {

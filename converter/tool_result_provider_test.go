@@ -54,7 +54,7 @@ func TestOpenAIAndAnthropicPreserveMixedToolResults(t *testing.T) {
 		t.Fatal("OpenAI request did not contain a tool result")
 	}
 
-	anthropicBody, err := KiroToAnthropic(conv, "claude-sonnet-4.5", "")
+	anthropicBody, err := KiroToAnthropic(conv, "claude-sonnet-4.5", "", AnthropicRequestOptions{})
 	if err != nil {
 		t.Fatalf("convert Anthropic request: %v", err)
 	}

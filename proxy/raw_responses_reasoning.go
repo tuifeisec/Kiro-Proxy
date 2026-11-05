@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"kiro-proxy/converter"
 	"kiro-proxy/store"
 
 	json "github.com/goccy/go-json"
@@ -106,24 +105,15 @@ func applyRawResponsesReasoning(root map[string]json.RawMessage, pre *Preflight,
 	return nil
 }
 
-// rawAnthropicThinkingFields 返回 raw Anthropic 请求应写入的 thinking/output_config。
-// 本阶段只负责让它拿到正确的下发档位；thinking 形态的重写留给后续阶段。
-func rawAnthropicThinkingFields(root map[string]json.RawMessage, pre *Preflight, model *store.Model) (map[string]string, map[string]string, error) {
+// rawAnthropicWireEffort 返回 raw Anthropic 请求实际下发的档位，thinking 形态由
+// applyRawResponsesAnthropicThinking 与 Kiro 主路径共用的构造函数决定。
+func rawAnthropicWireEffort(root map[string]json.RawMessage, pre *Preflight, model *store.Model) (string, error) {
 	reasoning, decision, err := resolveRawResponsesReasoning(root, pre, model)
 	if err != nil {
-		return nil, nil, err
+		return "", err
 	}
 	if _, present := reasoning.fields["effort"]; present && !reasoning.effortIsStr && decision.Source != reasoningEffortSourceAuto {
-		return nil, nil, fmt.Errorf("raw Responses reasoning effort must be a string")
+		return "", fmt.Errorf("raw Responses reasoning effort must be a string")
 	}
-	switch decision.Wire {
-	case "":
-		return nil, nil, nil
-	case converter.ReasoningEffortNone:
-		return map[string]string{"type": "disabled"}, nil, nil
-	case converter.ReasoningEffortLow, converter.ReasoningEffortMedium, converter.ReasoningEffortHigh:
-		return map[string]string{"type": "adaptive"}, map[string]string{"effort": decision.Wire}, nil
-	default:
-		return nil, nil, fmt.Errorf("raw Responses reasoning effort %q is unsupported by Anthropic", decision.Wire)
-	}
+	return decision.Wire, nil
 }

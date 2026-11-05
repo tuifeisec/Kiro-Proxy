@@ -76,17 +76,20 @@ func TestRawAnthropicUsesResolvedWireEffort(t *testing.T) {
 	cases := []struct {
 		name, body, defaultEffort string
 		disabled                  bool
+		supported                 []string
 		thinking, outputConfig    string
 	}{
-		{"model default applies", `{"model":"m","input":"hi"}`, "medium", false, `{"type":"adaptive"}`, `{"effort":"medium"}`},
-		{"xhigh fits high", `{"model":"m","input":"hi","reasoning":{"effort":"xhigh"}}`, "", false, `{"type":"adaptive"}`, `{"effort":"high"}`},
-		{"none disables thinking", `{"model":"m","input":"hi","reasoning":{"effort":"none"}}`, "", false, `{"type":"disabled"}`, ""},
-		{"disabled field sends nothing", `{"model":"m","input":"hi","reasoning":{"effort":"high"}}`, "high", true, "", ""},
+		// 模型名 "m" 不是 Claude，按 budget 形态构造（与 Kiro 主路径共用 BuildAnthropicThinking）
+		{"model default applies", `{"model":"m","input":"hi"}`, "medium", false, nil, `{"type":"enabled","budget_tokens":4096}`, ""},
+		{"xhigh fits declared high", `{"model":"m","input":"hi","reasoning":{"effort":"xhigh"}}`, "", false, []string{"none", "low", "medium", "high"}, `{"type":"enabled","budget_tokens":8192}`, ""},
+		{"none disables thinking", `{"model":"m","input":"hi","reasoning":{"effort":"none"}}`, "", false, nil, `{"type":"disabled"}`, ""},
+		{"disabled field sends nothing", `{"model":"m","input":"hi","reasoning":{"effort":"high"}}`, "high", true, nil, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			candidate := *model
 			candidate.ReasoningEffort, candidate.DisableReasoningField = tc.defaultEffort, tc.disabled
+			candidate.SupportedReasoningEfforts = tc.supported
 			prepared, err := prepareRawResponsesAnthropicBody([]byte(tc.body), nil, &candidate)
 			if err != nil {
 				t.Fatal(err)
@@ -105,7 +108,7 @@ func TestRawAnthropicUsesResolvedWireEffort(t *testing.T) {
 	}
 }
 
-// 分组选 xhigh 时 anthropic 候选原来被整体跳过；现在按自身有效档位映射为 high 并实际发送。
+// 分组选 xhigh 时 anthropic 候选原来被整体跳过；现在按自身有效档位（此处声明到 high）映射为 high 并实际发送。
 func TestModelGroupMapsEffortPerCandidateInsteadOfSkipping(t *testing.T) {
 	var mu sync.Mutex
 	bodies := map[string][]byte{}
@@ -124,7 +127,8 @@ func TestModelGroupMapsEffortPerCandidateInsteadOfSkipping(t *testing.T) {
 		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer upstream.Close()
-	anthropic := &store.Model{ID: "claude", ModelID: "claude-upstream", Provider: "anthropic", BaseURL: upstream.URL, Endpoint: "/v1/messages", APIKey: "k", Enabled: true}
+	anthropic := &store.Model{ID: "claude", ModelID: "claude-upstream", Provider: "anthropic", BaseURL: upstream.URL, Endpoint: "/v1/messages", APIKey: "k", Enabled: true,
+		SupportedReasoningEfforts: []string{"none", "low", "medium", "high"}}
 	openai := &store.Model{ID: "gpt", ModelID: "gpt-upstream", Provider: "openai", BaseURL: upstream.URL, Endpoint: "/v1/chat/completions", APIKey: "k", Enabled: true}
 	group := &store.ModelGroup{ID: "mixed", Name: "mixed", Enabled: true, MaxAttempts: 2, FirstByteTimeoutMS: 10000, ReasoningEffort: "xhigh"}
 	route := &router.Route{Model: anthropic, Group: group, Candidates: []*store.Model{anthropic, openai},
