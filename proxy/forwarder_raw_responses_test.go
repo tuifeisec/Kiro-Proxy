@@ -426,7 +426,6 @@ func TestForwardRawResponsesRejectsUnsupportedRoutesWithoutSending(t *testing.T)
 		provider string
 		endpoint string
 	}{
-		{name: "anthropic", provider: "anthropic", endpoint: "/v1/responses"},
 		{name: "gemini", provider: "gemini", endpoint: "/v1/responses"},
 		{name: "codex", provider: "codex", endpoint: "/v1/responses"},
 		{name: "wrong endpoint", provider: "openai", endpoint: "/messages"},

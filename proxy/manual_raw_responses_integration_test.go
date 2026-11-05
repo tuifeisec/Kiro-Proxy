@@ -72,8 +72,16 @@ func newManualRawUpstream(t *testing.T) (*httptest.Server, chan manualRawObserva
 				}
 			}
 		}
+		if r.Header.Get("x-api-key") != "" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"anthropic-response\",\"model\":\"claude-model\",\"usage\":{\"input_tokens\":10}}}\n\n")
+			_, _ = io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+			_, _ = io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+			_, _ = io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+			_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"manual-response\"}}\n\n")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"manual-response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1000,\"output_tokens\":100,\"input_tokens_details\":{\"cached_tokens\":600}}}}\n\n")
 	}))
@@ -271,7 +279,7 @@ func TestManualRawResponsesRejectsUnsupportedProviderWithoutOfficialFallback(t *
 	t.Cleanup(func() { SetProxyMode(oldMode) })
 	env := newAutoStageIntegrationEnv(t)
 	upstream, observations := newManualRawUpstream(t)
-	selected := configureManualRawModel(t, env, "manual-anthropic", "Manual Anthropic", "claude-model", "anthropic", "/v1/messages", upstream.URL, "anthropic-secret")
+	selected := configureManualRawModel(t, env, "manual-gemini", "Manual Gemini", "gemini-model", "gemini", "/v1beta/models/gemini:streamGenerateContent", upstream.URL, "gemini-secret")
 	var officialHits int
 	rawStageProxy(t, env, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		officialHits++
@@ -348,7 +356,7 @@ func TestManualRawResponsesConfiguredUnavailableTargetsNeverFallBackOfficial(t *
 			name:       "group with only incompatible provider",
 			wantStatus: http.StatusBadGateway,
 			setup: func(t *testing.T, env *autoStageIntegrationEnv, baseURL string) string {
-				member := configureManualRawModel(t, env, "anthropic-group-member", "Anthropic group member", "claude-group-model", "anthropic", "/v1/messages", baseURL, "anthropic-group-secret")
+				member := configureManualRawModel(t, env, "gemini-group-member", "Gemini group member", "gemini-group-model", "gemini", "/v1beta/models/gemini:streamGenerateContent", baseURL, "gemini-group-secret")
 				group := &store.ModelGroup{ID: "anthropic-only-group", Name: "Anthropic only group", Enabled: true, MaxAttempts: 1, Members: []store.ModelGroupMember{{ModelID: member.ID}}}
 				if err := env.db.CreateModelGroup(group); err != nil {
 					t.Fatal(err)

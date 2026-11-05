@@ -16,14 +16,15 @@ import (
 )
 
 // rawResponsesUpstreamURL resolves the explicitly configured raw Responses
-// endpoint. A Chat Completions endpoint is adapted at the request and response
-// boundary; it is never rewritten into a sibling /responses endpoint.
+// endpoint. A Chat Completions or Anthropic Messages endpoint is adapted at the
+// upstream boundary; it is never rewritten into a sibling endpoint.
 func rawResponsesUpstreamURL(model *store.Model) (endpoint string, chat bool, err error) {
 	if model == nil {
 		return "", false, fmt.Errorf("raw Responses model is missing")
 	}
-	if strings.TrimSpace(model.Provider) != "openai" {
-		return "", false, fmt.Errorf("raw Responses upstream requires provider=openai")
+	provider := strings.ToLower(strings.TrimSpace(model.Provider))
+	if provider != "openai" && provider != "anthropic" {
+		return "", false, fmt.Errorf("raw Responses upstream requires provider=openai or provider=anthropic")
 	}
 
 	baseURL := strings.TrimSpace(model.BaseURL)
@@ -40,6 +41,12 @@ func rawResponsesUpstreamURL(model *store.Model) (endpoint string, chat bool, er
 		return "", false, fmt.Errorf("raw Responses endpoint must be an absolute HTTP URL")
 	}
 	configuredPath := strings.TrimRight(parsed.Path, "/")
+	if provider == "anthropic" {
+		if !strings.HasSuffix(configuredPath, "/messages") {
+			return "", false, fmt.Errorf("raw Responses Anthropic endpoint must end in /messages")
+		}
+		return endpoint, false, nil
+	}
 	switch {
 	case strings.HasSuffix(configuredPath, "/responses"):
 		return endpoint, false, nil

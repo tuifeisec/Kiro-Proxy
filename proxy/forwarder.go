@@ -1107,6 +1107,9 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 			return nil, nil, err
 		}
 		body, conversionDuration, err := f.prepareRawResponsesUpstreamBodyMeasured(pre.Body, pre, model)
+		if strings.EqualFold(strings.TrimSpace(model.Provider), "anthropic") {
+			body, conversionDuration, err = f.prepareRawResponsesAnthropicBodyMeasured(pre.Body, pre, model)
+		}
 		pre.usage.addConversionDuration(conversionDuration)
 		if err != nil {
 			return nil, nil, err

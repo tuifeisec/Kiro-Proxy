@@ -60,8 +60,9 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		return f.forwardModelGroup(req, &rawPre, route, logger)
 	}
 	model := route.Model
-	if model.Provider != "openai" {
-		return nil, fmt.Errorf("raw Responses only supports provider openai; got %q", model.Provider)
+	provider := strings.ToLower(strings.TrimSpace(model.Provider))
+	if provider != "openai" && provider != "anthropic" {
+		return nil, fmt.Errorf("raw Responses only supports provider openai or anthropic; got %q", model.Provider)
 	}
 
 	upstreamURL, err := rawResponsesCandidateURL(model)
@@ -77,8 +78,13 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		}
 	}
 	upstreamBody, conversionDuration, err := f.prepareRawResponsesUpstreamBodyMeasured(body, pre, model)
+	if strings.EqualFold(strings.TrimSpace(model.Provider), "anthropic") {
+		upstreamBody, conversionDuration, err = f.prepareRawResponsesAnthropicBodyMeasured(body, pre, model)
+	}
 	if err != nil {
-		pre.usage.addConversionDuration(conversionDuration)
+		if pre.usage != nil {
+			pre.usage.addConversionDuration(conversionDuration)
+		}
 		return nil, err
 	}
 
@@ -301,11 +307,15 @@ func (f *Forwarder) sendRawGroupCandidate(ctx context.Context, endpoint string, 
 
 func (f *Forwarder) finalizeRawResponses(ctx context.Context, resp *http.Response, usage *requestUsageRecorder, model *store.Model, endpoint string, lease *modelLease, onOutcome func(converter.StreamOutcome), contentHook func(time.Time, string)) (*http.Response, error) {
 	_, chat, err := rawResponsesUpstreamURL(model)
-	if err == nil && chat && resp.Body != nil {
-		var adapted *http.Response
-		adapted, err = adaptRawChatResponse(ctx, resp)
-		if err == nil {
-			resp = adapted
+	if err == nil {
+		if strings.EqualFold(strings.TrimSpace(model.Provider), "anthropic") {
+			resp, err = adaptRawAnthropicResponse(ctx, resp)
+		} else if chat {
+			var adapted *http.Response
+			adapted, err = adaptRawChatResponse(ctx, resp)
+			if err == nil {
+				resp = adapted
+			}
 		}
 	}
 	if err != nil {

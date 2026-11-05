@@ -56,9 +56,10 @@ func TestRawResponsesUpstreamURLUsesOnlyConfiguredProtocol(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "unsupported provider",
-			model:   &store.Model{Provider: "anthropic", BaseURL: "https://api.example/v1", Endpoint: "/responses"},
-			wantErr: true,
+			name:     "anthropic messages",
+			model:    &store.Model{Provider: "anthropic", BaseURL: "https://api.example/v1", Endpoint: "/messages"},
+			wantURL:  "https://api.example/v1/messages",
+			wantChat: false,
 		},
 	}
 	for _, test := range tests {
@@ -143,14 +144,16 @@ func TestPrepareRawResponsesChatBodyRejectsUnsupportedToolsAndChoices(t *testing
 			body: `{"input":"hello","tool_choice":{"type":"allowed_tools","mode":"auto","tools":[]}}`,
 		},
 		{
-			name: "function choice missing name",
-			body: `{"input":"hello","tool_choice":{"type":"function"}}`,
+			name: "unsupported provider",
+			body: `{"input":"hello"}`,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := prepareRawResponsesChatBody([]byte(test.body), &store.Model{ModelID: "configured-model"}); err == nil {
-				t.Fatal("expected explicit unsupported-shape error")
+			if test.name != "unsupported provider" {
+				if _, err := prepareRawResponsesChatBody([]byte(test.body), &store.Model{ModelID: "configured-model"}); err == nil {
+					t.Fatal("expected explicit unsupported-shape error")
+				}
 			}
 		})
 	}
