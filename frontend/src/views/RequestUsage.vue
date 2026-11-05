@@ -572,7 +572,8 @@ onBeforeUnmount(() => {
                 </span>
               </div>
               <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
-                <div><dt class="text-ink-4">推理程度</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.reasoning_effort || 'Default' }}</dd></div>
+                <div><dt class="text-ink-4">下发档位</dt><dd class="mt-0.5 font-medium" :class="selectedItem.requested_reasoning_effort && selectedItem.requested_reasoning_effort !== selectedItem.reasoning_effort ? 'text-warning' : 'text-ink-2'">{{ selectedItem.reasoning_effort || '未发送' }}</dd></div>
+                <div><dt class="text-ink-4">请求档位 / 来源</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.requested_reasoning_effort || '-' }} / {{ selectedItem.reasoning_effort_source || '-' }}</dd></div>
                 <div><dt class="text-ink-4">服务档位</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.service_tier || 'Standard' }}</dd></div>
                 <div><dt class="text-ink-4">连接复用</dt><dd class="mt-0.5 font-medium text-ink-2">{{ selectedItem.reused_connection ? '是' : '否' }}</dd></div>
                 <div><dt class="text-ink-4">同候选重试</dt><dd class="mt-0.5 font-medium" :class="selectedItem.retry_count ? 'text-warning' : 'text-ink-2'">{{ selectedItem.retry_count || 0 }}</dd></div>

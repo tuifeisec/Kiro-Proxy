@@ -159,26 +159,16 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 			request["tool_choice"] = choice
 		}
 	}
-	if raw := root["reasoning"]; len(raw) > 0 {
-		var reasoning struct {
-			Effort string `json:"effort"`
-		}
-		if err := json.Unmarshal(raw, &reasoning); err != nil {
-			return nil, fmt.Errorf("raw Responses reasoning must be an object: %w", err)
-		}
-		switch strings.ToLower(strings.TrimSpace(reasoning.Effort)) {
-		case "":
-		case "low", "medium", "high":
-			effort := strings.ToLower(strings.TrimSpace(reasoning.Effort))
-			request["thinking"] = map[string]string{"type": "adaptive"}
-			request["output_config"] = map[string]string{"effort": effort}
-		case "none":
-			request["thinking"] = map[string]string{"type": "disabled"}
-		default:
-			return nil, fmt.Errorf("raw Responses reasoning effort %q is unsupported by Anthropic", reasoning.Effort)
-		}
+	thinking, outputConfig, err := rawAnthropicThinkingFields(root, pre, model)
+	if err != nil {
+		return nil, err
 	}
-	_ = pre
+	if thinking != nil {
+		request["thinking"] = thinking
+	}
+	if outputConfig != nil {
+		request["output_config"] = outputConfig
+	}
 	return json.Marshal(request)
 }
 func mustJSON(value string) []byte { encoded, _ := json.Marshal(value); return encoded }

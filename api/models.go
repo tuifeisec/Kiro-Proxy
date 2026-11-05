@@ -51,6 +51,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.ImageInputMode = imageInputMode
+		if err := normalizeModelReasoningConfig(&m); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if m.Provider == "codex" {
 			codex.NormalizeModel(&m)
 			if strings.TrimSpace(m.Name) == "" {
@@ -138,6 +142,10 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.ImageInputMode = imageInputMode
+		if err := normalizeModelReasoningConfig(&m); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// 校验 name 不可重复（排除自身）
 		if m.Name != "" {
 			if dup, _ := s.db.FindModelByName(m.Name); dup != nil && dup.ID != id {

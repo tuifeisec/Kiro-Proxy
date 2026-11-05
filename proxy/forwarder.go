@@ -675,7 +675,8 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 			}
 
 			if pre != nil && (pre.Protocol == "kiro" || rawResponses) && pre.Conv != nil {
-				if err := converter.ValidateProviderReasoningEffort(model.Provider, resolveReasoningEffort(pre, model)); err != nil {
+				// 每个候选按自身有效档位就近映射；只有映射后仍无法表达才跳过。
+				if _, err := resolveReasoningEffortDecision(pre, model); err != nil {
 					unsupportedEffortErr = err
 					logger.Info("dispatcher", fmt.Sprintf("跳过无法表达思考强度的候选: stage=%d group=%s model=%s error=%v", stageIndex, stage.GroupName, statsModelID(model), err))
 					continue
@@ -1033,7 +1034,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 		if unsupportedEffortErr != nil {
 			allUnsupported := true
 			for _, candidate := range route.Candidates {
-				if candidate != nil && converter.ValidateProviderReasoningEffort(candidate.Provider, resolveReasoningEffort(pre, candidate)) == nil {
+				if _, err := resolveReasoningEffortDecision(pre, candidate); candidate != nil && err == nil {
 					allUnsupported = false
 					break
 				}
@@ -1114,6 +1115,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		if err != nil {
 			return nil, nil, err
 		}
+		logCandidateReasoningEffort(logger, pre, model)
 		sessionID := pre.ConversationID
 		if pre.Conv != nil {
 			sessionID = pre.Conv.ConversationID
@@ -1178,6 +1180,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 	auditStarted := time.Now()
 	f.logPrefixDrift(logger, pre, model, upstreamURL, upstreamBody, contResult)
 	pre.usage.setAuditDuration(auditStarted)
+	logCandidateReasoningEffort(logger, pre, model)
 	logger.InfoBytes("forwarder", fmt.Sprintf("转发: %s → %s (body=%d bytes)", model.ModelID, upstreamURL, len(upstreamBody)), upstreamBody)
 	sessionID := ""
 	if pre != nil && pre.Conv != nil {
@@ -1368,7 +1371,7 @@ func bindUsageModel(pre *Preflight, model *store.Model) {
 		return
 	}
 	pre.usage.setModel(model)
-	pre.usage.setReasoningEffort(resolveReasoningEffort(pre, model))
+	bindUsageReasoningEffort(pre.usage, pre, model)
 }
 
 func preserveResponseBody(resp *http.Response) string {

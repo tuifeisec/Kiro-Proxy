@@ -1199,7 +1199,7 @@ onBeforeUnmount(() => closeDescriptionDialog(false))
                 </div>
                 </div>
                 <p v-if="availableTargetCount === 0" class="mt-2 text-[11px] text-warning-fg">当前没有已启用模型或有效分组可供选择。</p>
-                <p class="mt-3 text-[10px] leading-4 text-ink-4">思考等级能力按本地 Provider 规则校验；OpenAI/Codex 的 xhigh、max 是否受上游具体模型支持仍由上游决定。留空表示固定使用上游默认等级。</p>
+                <p class="mt-3 text-[10px] leading-4 text-ink-4">思考等级选项按目标模型的有效档位派生（模型声明的支持档位，未声明时使用 Provider 默认表）；分组目标取所有候选的交集。留空表示固定使用上游默认等级。</p>
               </details>
             </section>
 

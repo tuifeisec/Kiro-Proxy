@@ -329,7 +329,7 @@ func (s *Server) setupInterceptor() {
 		}
 		pre.usage = newRequestUsageRecorder(s.db, time.Now(), usageModel, req.URL.Path, pre.Protocol)
 		pre.usage.setRoute(route)
-		pre.usage.setReasoningEffort(resolveReasoningEffort(pre, route.Model))
+		bindUsageReasoningEffort(pre.usage, pre, route.Model)
 
 		// 转发
 		var resp *http.Response

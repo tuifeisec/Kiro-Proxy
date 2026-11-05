@@ -90,6 +90,7 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		}
 		return nil, err
 	}
+	logCandidateReasoningEffort(logger, pre, model)
 
 	usage := pre.usage
 	if usage == nil {
@@ -104,7 +105,7 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		bindUsageModel(pre, model)
 	} else {
 		usage.setModel(model)
-		usage.setReasoningEffort(resolveReasoningEffort(pre, model))
+		bindUsageReasoningEffort(usage, pre, model)
 	}
 	usage.setRoute(route)
 	limit := 0
@@ -492,62 +493,8 @@ func prepareRawResponsesRoot(body []byte, pre *Preflight, model *store.Model) (m
 	}
 	root["model"] = modelRaw
 
-	reasoningRaw, reasoningExists := root["reasoning"]
-	var reasoning map[string]json.RawMessage
-	if reasoningExists {
-		if bytes.Equal(bytes.TrimSpace(reasoningRaw), []byte("null")) {
-			reasoningExists = false
-			reasoning = make(map[string]json.RawMessage)
-		} else if err := json.Unmarshal(reasoningRaw, &reasoning); err != nil || reasoning == nil {
-			if err == nil {
-				err = fmt.Errorf("reasoning must be an object")
-			}
-			return nil, fmt.Errorf("parse raw Responses reasoning: %w", err)
-		}
-	} else {
-		reasoning = make(map[string]json.RawMessage)
-	}
-	effortRaw, effortExists := reasoning["effort"]
-	shouldSetEffort := !effortExists
-	if effortExists {
-		var effort string
-		if json.Unmarshal(effortRaw, &effort) == nil && effort == "" {
-			shouldSetEffort = true
-		}
-	}
-	if preIsAutoReasoningRequest(pre) && pre.AutoReasoningEffort != nil && !pre.IsClassifier {
-		effort := *pre.AutoReasoningEffort
-		if effort == "" {
-			delete(reasoning, "effort")
-		} else {
-			effortJSON, err := json.Marshal(effort)
-			if err != nil {
-				return nil, fmt.Errorf("encode fixed raw Responses reasoning effort: %w", err)
-			}
-			reasoning["effort"] = effortJSON
-		}
-		if len(reasoning) == 0 {
-			delete(root, "reasoning")
-		} else {
-			encodedReasoning, err := json.Marshal(reasoning)
-			if err != nil {
-				return nil, fmt.Errorf("encode fixed raw Responses reasoning: %w", err)
-			}
-			root["reasoning"] = encodedReasoning
-		}
-	} else if shouldSetEffort {
-		if effort := resolveReasoningEffort(pre, model); effort != "" {
-			effortJSON, err := json.Marshal(effort)
-			if err != nil {
-				return nil, fmt.Errorf("encode raw Responses reasoning effort: %w", err)
-			}
-			reasoning["effort"] = effortJSON
-			encodedReasoning, err := json.Marshal(reasoning)
-			if err != nil {
-				return nil, fmt.Errorf("encode raw Responses reasoning: %w", err)
-			}
-			root["reasoning"] = encodedReasoning
-		}
+	if err := applyRawResponsesReasoning(root, pre, model); err != nil {
+		return nil, err
 	}
 	// The raw entry point can adapt a Responses-shaped request to Chat
 	// Completions.  FAST policy is a Responses capability; do not synthesize

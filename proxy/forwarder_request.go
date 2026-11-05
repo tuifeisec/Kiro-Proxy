@@ -62,23 +62,15 @@ func buildUpstreamURL(baseURL, endpoint string) string {
 	return strings.TrimRight(baseURL, "/") + endpoint
 }
 
+// resolveReasoningEffort 返回实际下发给上游的档位，供状态键、诊断日志等只需要
+// 结果值的调用方使用。解析失败时返回空：这些调用方都位于请求转换之后或之前的
+// 辅助位置，同一错误由 convertRequestWithProtocol 显式返回，不会被当作成功发送。
 func resolveReasoningEffort(pre *Preflight, model *store.Model) string {
-	if preIsAutoReasoningRequest(pre) && !pre.IsClassifier && pre.AutoReasoningEffort != nil {
-		return *pre.AutoReasoningEffort
-	}
-	if pre != nil && pre.Conv != nil && !pre.IsClassifier {
-		if pre.Conv.ReasoningEffort != "" {
-			return pre.Conv.ReasoningEffort
-		}
-		if pre.GroupReasoningEffort != "" {
-			return pre.GroupReasoningEffort
-		}
-	}
-	if model == nil {
+	decision, err := resolveReasoningEffortDecision(pre, model)
+	if err != nil {
 		return ""
 	}
-	defaultEffort, _ := converter.NormalizeReasoningEffort(model.ReasoningEffort)
-	return defaultEffort
+	return decision.Wire
 }
 
 // preIsAutoReasoningRequest keeps Auto's duty-fixed effort scoped to requests
@@ -119,7 +111,11 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 		conv = converter.WithReasoningHistory(conv, reasoningHistory)
 	}
 
-	reasoningEffort := resolveReasoningEffort(pre, m)
+	decision, err := resolveReasoningEffortDecision(pre, m)
+	if err != nil {
+		return nil, upstreamURL, err
+	}
+	reasoningEffort := decision.Wire
 	convertChat := func() ([]byte, error) {
 		if isOpenAIChatUpstream(m, upstreamURL) {
 			return converter.KiroToOpenAIChatUpstream(conv, m.ModelID, reasoningEffort)
@@ -129,7 +125,6 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 
 	// Kiro 协议：根据 provider + endpoint 选择转换器
 	var body []byte
-	var err error
 	switch {
 	case forceChat && m.Provider == "openai":
 		upstreamURL = responsesToChatURL(upstreamURL)

@@ -42,7 +42,8 @@ type Model struct {
 	DisableAutoSuffix     bool    `json:"disable_auto_suffix"`     // 不自动改写端点或追加 query，严格使用用户配置的接口路径
 	ContextWindow         int     `json:"context_window"`          // 上下文窗口，0=默认
 	MaxTokens             int     `json:"max_tokens"`              // 最大输出 Token，0=默认
-	ReasoningEffort       string  `json:"reasoning_effort"`        // 推理强度：空/low/medium/high
+	ReasoningEffort       string  `json:"reasoning_effort"`        // 默认思考档位：空=不发送；非空时须属于模型有效档位
+	ThinkingStyle         string  `json:"thinking_style"`          // 思考形态覆盖：空=自动，anthropic 可选 adaptive/budget，gemini 可选 level/budget
 	ImageInputMode        string  `json:"image_input_mode"`        // 图片输入能力：auto/supported/unsupported
 	RateMultiplier        float64 `json:"rate_multiplier"`         // 兼容旧字段：倍率（用于 Kiro credit 计算），默认 1.0
 	InputPrice            float64 `json:"input_price"`             // 普通输入价格（每百万 token）
@@ -62,6 +63,10 @@ type Model struct {
 	Note                  string  `json:"note"`
 	CreatedAt             string  `json:"created_at"`
 	UpdatedAt             string  `json:"updated_at"`
+	// SupportedReasoningEfforts 是模型实际支持的档位（按强度排序）；空表示未声明，使用 provider 默认表。
+	SupportedReasoningEfforts []string `json:"supported_reasoning_efforts"`
+	// DisableReasoningField 开启后不向上游发送任何推理字段，用于不接受 reasoning_effort/thinking 的后端。
+	DisableReasoningField bool `json:"disable_reasoning_field"`
 	// manager 在内存中规范化 refresh-token auth payload 后，使用这些请求级
 	// 字段保留 DB CAS 所需的原始值。
 	CodexStoredAPIKey       string `json:"-"`
@@ -75,7 +80,7 @@ var ErrCodexCredentialConflict = errors.New("codex credential CAS conflict")
 func (db *DB) GetModels() ([]Model, error) {
 	rows, err := db.conn.Query(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, thinking_style, supported_reasoning_efforts, disable_reasoning_field, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enable_opencode_session, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
@@ -89,10 +94,11 @@ func (db *DB) GetModels() ([]Model, error) {
 	var models []Model
 	for rows.Next() {
 		var m Model
-		var enabled, enableCont, enableOpenCode, disableAuto int
+		var enabled, enableCont, enableOpenCode, disableAuto, disableReasoning int
+		var supportedEfforts string
 		if err := rows.Scan(&m.ID, &m.Name, &m.ModelID,
 			&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-			&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
+			&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ThinkingStyle, &supportedEfforts, &disableReasoning, &m.ImageInputMode,
 			&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 			&enableCont, &enableOpenCode, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 			&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt); err != nil {
@@ -102,6 +108,8 @@ func (db *DB) GetModels() ([]Model, error) {
 		m.EnableContinuation = enableCont == 1
 		m.EnableOpenCodeSession = enableOpenCode == 1
 		m.DisableAutoSuffix = disableAuto == 1
+		m.SupportedReasoningEfforts = decodeSupportedReasoningEfforts(supportedEfforts)
+		m.DisableReasoningField = disableReasoning == 1
 		models = append(models, m)
 	}
 	return models, rows.Err()
@@ -109,17 +117,18 @@ func (db *DB) GetModels() ([]Model, error) {
 
 func (db *DB) GetModel(id string) (*Model, error) {
 	var m Model
-	var enabled, enableCont, enableOpenCode, disableAuto int
+	var enabled, enableCont, enableOpenCode, disableAuto, disableReasoning int
+	var supportedEfforts string
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, thinking_style, supported_reasoning_efforts, disable_reasoning_field, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enable_opencode_session, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE id = ?
 	`, id).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
+		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ThinkingStyle, &supportedEfforts, &disableReasoning, &m.ImageInputMode,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &enableOpenCode, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
@@ -130,23 +139,26 @@ func (db *DB) GetModel(id string) (*Model, error) {
 	m.EnableContinuation = enableCont == 1
 	m.EnableOpenCodeSession = enableOpenCode == 1
 	m.DisableAutoSuffix = disableAuto == 1
+	m.SupportedReasoningEfforts = decodeSupportedReasoningEfforts(supportedEfforts)
+	m.DisableReasoningField = disableReasoning == 1
 	return &m, nil
 }
 
 // FindByModelID 根据 modelId 查找模型配置（路由用）
 func (db *DB) FindByModelID(modelID string) (*Model, error) {
 	var m Model
-	var enabled, enableCont, enableOpenCode, disableAuto int
+	var enabled, enableCont, enableOpenCode, disableAuto, disableReasoning int
+	var supportedEfforts string
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, thinking_style, supported_reasoning_efforts, disable_reasoning_field, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enable_opencode_session, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE model_id = ? AND enabled = 1 LIMIT 1
 	`, modelID).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
+		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ThinkingStyle, &supportedEfforts, &disableReasoning, &m.ImageInputMode,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &enableOpenCode, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
@@ -157,23 +169,26 @@ func (db *DB) FindByModelID(modelID string) (*Model, error) {
 	m.EnableContinuation = enableCont == 1
 	m.EnableOpenCodeSession = enableOpenCode == 1
 	m.DisableAutoSuffix = disableAuto == 1
+	m.SupportedReasoningEfforts = decodeSupportedReasoningEfforts(supportedEfforts)
+	m.DisableReasoningField = disableReasoning == 1
 	return &m, nil
 }
 
 // FindModelByName 根据显示名称查找模型（用于唯一性校验）
 func (db *DB) FindModelByName(name string) (*Model, error) {
 	var m Model
-	var enabled, enableCont, enableOpenCode, disableAuto int
+	var enabled, enableCont, enableOpenCode, disableAuto, disableReasoning int
+	var supportedEfforts string
 	err := db.conn.QueryRow(`
 		SELECT id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode,
+		       endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, thinking_style, supported_reasoning_efforts, disable_reasoning_field, image_input_mode,
 		       rate_multiplier, input_price, output_price, cache_input_price, cache_output_price,
 		       enable_continuation, enable_opencode_session, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		       service_tier, enabled, sort_order, note, created_at, updated_at
 		FROM models WHERE name = ? LIMIT 1
 	`, name).Scan(&m.ID, &m.Name, &m.ModelID,
 		&m.Provider, &m.BaseURL, &m.APIKey, &m.RefreshToken, &m.ProxyURL, &m.Endpoint, &disableAuto,
-		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ImageInputMode,
+		&m.ContextWindow, &m.MaxTokens, &m.ReasoningEffort, &m.ThinkingStyle, &supportedEfforts, &disableReasoning, &m.ImageInputMode,
 		&m.RateMultiplier, &m.InputPrice, &m.OutputPrice, &m.CacheInputPrice, &m.CacheOutputPrice,
 		&enableCont, &enableOpenCode, &m.CodexEmail, &m.CodexPlanType, &m.CodexAccountID, &m.AccessTokenExpiresAt, &m.CodexUsageJSON,
 		&m.ServiceTier, &enabled, &m.SortOrder, &m.Note, &m.CreatedAt, &m.UpdatedAt)
@@ -184,6 +199,8 @@ func (db *DB) FindModelByName(name string) (*Model, error) {
 	m.EnableContinuation = enableCont == 1
 	m.EnableOpenCodeSession = enableOpenCode == 1
 	m.DisableAutoSuffix = disableAuto == 1
+	m.SupportedReasoningEfforts = decodeSupportedReasoningEfforts(supportedEfforts)
+	m.DisableReasoningField = disableReasoning == 1
 	return &m, nil
 }
 
@@ -220,14 +237,15 @@ func (db *DB) CreateModel(m *Model) error {
 	}
 	_, err = db.conn.Exec(`
 		INSERT INTO models (id, name, model_id, provider, base_url, api_key, refresh_token, proxy_url,
-		  endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, image_input_mode, rate_multiplier,
+		  endpoint, disable_auto_suffix, context_window, max_tokens, reasoning_effort, thinking_style, supported_reasoning_efforts, disable_reasoning_field, image_input_mode, rate_multiplier,
 		  input_price, output_price, cache_input_price, cache_output_price,
 		  enable_continuation, enable_opencode_session, codex_email, codex_plan_type, codex_account_id, access_token_expires_at, codex_usage_json,
 		  service_tier, enabled, sort_order, note, created_at, updated_at)
-		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.ID, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
-		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ImageInputMode,
+		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ThinkingStyle,
+		encodeSupportedReasoningEfforts(m.SupportedReasoningEfforts), boolToInt(m.DisableReasoningField), m.ImageInputMode,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, enableOpenCode, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
 		m.ServiceTier, enabled, m.SortOrder, m.Note, m.CreatedAt, m.UpdatedAt)
@@ -262,13 +280,14 @@ func (db *DB) UpdateModel(m *Model) error {
 	normalizeModelPrices(m)
 	res, err := db.conn.Exec(`
 		UPDATE models SET name=?, model_id=?, provider=?, base_url=?, api_key=?, refresh_token=?, proxy_url=?,
-		  endpoint=?, disable_auto_suffix=?, context_window=?, max_tokens=?, reasoning_effort=?, image_input_mode=?,
+		  endpoint=?, disable_auto_suffix=?, context_window=?, max_tokens=?, reasoning_effort=?, thinking_style=?, supported_reasoning_efforts=?, disable_reasoning_field=?, image_input_mode=?,
 		  rate_multiplier=?, input_price=?, output_price=?, cache_input_price=?, cache_output_price=?,
 		  enable_continuation=?, enable_opencode_session=?, codex_email=?, codex_plan_type=?, codex_account_id=?, access_token_expires_at=?, codex_usage_json=?,
 		  service_tier=?, enabled=?, sort_order=?, note=?, updated_at=?
 		WHERE id=?
 	`, m.Name, m.ModelID, m.Provider, m.BaseURL, m.APIKey, m.RefreshToken, m.ProxyURL,
-		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ImageInputMode,
+		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ThinkingStyle,
+		encodeSupportedReasoningEfforts(m.SupportedReasoningEfforts), boolToInt(m.DisableReasoningField), m.ImageInputMode,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		enableCont, enableOpenCode, m.CodexEmail, m.CodexPlanType, m.CodexAccountID, m.AccessTokenExpiresAt, m.CodexUsageJSON,
 		m.ServiceTier, enabled, m.SortOrder, m.Note, m.UpdatedAt, m.ID)
@@ -306,12 +325,13 @@ func (db *DB) UpdateModelPreserveCodexCredential(m *Model) error {
 	normalizeModelPrices(m)
 	result, err := db.conn.Exec(`
 		UPDATE models SET name=?, model_id=?, provider=?, base_url=?, proxy_url=?,
-		  endpoint=?, disable_auto_suffix=?, context_window=?, max_tokens=?, reasoning_effort=?, image_input_mode=?,
+		  endpoint=?, disable_auto_suffix=?, context_window=?, max_tokens=?, reasoning_effort=?, thinking_style=?, supported_reasoning_efforts=?, disable_reasoning_field=?, image_input_mode=?,
 		  rate_multiplier=?, input_price=?, output_price=?, cache_input_price=?, cache_output_price=?,
 		  enable_continuation=?, enable_opencode_session=?, service_tier=?, enabled=?, sort_order=?, note=?, updated_at=?
 		WHERE id=? AND provider='codex'
 	`, m.Name, m.ModelID, m.Provider, m.BaseURL, m.ProxyURL,
-		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ImageInputMode,
+		m.Endpoint, boolToInt(m.DisableAutoSuffix), m.ContextWindow, m.MaxTokens, m.ReasoningEffort, m.ThinkingStyle,
+		encodeSupportedReasoningEfforts(m.SupportedReasoningEfforts), boolToInt(m.DisableReasoningField), m.ImageInputMode,
 		m.RateMultiplier, m.InputPrice, m.OutputPrice, m.CacheInputPrice, m.CacheOutputPrice,
 		boolToInt(m.EnableContinuation), boolToInt(m.EnableOpenCodeSession), m.ServiceTier, boolToInt(m.Enabled), m.SortOrder, m.Note, m.UpdatedAt, m.ID)
 	if err != nil {

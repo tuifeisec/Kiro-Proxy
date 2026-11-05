@@ -8,6 +8,14 @@ import IconRefresh from '../icons/IconRefresh.vue'
 import IconSearch from '../icons/IconSearch.vue'
 import IconCheck from '../icons/IconCheck.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import {
+  PROVIDER_THINKING_STYLES,
+  describeReasoningEffort,
+  modelEffortOptions,
+  modelReasoningEfforts,
+  providerReasoningEfforts,
+  sortReasoningEfforts,
+} from '../../utils/reasoningEffort.js'
 
 const props = defineProps({
   model: { type: Object, default: null },
@@ -31,6 +39,9 @@ const defaultForm = () => ({
   context_window: 0,
   max_tokens: 0,
   reasoning_effort: '',
+  thinking_style: '',
+  supported_reasoning_efforts: [],
+  disable_reasoning_field: false,
   image_input_mode: 'auto',
   service_tier: '',
   rate_multiplier: 1.0,
@@ -70,6 +81,8 @@ watch(() => props.visible, (val) => {
     loadingModel.value = true
     if (props.model) {
       form.value = { ...defaultForm(), ...props.model }
+      form.value.supported_reasoning_efforts = sortReasoningEfforts(props.model.supported_reasoning_efforts)
+      form.value.thinking_style = props.model.thinking_style || ''
     } else {
       form.value = defaultForm()
     }
@@ -173,7 +186,21 @@ watch(() => form.value.provider, (val) => {
     form.value.endpoint = options[0]
   }
   applyDefaultPrices(val)
+  // 换 provider 后只保留新 provider 可表达的支持档位与思考形态。
+  const expressible = providerReasoningEfforts(val)
+  form.value.supported_reasoning_efforts = form.value.supported_reasoning_efforts.filter((effort) => expressible.includes(effort))
+  if (!thinkingStyleOptions.value.some((opt) => opt.value === form.value.thinking_style)) {
+    form.value.thinking_style = ''
+  }
 })
+
+// 支持档位变化后，默认档位若已不在有效档位中则清空，避免保存被后端拒绝。
+watch(() => [form.value.provider, form.value.supported_reasoning_efforts], () => {
+  if (loadingModel.value) return
+  if (form.value.reasoning_effort && !modelReasoningEfforts(form.value).includes(form.value.reasoning_effort)) {
+    form.value.reasoning_effort = ''
+  }
+}, { deep: true })
 
 watch(
   () => [form.value.provider, form.value.base_url, form.value.api_key, form.value.proxy_url],
@@ -275,18 +302,30 @@ function focusUpstreamItem(index) {
   focusedUpstreamIndex.value = index
 }
 
-const reasoningOptions = computed(() => {
-  const options = [
-    { value: '', label: '自动' },
-    { value: 'low', label: '低' },
-    { value: 'medium', label: '中' },
-    { value: 'high', label: '高' }
-  ]
-  if (form.value.provider === 'openai' || form.value.provider === 'codex') {
-    options.push({ value: 'xhigh', label: '极高' })
-  }
-  return options
-})
+// 默认档位选项由模型有效档位派生：声明了支持档位则用声明值，否则用 provider 默认表。
+const reasoningOptions = computed(() => modelEffortOptions(form.value).map((value) => ({
+  value,
+  label: value ? describeReasoningEffort(value) : '自动'
+})))
+
+// Tailwind 需要字面量类名，按选项数量映射列数。
+const REASONING_GRID_COLUMNS = { 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5', 6: 'grid-cols-6', 7: 'grid-cols-7' }
+const reasoningGridClass = computed(() => REASONING_GRID_COLUMNS[reasoningOptions.value.length] || 'grid-cols-7')
+
+const supportedReasoningChoices = computed(() => providerReasoningEfforts(form.value.provider))
+
+// 加载的旧配置若默认档位不在有效档位中，提示用户修正（后端保存时会拒绝）。
+const reasoningEffortOutOfRange = computed(() => Boolean(form.value.reasoning_effort)
+  && !modelReasoningEfforts(form.value).includes(form.value.reasoning_effort))
+
+const thinkingStyleOptions = computed(() => PROVIDER_THINKING_STYLES[form.value.provider] || [])
+
+function toggleSupportedReasoningEffort(effort) {
+  const current = new Set(form.value.supported_reasoning_efforts)
+  if (current.has(effort)) current.delete(effort)
+  else current.add(effort)
+  form.value.supported_reasoning_efforts = sortReasoningEfforts([...current])
+}
 
 const imageInputOptions = [
   { value: 'auto', label: '自动' },
@@ -620,7 +659,7 @@ async function handleExchangeOAuth() {
 
           <section class="mt-2.5 rounded-lg border border-line bg-surface p-2.5">
             <h3 class="mb-1 text-sm font-semibold text-ink">模型能力参数</h3>
-            <div class="grid grid-cols-1 items-start gap-2.5 sm:grid-cols-[minmax(180px,1.45fr)_minmax(104px,.78fr)_minmax(104px,.78fr)]">
+            <div class="grid grid-cols-1 items-start gap-2.5 sm:grid-cols-[minmax(240px,1.6fr)_minmax(104px,.7fr)_minmax(104px,.7fr)]">
               <div>
                 <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink">
                   推理强度
@@ -631,7 +670,7 @@ async function handleExchangeOAuth() {
                     </span>
                   </span>
                 </label>
-                <div class="grid h-8 overflow-hidden rounded-md border border-line bg-surface-2" :class="reasoningOptions.length === 5 ? 'grid-cols-5' : 'grid-cols-4'">
+                <div class="grid h-8 overflow-hidden rounded-md border border-line bg-surface-2" :class="reasoningGridClass">
                   <button
                     v-for="opt in reasoningOptions"
                     :key="opt.value"
@@ -641,6 +680,7 @@ async function handleExchangeOAuth() {
                     @click="form.reasoning_effort = opt.value"
                   >{{ opt.label }}</button>
                 </div>
+                <p v-if="reasoningEffortOutOfRange" class="mt-1 text-[11px] leading-4 text-danger">当前默认档位 {{ form.reasoning_effort }} 不在模型有效档位中，请重新选择</p>
               </div>
 
               <div>
@@ -672,6 +712,65 @@ async function handleExchangeOAuth() {
                 <input v-model.number="form.max_tokens" type="number" min="0"
                   class="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink focus:border-primary-tint-line-strong focus:outline-none focus:ring-2 focus:ring-primary-ring"
                   placeholder="4096" />
+              </div>
+            </div>
+
+            <div class="mt-2.5 grid grid-cols-1 items-start gap-2.5 border-t border-line-2 pt-2.5" :class="thinkingStyleOptions.length ? 'sm:grid-cols-[minmax(0,1.3fr)_minmax(150px,.7fr)_minmax(150px,.8fr)]' : 'sm:grid-cols-[minmax(0,1.3fr)_minmax(150px,.8fr)]'">
+              <div>
+                <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink">
+                  支持的思考档位
+                  <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-line text-[9px] font-normal leading-none text-ink-4">
+                    i
+                    <span class="pointer-events-none absolute bottom-5 left-0 z-20 w-56 rounded-md border border-line bg-tooltip px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-tooltip-text shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-[var(--dur-fast)] delay-0 group-hover:delay-[250ms]">
+                      该模型实际支持的档位；未选择时使用 Provider 默认表。请求、分组或 Auto 要求的档位不在其中时，按强度就近映射后下发
+                    </span>
+                  </span>
+                </label>
+                <div class="flex flex-wrap gap-1.5">
+                  <button
+                    v-for="effort in supportedReasoningChoices"
+                    :key="effort"
+                    type="button"
+                    :aria-pressed="form.supported_reasoning_efforts.includes(effort)"
+                    class="h-7 rounded-md border px-2 text-xs leading-none"
+                    :class="form.supported_reasoning_efforts.includes(effort) ? 'border-primary-tint-line-strong bg-primary-tint text-primary-fg' : 'border-line bg-surface-2 text-ink-2 hover:bg-surface'"
+                    @click="toggleSupportedReasoningEffort(effort)"
+                  >{{ effort }}</button>
+                </div>
+                <p class="mt-1 text-[11px] leading-4 text-ink-4">{{ form.supported_reasoning_efforts.length ? '已声明：' + form.supported_reasoning_efforts.join(' / ') : '未声明，使用 Provider 默认表' }}</p>
+              </div>
+
+              <div v-if="thinkingStyleOptions.length">
+                <label class="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink">
+                  思考形态
+                  <span class="group relative inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-line text-[9px] font-normal leading-none text-ink-4">
+                    i
+                    <span class="pointer-events-none absolute bottom-5 left-0 z-20 w-52 rounded-md border border-line bg-tooltip px-2 py-1.5 text-left text-[11px] font-normal leading-4 text-tooltip-text shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-[var(--dur-fast)] delay-0 group-hover:delay-[250ms]">
+                      自动表示按 Provider 与模型名判断；中转改名后无法判断时可显式指定
+                    </span>
+                  </span>
+                </label>
+                <div class="grid h-8 grid-cols-3 overflow-hidden rounded-md border border-line bg-surface-2">
+                  <button
+                    v-for="opt in thinkingStyleOptions"
+                    :key="opt.value"
+                    type="button"
+                    class="border-r border-line text-xs leading-none last:border-r-0"
+                    :class="form.thinking_style === opt.value ? 'bg-primary-tint text-primary-fg ring-1 ring-inset ring-primary-tint-line-strong' : 'text-ink-2 hover:bg-surface'"
+                    @click="form.thinking_style = opt.value"
+                  >{{ opt.label }}</button>
+                </div>
+              </div>
+
+              <div class="flex min-h-[44px] items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-xs font-medium text-ink">不发送推理字段</div>
+                  <p class="mt-1 text-[11px] leading-4 text-ink-4">后端不接受 reasoning_effort / thinking 时开启，任何档位都不下发</p>
+                </div>
+                <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                  <input type="checkbox" v-model="form.disable_reasoning_field" aria-label="不发送推理字段" class="peer sr-only" />
+                  <div class="h-5 w-9 rounded-full bg-hover-strong after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-line-strong after:bg-surface after:transition-transform after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
+                </label>
               </div>
             </div>
 

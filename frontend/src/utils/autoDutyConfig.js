@@ -1,3 +1,5 @@
+import { modelEffortOptions } from './reasoningEffort.js'
+
 export const AUTO_ROUTING_SETTINGS_KEY = 'auto_routing_config'
 
 export const AUTO_DUTY_OPTIONS = [
@@ -292,16 +294,6 @@ export function migrateAutoDutyConfig(legacy, layout = 'standard') {
   return config
 }
 
-export function providerEffortOptions(provider) {
-  const options = {
-    openai: ['', 'none', 'low', 'medium', 'high', 'xhigh', 'max'],
-    codex: ['', 'none', 'low', 'medium', 'high', 'xhigh', 'max'],
-    anthropic: ['', 'none', 'low', 'medium', 'high'],
-    gemini: ['', 'low', 'medium', 'high'],
-  }
-  return options[String(provider || '').toLowerCase()] || ['']
-}
-
 export function resolveAutoTarget(targetId, models = [], groups = []) {
   const model = (Array.isArray(models) ? models : []).find((item) => item.id === targetId)
   const group = (Array.isArray(groups) ? groups : []).find((item) => item.id === targetId)
@@ -340,13 +332,14 @@ export function autoTargetGroupCandidates(targetId, models = [], groups = []) {
 
 export function autoTargetEffortOptions(targetId, models = [], groups = []) {
   const target = resolveAutoTarget(targetId, models, groups)
-  if (target.kind === 'model') return providerEffortOptions(target.model.provider)
+  if (target.kind === 'model') return modelEffortOptions(target.model)
   if (target.kind !== 'group') return ['']
 
+  // 分组目标只提供所有候选有效档位的交集，与后端 Auto 校验逐个候选的规则一致。
   const candidates = autoTargetGroupCandidates(targetId, models, groups)
   if (!candidates.length) return ['']
-  const optionsByCandidate = candidates.map((model) => new Set(providerEffortOptions(model.provider)))
-  return providerEffortOptions(candidates[0].provider).filter((effort) => (
+  const optionsByCandidate = candidates.map((model) => new Set(modelEffortOptions(model)))
+  return modelEffortOptions(candidates[0]).filter((effort) => (
     optionsByCandidate.every((options) => options.has(effort))
   ))
 }
@@ -427,7 +420,7 @@ export function autoDutyValidationIssues(config, models, groups = []) {
     const allowed = autoTargetEffortOptions(id, models, groups)
     if (effort && !allowed.includes(String(effort).trim().toLowerCase())) {
       const providers = [...new Set(candidates.map((model) => model.provider || '未知'))].join('/')
-      addTargetIssue('effort_unsupported', `${label}的思考等级不受本地 ${providers} Provider 表达。`, effort)
+      addTargetIssue('effort_unsupported', `${label}的思考等级不在目标模型（${providers}）的有效档位中。`, effort)
     }
   }
 

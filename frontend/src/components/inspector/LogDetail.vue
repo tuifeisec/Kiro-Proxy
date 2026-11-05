@@ -132,6 +132,10 @@ const prefixAuditLabels = {
   input: '上游输入项数量',
   tools: '工具数量',
   reasoning_effort: '推理强度',
+  reasoning_effort_requested: '请求档位（按优先级得到）',
+  reasoning_effort_wire: '下发档位（实际发送给上游）',
+  reasoning_effort_source: '档位来源',
+  reasoning_effort_field_disabled: '模型禁用推理字段',
   stream: '是否流式请求',
   store: '是否存储响应',
   prompt_cache_key: 'Prompt Cache Key',
@@ -174,6 +178,7 @@ function displayValue(value) {
 }
 
 const fieldGroupMeta = {
+  reasoning: { title: '思考档位', tone: 'amber' },
   audit: { title: 'Prefix Audit', tone: 'blue' },
   request: { title: '请求 / 抓包', tone: 'amber' },
   body: { title: 'Body 摘要', tone: 'violet' },
@@ -184,7 +189,7 @@ const fieldGroupMeta = {
   token: { title: 'Token 统计', tone: 'purple' }
 }
 
-const fieldGroupOrder = ['audit', 'request', 'body', 'upstreamRequest', 'upstreamResponse', 'kiro', 'usage', 'token']
+const fieldGroupOrder = ['reasoning', 'audit', 'request', 'body', 'upstreamRequest', 'upstreamResponse', 'kiro', 'usage', 'token']
 
 function inferMessageGroup(key) {
   if (['in', 'out', 'cache_read'].includes(key)) return 'token'
@@ -307,6 +312,34 @@ function parseDetailFields(obj) {
   return fields
 }
 
+const REASONING_SOURCE_LABELS = { auto: 'Auto 固定', request: '请求', group: '分组', model: '模型默认', classifier: '分类器' }
+
+// 档位决策记录在日志 metadata 中；wire 为空表示未向上游发送推理字段。
+const reasoningDecision = computed(() => {
+  const meta = props.entry?.metadata
+  if (!meta || typeof meta !== 'object' || !('reasoning_effort_wire' in meta)) return null
+  const requested = String(meta.reasoning_effort_requested || '')
+  const wire = String(meta.reasoning_effort_wire || '')
+  const disabled = meta.reasoning_effort_field_disabled === true
+  return {
+    requested,
+    wire,
+    disabled,
+    source: String(meta.reasoning_effort_source || ''),
+    adjusted: requested !== wire,
+  }
+})
+
+function reasoningDecisionFields(decision) {
+  if (!decision) return []
+  const wireText = decision.wire || (decision.disabled ? '不发送（模型禁用推理字段）' : '不发送')
+  return [
+    { group: 'reasoning', key: 'reasoning_effort_requested', value: decision.requested || '(空)', label: prefixAuditLabels.reasoning_effort_requested },
+    { group: 'reasoning', key: 'reasoning_effort_wire', value: wireText, label: prefixAuditLabels.reasoning_effort_wire },
+    { group: 'reasoning', key: 'reasoning_effort_source', value: REASONING_SOURCE_LABELS[decision.source] || decision.source || '(空)', label: prefixAuditLabels.reasoning_effort_source },
+  ]
+}
+
 const parsedFieldGroups = computed(() => {
   const message = props.entry?.message || ''
   const detail = props.entry?.detail || ''
@@ -315,6 +348,7 @@ const parsedFieldGroups = computed(() => {
     ? parseKeyValueFields(auditMatch[1], { whitelist: true, group: 'audit' })
     : parseKeyValueFields(message, { whitelist: true })
 
+  fields.push(...reasoningDecisionFields(reasoningDecision.value))
   fields.push(...parseDetailFields(detailObject.value))
 
   const seen = new Set()
@@ -370,6 +404,11 @@ const parsedFieldCount = computed(() => parsedFieldGroups.value.reduce((total, g
             }">{{ entry.level }}</b></span>
           <span>分类：<b class="font-normal text-ink-2">{{ entry.category }}</b></span>
           <span class="min-w-0 flex-1 truncate">消息：<b class="font-normal text-ink-2">{{ entry.message }}</b></span>
+        </div>
+        <div v-if="reasoningDecision?.adjusted" class="mt-2 rounded-md border border-warning-tint-line bg-warning-tint px-2.5 py-1.5 text-[11px] text-warning-fg">
+          思考档位已调整：请求 <b class="font-mono">{{ reasoningDecision.requested || '(空)' }}</b> → 下发
+          <b class="font-mono">{{ reasoningDecision.wire || (reasoningDecision.disabled ? '不发送（模型禁用推理字段）' : '不发送') }}</b>
+          <span v-if="reasoningDecision.source">（来源：{{ REASONING_SOURCE_LABELS[reasoningDecision.source] || reasoningDecision.source }}）</span>
         </div>
       </div>
 

@@ -136,12 +136,15 @@ func (r *requestUsageRecorder) markFirstByte(at time.Time) {
 	r.firstByte.CompareAndSwap(0, at.UnixNano())
 }
 
-func (r *requestUsageRecorder) setReasoningEffort(value string) {
+// setReasoningEffortDecision 记录请求档位、来源和实际下发档位（reasoning_effort 列）。
+func (r *requestUsageRecorder) setReasoningEffortDecision(decision reasoningEffortDecision) {
 	if r == nil {
 		return
 	}
 	r.itemMu.Lock()
-	r.item.ReasoningEffort = value
+	r.item.ReasoningEffort = decision.Wire
+	r.item.RequestedReasoningEffort = decision.Requested
+	r.item.ReasoningEffortSource = string(decision.Source)
 	r.itemMu.Unlock()
 }
 

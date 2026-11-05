@@ -57,7 +57,9 @@ type RequestUsage struct {
 	ReusedConnection           bool     `json:"reused_connection"`
 	WireAttemptCount           int      `json:"wire_attempt_count"`
 	TransportFallbackCount     int      `json:"transport_fallback_count"`
-	ReasoningEffort            string   `json:"reasoning_effort,omitempty"`
+	ReasoningEffort            string   `json:"reasoning_effort,omitempty"` // 实际下发给上游的档位；空表示未发送推理字段
+	RequestedReasoningEffort   string   `json:"requested_reasoning_effort,omitempty"`
+	ReasoningEffortSource      string   `json:"reasoning_effort_source,omitempty"`
 	ServiceTier                string   `json:"service_tier,omitempty"`
 	RequestedModel             string   `json:"requested_model,omitempty"`
 	RouteGroupID               string   `json:"route_group_id,omitempty"`
@@ -194,7 +196,7 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 		item.CacheReadCost, item.CacheWriteCost, item.ConversionMS, item.AuditMS, item.SessionReadMS, item.AuthMS, item.DNSMS,
 		item.ConnectMS, item.TLSMS, item.RequestSendMS, item.UpstreamWaitMS,
 		item.ResponseHeaderMS, item.StreamWaitMS, item.RetryCount, boolToInt(item.ReusedConnection), item.WireAttemptCount, item.TransportFallbackCount, item.ReasoningEffort,
-		item.ServiceTier, item.RequestedModel, item.RouteGroupID, item.SelectedModelConfigID,
+		item.RequestedReasoningEffort, item.ReasoningEffortSource, item.ServiceTier, item.RequestedModel, item.RouteGroupID, item.SelectedModelConfigID,
 		item.FailoverCount, item.DispatchReason, item.FailoverReason, item.CapacityWaitMS, item.ErrorMessage,
 	}
 	query := `
@@ -206,7 +208,8 @@ func (db *DB) InsertRequestUsage(item *RequestUsage) error {
 			max_content_gap_ms, content_measured, content_measurement_complete, duration_ms, credits, input_cost, output_cost,
 			cache_read_cost, cache_write_cost, conversion_ms, audit_ms, session_read_ms, auth_ms, dns_ms, connect_ms,
 			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
-			retry_count, reused_connection, wire_attempt_count, transport_fallback_count, reasoning_effort, service_tier, requested_model,
+			retry_count, reused_connection, wire_attempt_count, transport_fallback_count, reasoning_effort,
+			requested_reasoning_effort, reasoning_effort_source, service_tier, requested_model,
 			route_group_id, selected_model_config_id, failover_count, dispatch_reason,
 			failover_reason, capacity_wait_ms, error_message
 		) VALUES (` + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + `)`
@@ -293,7 +296,8 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 			max_content_gap_ms, content_measured, content_measurement_complete, duration_ms, credits, input_cost, output_cost,
 			cache_read_cost, cache_write_cost, conversion_ms, audit_ms, session_read_ms, auth_ms, dns_ms, connect_ms,
 			tls_ms, request_send_ms, upstream_wait_ms, response_header_ms, stream_wait_ms,
-			retry_count, reused_connection, wire_attempt_count, transport_fallback_count, reasoning_effort, service_tier, requested_model,
+			retry_count, reused_connection, wire_attempt_count, transport_fallback_count, reasoning_effort,
+			requested_reasoning_effort, reasoning_effort_source, service_tier, requested_model,
 			route_group_id, selected_model_config_id, failover_count, dispatch_reason,
 			failover_reason, capacity_wait_ms, error_message
 		FROM request_usage`+where+` ORDER BY julianday(created_at) DESC, id DESC LIMIT ? OFFSET ?`, append(args, pageSize, offset)...)
@@ -315,7 +319,8 @@ func (db *DB) QueryRequestUsagePage(query RequestUsageQuery) (RequestUsagePage, 
 			&item.InputCost, &item.OutputCost, &item.CacheReadCost, &item.CacheWriteCost,
 			&item.ConversionMS, &item.AuditMS, &item.SessionReadMS, &item.AuthMS, &item.DNSMS, &item.ConnectMS, &item.TLSMS,
 			&item.RequestSendMS, &item.UpstreamWaitMS, &item.ResponseHeaderMS,
-			&item.StreamWaitMS, &item.RetryCount, &reusedConnection, &item.WireAttemptCount, &item.TransportFallbackCount, &item.ReasoningEffort, &item.ServiceTier,
+			&item.StreamWaitMS, &item.RetryCount, &reusedConnection, &item.WireAttemptCount, &item.TransportFallbackCount, &item.ReasoningEffort,
+			&item.RequestedReasoningEffort, &item.ReasoningEffortSource, &item.ServiceTier,
 			&item.RequestedModel, &item.RouteGroupID, &item.SelectedModelConfigID, &item.FailoverCount,
 			&item.DispatchReason, &item.FailoverReason, &item.CapacityWaitMS, &item.ErrorMessage); err != nil {
 			return RequestUsagePage{}, err
