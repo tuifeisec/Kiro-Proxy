@@ -105,7 +105,7 @@ func knownRawResponsesErrorCode(value string) bool {
 
 func knownRawResponsesErrorParam(value string) bool {
 	switch value {
-	case "metadata", "model", "input", "instructions", "tools", "tool_choice", "reasoning", "reasoning.effort", "store", "stream", "max_output_tokens", "temperature", "top_p", "text", "text.format", "previous_response_id", "conversation", "prompt_cache_key":
+	case "metadata", "model", "input", "instructions", "tools", "tool_choice", "reasoning", "reasoning.effort", "store", "stream", "max_output_tokens", "temperature", "top_p", "text", "text.format", "previous_response_id", "conversation", "prompt_cache_key", "thinking", "output_config", "max_tokens", "system":
 		return true
 	}
 	return false
