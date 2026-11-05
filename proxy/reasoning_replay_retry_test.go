@@ -166,3 +166,45 @@ func TestLegacyReasoningTraceRowReplaysAsSingleThinkingBlock(t *testing.T) {
 		t.Fatalf("legacy trace not replayed: %s", body)
 	}
 }
+
+// 推理回放重建的请求也要带已学兼容形态：模型已学会去掉 thinking.display 时，
+// 回放请求若重新带上 display 会再吃一次 400。
+func TestAnthropicReasoningReplayKeepsLearnedCompatShape(t *testing.T) {
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		if len(bodies) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, deepSeekAnthropicThinkingBack)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, anthropicDoneStream)
+	}))
+	defer server.Close()
+
+	forwarder, db, logger := newReasoningTestForwarder(t)
+	pre := anthropicToolTurnPre(db, "conv-anthropic-replay-learned")
+	pre.Conv.ReasoningEffort = "high"
+	model := &store.Model{ID: "config-relay-adaptive", Provider: "anthropic", BaseURL: server.URL, Endpoint: "/v1/messages",
+		ModelID: "relay-claude-opus-4-7", APIKey: "test", UpdatedAt: "t1"}
+	forwarder.caps.observe(model, compatProtocolAnthropic, capabilityThinkingDisplay, compatThinkingDisplayValue, "display refused", time.Now())
+
+	resp, _, err := forwarder.forwardCandidate(context.Background(), pre, model, logger, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(bodies) != 2 {
+		t.Fatalf("status=%d calls=%d", resp.StatusCode, len(bodies))
+	}
+	for index, body := range bodies {
+		if !strings.Contains(body, `"thinking":{"type":"adaptive"`) || strings.Contains(body, `"display"`) {
+			t.Fatalf("request %d lost the learned shape (display must stay removed): %s", index+1, body)
+		}
+	}
+	if !strings.Contains(bodies[1], `"type":"thinking","thinking":" "`) {
+		t.Fatalf("replay did not add placeholder thinking: %s", bodies[1])
+	}
+}

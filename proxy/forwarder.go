@@ -1278,6 +1278,10 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 				if convertErr != nil {
 					return nil, contResult, fmt.Errorf("构建 Anthropic 推理回放兼容请求失败: %w", convertErr)
 				}
+				// 重建的请求同样要带已学兼容形态：既用于与已发送 body 比较，也避免重放时再吃同一个 400
+				if replayBody, convertErr = compat.applyLearned(replayBody); convertErr != nil {
+					return nil, contResult, convertErr
+				}
 				if bytes.Equal(replayBody, upstreamBody) {
 					logger.Warn("forwarder", "Anthropic 上游要求回传 thinking，但每个工具调用轮已带 thinking，不再重放")
 					resp.Body = io.NopCloser(bytes.NewReader(body))
@@ -1303,6 +1307,10 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 				chatBody, chatURL, convertErr := convertRequestWithProtocol(pre, model, chatHistory, responsesRequest)
 				if convertErr != nil {
 					return nil, contResult, fmt.Errorf("构建推理协议兼容请求失败: %w", convertErr)
+				}
+				// 重放固定走 Chat 协议，按 Chat 协议的已学形态改写（原请求可能是 Responses）
+				if chatBody, convertErr = f.newKiroCompatSession(pre, model, chatURL, logger, true).applyLearned(chatBody); convertErr != nil {
+					return nil, contResult, convertErr
 				}
 				if activeResponses {
 					logger.Warn("forwarder", "Responses 推理历史被上游拒绝，使用 Chat 协议重放一次")

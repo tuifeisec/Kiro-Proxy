@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"log"
 	"strings"
 
 	"kiro-proxy/converter"
@@ -45,11 +46,15 @@ func compatWithThinkingEnabled(target compatTarget, body []byte) ([]byte, bool, 
 		if err != nil {
 			return nil, false, err
 		}
-		raised, err := json.Marshal(params.Thinking.BudgetTokens + max(maxTokens, 1))
+		raisedTokens := params.Thinking.BudgetTokens + max(maxTokens, 1)
+		raised, err := json.Marshal(raisedTokens)
 		if err != nil {
 			return nil, false, err
 		}
 		root["max_tokens"] = raised
+		// 上游明确拒绝关闭思考后才会走到这里；抬高量正好是最低思考预算，原回复长度不变
+		log.Printf("[compat] 模型 %s 不接受关闭思考，改用 budget_tokens=%d，max_tokens 由 %d 抬高为 %d",
+			target.modelID, params.Thinking.BudgetTokens, maxTokens, raisedTokens)
 	}
 	return compatSetThinkingParams(root, params)
 }
