@@ -360,8 +360,10 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 	responseID, model := "resp_anthropic", ""
 	created, terminal := false, false
 	toolIDs := make(map[int]string)
+	toolNames := make(map[int]string)
 	toolArguments := make(map[int]*strings.Builder)
 	var usage localCompatUsage
+	stopReason := "end_turn"
 	write := func(event string, payload interface{}) error {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
@@ -428,6 +430,7 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 			if block.Type == "tool_use" {
 				idx := rawIndex(event)
 				toolIDs[idx] = block.ID
+				toolNames[idx] = block.Name
 				toolArguments[idx] = &strings.Builder{}
 				if err := write("response.output_item.added", map[string]interface{}{"type": "response.output_item.added", "item": map[string]interface{}{"type": "function_call", "id": block.ID, "call_id": block.ID, "name": block.Name, "arguments": "", "status": "in_progress"}}); err != nil {
 					return err
@@ -439,6 +442,7 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
 				Thinking    string `json:"thinking"`
+				StopReason  string `json:"stop_reason"`
 			}
 			_ = json.Unmarshal(event["delta"], &delta)
 			idx := rawIndex(event)
@@ -465,8 +469,8 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 				StopReason string `json:"stop_reason"`
 			}
 			_ = json.Unmarshal(event["delta"], &delta)
-			if delta.StopReason == "max_tokens" {
-				// The terminal event remains response.completed with incomplete status below.
+			if delta.StopReason != "" {
+				stopReason = delta.StopReason
 			}
 		case "message_stop":
 			for idx, id := range toolIDs {
@@ -479,7 +483,11 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 				}
 			}
 			terminal = true
-			if err := write("response.completed", map[string]interface{}{"type": "response.completed", "response": map[string]interface{}{"id": responseID, "object": "response", "status": "completed", "model": model, "usage": responsesUsage(usage)}}); err != nil {
+			status := "completed"
+			if stopReason == "max_tokens" {
+				status = "incomplete"
+			}
+			if err := write("response.completed", map[string]interface{}{"type": "response.completed", "response": map[string]interface{}{"id": responseID, "object": "response", "status": status, "model": model, "usage": responsesUsage(usage)}}); err != nil {
 				return err
 			}
 		}
