@@ -248,7 +248,7 @@ func TestAdaptRawChatResponseRejectsJSONFailureEnvelope(t *testing.T) {
 
 func TestAdaptRawChatResponseStreamsLazilyWithUsageAndToolEvents(t *testing.T) {
 	stream := "data: {\"id\":\"chatcmpl_2\",\"model\":\"configured-model\",\"choices\":[{\"delta\":{\"content\":\"hello\",\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"q\\\":\"}}]}}]}\n\n" +
-		"data: {\"id\":\"chatcmpl_2\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"x\\\"}\"}}],\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl_2\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"x\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
 		"data: {\"id\":\"chatcmpl_2\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":3,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\n" +
 		"data: [DONE]\n\n"
 	source := &countingReadCloser{reader: strings.NewReader(stream)}

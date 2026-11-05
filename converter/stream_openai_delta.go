@@ -71,6 +71,13 @@ func (d openAIDelta) decodeText() (openAIDeltaText, error) {
 	return out, nil
 }
 
+// DecodeOpenAIDeltaContent 供代理层的 Chat 流转换复用同一 content 解码规则：
+// 返回正文文本；形态无法识别时返回错误，调用方应终止流而不是丢弃该 chunk。
+func DecodeOpenAIDeltaContent(raw json.RawMessage) (string, error) {
+	text, _, err := decodeOpenAIDeltaContent(raw)
+	return text, err
+}
+
 // decodeOpenAIDeltaContent 接受字符串或分段数组（Mistral 等），只取 text 片段。
 // thinking 等其他片段跳过并上报类型：它们的回放形态各家不同，混入推理字段会被部分上游拒绝。
 func decodeOpenAIDeltaContent(raw json.RawMessage) (string, []string, error) {

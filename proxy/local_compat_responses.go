@@ -681,7 +681,7 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 				FinishReason string `json:"finish_reason"`
 				Delta        struct {
 					chatReasoningDelta
-					Content   string `json:"content"`
+					Content   json.RawMessage `json:"content"`
 					ToolCalls []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
@@ -695,8 +695,21 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 			Error json.RawMessage `json:"error"`
 			Usage json.RawMessage `json:"usage"`
 		}
-		if json.Unmarshal([]byte(data), &chunk) != nil {
-			continue
+		// 无法解析的 chunk 会连同其中的工具调用与 finish_reason 一起丢失，按协议错误终止
+		decodeErr := json.Unmarshal([]byte(data), &chunk)
+		content := ""
+		if decodeErr == nil && len(chunk.Choices) > 0 {
+			content, decodeErr = converter.DecodeOpenAIDeltaContent(chunk.Choices[0].Delta.Content)
+		}
+		if decodeErr != nil {
+			if err := ensureCreated(); err != nil {
+				return usage, responseID, nil, err
+			}
+			err := fmt.Errorf("%w: 无法解析上游 Chat 流事件: %v", errLocalCompatStreamProtocol, decodeErr)
+			if writeErr := writeEvent("response.failed", responsesStreamFailure(responseID, model, err)); writeErr != nil {
+				return usage, responseID, nil, writeErr
+			}
+			return usage, responseID, nil, err
 		}
 		mergeLocalCompatUsage(&usage, localCompatChat, []byte(data))
 		if chunk.ID != "" {
@@ -722,18 +735,18 @@ func copyChatStreamAsResponsesWithState(ctx context.Context, w http.ResponseWrit
 				}
 			}
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+		if content != "" {
 			if err := reasoning.close(writeEvent); err != nil {
 				return usage, responseID, nil, err
 			}
-			delta := chunk.Choices[0].Delta.Content
+			delta := content
 			text.WriteString(delta)
 			if err := writeEvent("response.output_text.delta", map[string]interface{}{"type": "response.output_text.delta", "delta": delta}); err != nil {
 				return usage, responseID, nil, err
 			}
 		}
 		if len(chunk.Choices) > 0 {
-			choiceSeen = choiceSeen || chunk.Choices[0].FinishReason != "" || chunk.Choices[0].Delta.Content != "" || len(chunk.Choices[0].Delta.ToolCalls) > 0
+			choiceSeen = choiceSeen || chunk.Choices[0].FinishReason != "" || content != "" || len(chunk.Choices[0].Delta.ToolCalls) > 0
 			if chunk.Choices[0].FinishReason != "" {
 				terminalSeen = true
 				finishReason = chunk.Choices[0].FinishReason
