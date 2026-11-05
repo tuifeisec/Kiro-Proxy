@@ -77,9 +77,12 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 			return nil, fmt.Errorf("read raw Responses request body: %w", err)
 		}
 	}
-	upstreamBody, conversionDuration, err := f.prepareRawResponsesUpstreamBodyMeasured(body, pre, model)
+	var upstreamBody []byte
+	var conversionDuration time.Duration
 	if strings.EqualFold(strings.TrimSpace(model.Provider), "anthropic") {
 		upstreamBody, conversionDuration, err = f.prepareRawResponsesAnthropicBodyMeasured(body, pre, model)
+	} else {
+		upstreamBody, conversionDuration, err = f.prepareRawResponsesUpstreamBodyMeasured(body, pre, model)
 	}
 	if err != nil {
 		if pre.usage != nil {

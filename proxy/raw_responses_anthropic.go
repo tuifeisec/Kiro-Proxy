@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,6 +55,18 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 	}
 	for _, message := range messages {
 		itemType := stringField(message, "type")
+		if itemType == "input_text" || itemType == "input_image" {
+			convertedContent := anthropicContent([]interface{}{map[string]interface{}{
+				"type":      itemType,
+				"text":      stringField(message, "text"),
+				"image_url": stringField(message, "image_url"),
+			}})
+			if convertedContent == nil {
+				return nil, fmt.Errorf("raw Responses %s cannot be converted to Anthropic", itemType)
+			}
+			anthropicMessages = append(anthropicMessages, map[string]interface{}{"role": "user", "content": convertedContent})
+			continue
+		}
 		if itemType == "function_call" {
 			id, err := rawStringField(message, "call_id")
 			if err != nil {
@@ -193,14 +206,32 @@ func anthropicContent(content interface{}) interface{} {
 			return nil
 		}
 		switch object["type"] {
-		case "text":
-			converted = append(converted, map[string]interface{}{"type": "text", "text": object["text"]})
-		case "image_url":
-			image, ok := object["image_url"].(map[string]interface{})
+		case "text", "input_text":
+			text, ok := object["text"].(string)
 			if !ok {
 				return nil
 			}
-			url, _ := image["url"].(string)
+			converted = append(converted, map[string]interface{}{"type": "text", "text": text})
+		case "image_url", "input_image":
+			var url string
+			if object["type"] == "input_image" {
+				value, ok := object["image_url"].(string)
+				if !ok || strings.TrimSpace(value) == "" {
+					return nil
+				}
+				url = value
+			} else {
+				image, ok := object["image_url"].(map[string]interface{})
+				if !ok {
+					return nil
+				}
+				value, ok := image["url"].(string)
+				if !ok {
+					return nil
+				}
+				url = value
+			}
+			url = strings.TrimSpace(url)
 			if !strings.HasPrefix(url, "data:") {
 				return nil
 			}
@@ -224,6 +255,23 @@ func splitDataURL(value string) (string, string, bool) {
 		return "", "", false
 	}
 	return strings.TrimSuffix(parts[0], ";base64"), parts[1], true
+}
+func encodeRawArguments(value interface{}) (string, error) {
+	if value == nil {
+		return "{}", nil
+	}
+	if text, ok := value.(string); ok {
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+			return "", fmt.Errorf("Anthropic tool input must be valid JSON: %w", err)
+		}
+		value = decoded
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("encode Anthropic tool input: %w", err)
+	}
+	return string(encoded), nil
 }
 func anthropicAssistantContent(message map[string]json.RawMessage, content interface{}) (interface{}, error) {
 	blocks := make([]interface{}, 0, 2)
@@ -354,6 +402,52 @@ func adaptRawAnthropicResponse(ctx context.Context, resp *http.Response) (*http.
 	resp.Trailer = nil
 	return resp, nil
 }
+func anthropicResponsesUsage(usage localCompatUsage) map[string]interface{} {
+	return map[string]interface{}{
+		"input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens,
+		"total_tokens": usage.InputTokens + usage.OutputTokens,
+		"input_tokens_details": map[string]int{
+			"cached_tokens":      usage.CacheReadTokens,
+			"cache_write_tokens": usage.CacheWriteTokens,
+		},
+		"cache_creation_input_tokens": usage.CacheWriteTokens,
+	}
+}
+
+func anthropicStreamError(raw json.RawMessage) map[string]string {
+	var detail struct {
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(raw, &detail)
+	message := strings.TrimSpace(detail.Message)
+	if len(message) > 800 {
+		message = message[:800]
+	}
+	if message == "" {
+		message = "Anthropic upstream returned an error"
+	}
+	result := map[string]string{"message": message}
+	if detail.Type != "" {
+		result["type"] = detail.Type
+	}
+	if detail.Code != "" {
+		result["code"] = detail.Code
+	}
+	return result
+}
+
+func writeAnthropicStreamFailure(write func(string, interface{}) error, responseID, model string, raw json.RawMessage) error {
+	return write("response.failed", map[string]interface{}{
+		"type": "response.failed",
+		"response": map[string]interface{}{
+			"id": responseID, "object": "response", "status": "failed", "model": model,
+			"error": anthropicStreamError(raw),
+		},
+	})
+}
+
 func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 64*1024), localCompatBodyLimit)
@@ -379,28 +473,48 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 		created = true
 		return write("response.created", map[string]interface{}{"type": "response.created", "response": map[string]interface{}{"id": responseID, "object": "response", "status": "in_progress", "model": model}})
 	}
+	fail := func(raw json.RawMessage, cause error) error {
+		if err := ensure(); err != nil {
+			return err
+		}
+		if err := writeAnthropicStreamFailure(write, responseID, model, raw); err != nil {
+			return err
+		}
+		return cause
+	}
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
+		if line == "" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") {
 			continue
 		}
+		if !strings.HasPrefix(line, "data:") {
+			return fail(nil, fmt.Errorf("Anthropic stream contains unsupported SSE line"))
+		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
+		if data == "" || data == "[DONE]" {
 			continue
 		}
 		var event map[string]json.RawMessage
-		if json.Unmarshal([]byte(data), &event) != nil {
-			continue
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return fail(nil, fmt.Errorf("parse Anthropic SSE event: %w", err))
 		}
 		var typ string
-		_ = json.Unmarshal(event["type"], &typ)
-		if typ == "message_start" {
+		if err := json.Unmarshal(event["type"], &typ); err != nil || typ == "" {
+			return fail(nil, fmt.Errorf("Anthropic SSE event type is missing"))
+		}
+		if typ == "error" {
+			return fail(event["error"], fmt.Errorf("Anthropic upstream returned an error: %s", anthropicStreamError(event["error"])["message"]))
+		}
+		switch typ {
+		case "message_start":
 			var msg struct {
 				ID    string          `json:"id"`
 				Model string          `json:"model"`
 				Usage json.RawMessage `json:"usage"`
 			}
-			_ = json.Unmarshal(event["message"], &msg)
+			if err := json.Unmarshal(event["message"], &msg); err != nil {
+				return fail(nil, fmt.Errorf("parse Anthropic message_start: %w", err))
+			}
 			if msg.ID != "" {
 				responseID = "resp_" + msg.ID
 			}
@@ -409,32 +523,35 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 			if err := ensure(); err != nil {
 				return err
 			}
-			continue
-		}
-		if _, ok := event["error"]; ok {
-			_ = ensure()
-			_ = write("response.failed", responsesStreamFailure(responseID, model, fmt.Errorf("Anthropic upstream error")))
-			return fmt.Errorf("Anthropic upstream returned an error")
-		}
-		if err := ensure(); err != nil {
-			return err
-		}
-		switch typ {
+		case "ping":
+			if err := ensure(); err != nil {
+				return err
+			}
 		case "content_block_start":
 			var block struct {
 				Type string `json:"type"`
 				ID   string `json:"id"`
 				Name string `json:"name"`
 			}
-			_ = json.Unmarshal(event["content_block"], &block)
-			if block.Type == "tool_use" {
-				idx := rawIndex(event)
-				toolIDs[idx] = block.ID
-				toolNames[idx] = block.Name
-				toolArguments[idx] = &strings.Builder{}
+			if err := json.Unmarshal(event["content_block"], &block); err != nil || block.Type == "" {
+				return fail(nil, fmt.Errorf("malformed Anthropic content_block_start"))
+			}
+			if err := ensure(); err != nil {
+				return err
+			}
+			idx := rawIndex(event)
+			switch block.Type {
+			case "text", "thinking":
+			case "tool_use":
+				if block.ID == "" || block.Name == "" {
+					return fail(nil, fmt.Errorf("Anthropic tool_use is missing id or name"))
+				}
+				toolIDs[idx], toolNames[idx], toolArguments[idx] = block.ID, block.Name, &strings.Builder{}
 				if err := write("response.output_item.added", map[string]interface{}{"type": "response.output_item.added", "item": map[string]interface{}{"type": "function_call", "id": block.ID, "call_id": block.ID, "name": block.Name, "arguments": "", "status": "in_progress"}}); err != nil {
 					return err
 				}
+			default:
+				return fail(nil, fmt.Errorf("Anthropic content block type %q is unsupported", block.Type))
 			}
 		case "content_block_delta":
 			var delta struct {
@@ -442,9 +559,14 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
 				Thinking    string `json:"thinking"`
-				StopReason  string `json:"stop_reason"`
+				Signature   string `json:"signature"`
 			}
-			_ = json.Unmarshal(event["delta"], &delta)
+			if err := json.Unmarshal(event["delta"], &delta); err != nil || delta.Type == "" {
+				return fail(nil, fmt.Errorf("malformed Anthropic content_block_delta"))
+			}
+			if err := ensure(); err != nil {
+				return err
+			}
 			idx := rawIndex(event)
 			switch delta.Type {
 			case "text_delta":
@@ -456,29 +578,51 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 					return err
 				}
 			case "input_json_delta":
-				if builder := toolArguments[idx]; builder != nil {
-					builder.WriteString(delta.PartialJSON)
+				if toolArguments[idx] == nil || toolIDs[idx] == "" {
+					return fail(nil, fmt.Errorf("Anthropic tool arguments reference an unknown block"))
 				}
+				toolArguments[idx].WriteString(delta.PartialJSON)
 				if err := write("response.function_call_arguments.delta", map[string]interface{}{"type": "response.function_call_arguments.delta", "item_id": toolIDs[idx], "call_id": toolIDs[idx], "delta": delta.PartialJSON}); err != nil {
 					return err
 				}
+			case "signature_delta":
+				_ = delta.Signature
+			default:
+				return fail(nil, fmt.Errorf("Anthropic content delta type %q is unsupported", delta.Type))
+			}
+		case "content_block_stop":
+			if err := ensure(); err != nil {
+				return err
 			}
 		case "message_delta":
 			mergeAnthropicUsage(&usage, event["usage"])
 			var delta struct {
 				StopReason string `json:"stop_reason"`
 			}
-			_ = json.Unmarshal(event["delta"], &delta)
+			if err := json.Unmarshal(event["delta"], &delta); err != nil {
+				return fail(nil, fmt.Errorf("malformed Anthropic message_delta: %w", err))
+			}
 			if delta.StopReason != "" {
 				stopReason = delta.StopReason
 			}
+			if err := ensure(); err != nil {
+				return err
+			}
 		case "message_stop":
-			for idx, id := range toolIDs {
+			if err := ensure(); err != nil {
+				return err
+			}
+			indices := make([]int, 0, len(toolIDs))
+			for idx := range toolIDs {
+				indices = append(indices, idx)
+			}
+			sort.Ints(indices)
+			for _, idx := range indices {
 				arguments := ""
 				if builder := toolArguments[idx]; builder != nil {
 					arguments = builder.String()
 				}
-				if err := write("response.output_item.done", map[string]interface{}{"type": "response.output_item.done", "item": map[string]interface{}{"type": "function_call", "id": id, "call_id": id, "arguments": arguments, "status": "completed"}}); err != nil {
+				if err := write("response.output_item.done", map[string]interface{}{"type": "response.output_item.done", "item": map[string]interface{}{"type": "function_call", "id": toolIDs[idx], "call_id": toolIDs[idx], "name": toolNames[idx], "arguments": arguments, "status": "completed"}}); err != nil {
 					return err
 				}
 			}
@@ -487,9 +631,11 @@ func copyAnthropicStreamAsResponses(writer io.Writer, source io.Reader) error {
 			if stopReason == "max_tokens" {
 				status = "incomplete"
 			}
-			if err := write("response.completed", map[string]interface{}{"type": "response.completed", "response": map[string]interface{}{"id": responseID, "object": "response", "status": status, "model": model, "usage": responsesUsage(usage)}}); err != nil {
+			if err := write("response.completed", map[string]interface{}{"type": "response.completed", "response": map[string]interface{}{"id": responseID, "object": "response", "status": status, "model": model, "usage": anthropicResponsesUsage(usage)}}); err != nil {
 				return err
 			}
+		default:
+			return fail(nil, fmt.Errorf("Anthropic SSE event type %q is unsupported", typ))
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -556,13 +702,17 @@ func convertAnthropicJSONResponse(source io.Reader) ([]byte, error) {
 			text.WriteString(block.Text)
 			output = append(output, map[string]interface{}{"type": "message", "id": message.ID + "_msg", "role": "assistant", "status": "completed", "content": []interface{}{map[string]interface{}{"type": "output_text", "text": block.Text, "annotations": []interface{}{}}}})
 		case "tool_use":
-			output = append(output, map[string]interface{}{"type": "function_call", "id": block.ID, "call_id": block.ID, "name": block.Name, "arguments": block.Input, "status": "completed"})
+			arguments, err := encodeRawArguments(block.Input)
+			if err != nil {
+				return nil, err
+			}
+			output = append(output, map[string]interface{}{"type": "function_call", "id": block.ID, "call_id": block.ID, "name": block.Name, "arguments": arguments, "status": "completed"})
 		}
 	}
 	status := "completed"
 	if message.StopReason == "max_tokens" {
 		status = "incomplete"
 	}
-	result := map[string]interface{}{"id": "resp_" + message.ID, "object": "response", "status": status, "model": message.Model, "output": output, "output_text": text.String(), "usage": map[string]interface{}{"input_tokens": message.Usage.InputTokens, "output_tokens": message.Usage.OutputTokens, "total_tokens": message.Usage.InputTokens + message.Usage.OutputTokens, "input_tokens_details": map[string]int{"cached_tokens": message.Usage.CacheRead}}}
+	result := map[string]interface{}{"id": "resp_" + message.ID, "object": "response", "status": status, "model": message.Model, "output": output, "output_text": text.String(), "usage": anthropicResponsesUsage(localCompatUsage{InputTokens: message.Usage.InputTokens, OutputTokens: message.Usage.OutputTokens, CacheReadTokens: message.Usage.CacheRead, CacheWriteTokens: message.Usage.CacheWrite})}
 	return json.Marshal(result)
 }
