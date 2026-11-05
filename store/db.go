@@ -56,6 +56,7 @@ func (db *DB) migrate() error {
 		def   string
 	}{
 		{"responses_sessions", "generation", "INTEGER NOT NULL DEFAULT 0"},
+		{"reasoning_traces", "blocks_json", "TEXT NOT NULL DEFAULT ''"},
 		{"models", "rate_multiplier", "REAL NOT NULL DEFAULT 1.0"},
 		{"models", "input_price", "REAL NOT NULL DEFAULT 5.0"},
 		{"models", "output_price", "REAL NOT NULL DEFAULT 30.0"},
@@ -337,6 +338,7 @@ CREATE TABLE IF NOT EXISTS reasoning_traces (
     item_id      TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT '',
     wire_field   TEXT NOT NULL DEFAULT '',
+    blocks_json  TEXT NOT NULL DEFAULT '',
     updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (state_key, turn_key)
 );

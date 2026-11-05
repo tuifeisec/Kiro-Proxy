@@ -6,23 +6,24 @@ import (
 )
 
 // KiroToOpenAI 将解析好的会话转换为 OpenAI Chat Completions 请求体
-func KiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
-	return kiroToOpenAI(conv, targetModel, reasoningEffort, false)
+func KiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort string, opts OpenAIRequestOptions) ([]byte, error) {
+	return kiroToOpenAI(conv, targetModel, reasoningEffort, false, opts)
 }
 
 // KiroToOpenAIChatUpstream applies the Chat-only compatibility normalization.
 // Callers must select it only after resolving the actual upstream URL.
-func KiroToOpenAIChatUpstream(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
-	return kiroToOpenAI(conv, targetModel, reasoningEffort, true)
+func KiroToOpenAIChatUpstream(conv *ParsedConversation, targetModel string, reasoningEffort string, opts OpenAIRequestOptions) ([]byte, error) {
+	return kiroToOpenAI(conv, targetModel, reasoningEffort, true, opts)
 }
 
-func kiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort string, normalizeSchema bool) ([]byte, error) {
+func kiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort string, normalizeSchema bool, opts OpenAIRequestOptions) ([]byte, error) {
 	model := targetModel
 	if model == "" {
 		model = conv.ModelID
 	}
 
-	messages := buildOpenAIMessages(conv)
+	replayRequired := conv.ReasoningReplayRequired || UpstreamRequiresReasoningReplay(opts.UpstreamHost, model)
+	messages := buildOpenAIMessages(conv, replayRequired)
 
 	req := OpenAIRequest{
 		Model:    model,
@@ -72,8 +73,10 @@ func kiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort 
 
 // buildOpenAIMessages 将会话历史转换为 OpenAI messages 数组
 // 自动应用 prompt cache 优化：静态前缀保持不变以最大化缓存命中
-func buildOpenAIMessages(conv *ParsedConversation) []OpenAIMessage {
+// replayRequired 时，工具调用轮与工具结果之后的回复缺推理会补占位（见 openAIReplayReasoning）。
+func buildOpenAIMessages(conv *ParsedConversation, replayRequired bool) []OpenAIMessage {
 	msgs := make([]OpenAIMessage, 0, len(conv.History)*2+4)
+	afterToolResults := false
 
 	for _, entry := range conv.History {
 		// 系统提示 → system role
@@ -84,6 +87,7 @@ func buildOpenAIMessages(conv *ParsedConversation) []OpenAIMessage {
 			})
 			continue
 		}
+		afterToolResults = followsToolResults(afterToolResults, entry)
 
 		// 工具结果 → tool role（必须在 user 消息之前）
 		for _, tr := range entry.ToolResults {
@@ -101,7 +105,8 @@ func buildOpenAIMessages(conv *ParsedConversation) []OpenAIMessage {
 
 		// 助手消息
 		if entry.HasAssistant {
-			if m := buildOpenAIAssistantMsg(entry.AssistantContent, entry.ToolUses, entry.Reasoning); m != nil {
+			reasoning := openAIReplayReasoning(entry.Reasoning, replayRequired, len(entry.ToolUses) > 0 || afterToolResults)
+			if m := buildOpenAIAssistantMsg(entry.AssistantContent, entry.ToolUses, reasoning); m != nil {
 				msgs = append(msgs, *m)
 			}
 		}
@@ -163,8 +168,13 @@ func buildOpenAIAssistantMsg(content string, toolUses []ParsedToolUse, reasoning
 		}
 		msg.ToolCalls = tcs
 	}
-	if reasoning != nil && (reasoning.Present || strings.TrimSpace(reasoning.Text) != "") && len(msg.ToolCalls) > 0 {
+	// 推理只挂在工具调用轮或要求回放的工具结果之后的回复上（见 openAIReplayReasoning）；
+	// 空文本用占位：空串会被部分中转丢弃或被 DeepSeek 判为缺失。
+	if reasoning != nil && (reasoning.Present || strings.TrimSpace(reasoning.Text) != "") {
 		text := reasoning.Text
+		if text == "" {
+			text = ReasoningReplayPlaceholder
+		}
 		switch reasoning.WireField {
 		case "reasoning_text":
 			msg.ReasoningText = &text

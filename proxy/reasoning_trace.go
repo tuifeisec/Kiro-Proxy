@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"kiro-proxy/converter"
 	"kiro-proxy/store"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -51,6 +53,8 @@ func reasoningProtocol(pre *Preflight, model *store.Model) string {
 	return "chat"
 }
 
+// reasoningStateKeyFor 不含推理档位：Auto 职责、分组或请求档位变化时，同一会话、同一模型配置的
+// 推理历史必须仍能回放，否则 DeepSeek 等上游会因缺推理拒绝整段工具调用历史。
 func reasoningStateKeyFor(pre *Preflight, model *store.Model) string {
 	if pre == nil || pre.Conv == nil || model == nil || pre.Conv.IsClassifier {
 		return ""
@@ -67,7 +71,6 @@ func reasoningStateKeyFor(pre *Preflight, model *store.Model) string {
 		strings.ToLower(strings.TrimSpace(model.Provider)),
 		strings.TrimSpace(model.BaseURL),
 		strings.TrimSpace(model.Endpoint),
-		resolveReasoningEffort(pre, model),
 		protocol,
 	}
 	hash := sha256.New()
@@ -93,6 +96,7 @@ func (f *Forwarder) loadReasoningHistory(pre *Preflight, model *store.Model) (ma
 			Present: true,
 			Text:    trace.Text, Signature: trace.Signature, ItemID: trace.ItemID,
 			Status: trace.Status, WireField: trace.WireField, Protocol: trace.Protocol,
+			Blocks: converterReasoningBlocks(trace.Blocks),
 		}
 	}
 	return result, nil
@@ -101,13 +105,14 @@ func (f *Forwarder) loadReasoningHistory(pre *Preflight, model *store.Model) (ma
 func (f *Forwarder) saveReasoningTrace(pre *Preflight, model *store.Model, trace converter.ReasoningTrace) error {
 	stateKey := reasoningStateKeyFor(pre, model)
 	turnKey := converter.ReasoningTurnKey(trace.ToolCallIDs)
-	if f.db == nil || stateKey == "" || turnKey == "" || strings.TrimSpace(trace.Text) == "" {
+	if f.db == nil || stateKey == "" || turnKey == "" || !trace.HasReplayContent() {
 		return nil
 	}
 	return f.db.UpsertReasoningTrace(&store.ReasoningTrace{
 		StateKey: stateKey, TurnKey: turnKey, Protocol: trace.Protocol,
 		Text: trace.Text, Signature: trace.Signature, ItemID: trace.ItemID,
-		Status: trace.Status, WireField: trace.WireField, UpdatedAt: time.Now(),
+		Status: trace.Status, WireField: trace.WireField, Blocks: storeReasoningBlocks(trace.Blocks),
+		UpdatedAt: time.Now(),
 	})
 }
 
@@ -170,7 +175,8 @@ func reasoningHistoryFillMissing(conv *converter.ParsedConversation, history map
 			continue
 		}
 		if _, exists := result[turnKey]; !exists {
-			result[turnKey] = converter.ReasoningTrace{Present: true, Protocol: "chat", WireField: wireField}
+			// 占位而非空串：空串会被部分中转丢弃或被 DeepSeek 判为缺失
+			result[turnKey] = converter.ReasoningTrace{Present: true, Text: converter.ReasoningReplayPlaceholder, Protocol: "chat", WireField: wireField}
 		}
 	}
 	return result
@@ -208,14 +214,35 @@ func (f *Forwarder) persistReasoningCompatibilityHistory(pre *Preflight, model *
 	return nil
 }
 
+// thinkingModePassBackRefusal 是 DeepSeek/Kimi 要求回传历史推理的原话：Messages API 说
+// "The `content[].thinking` in the thinking mode must be passed back to the API"，Chat API 说
+// `reasoning_content`（Kimi 不带反引号）；reasoning_text 是部分 Responses 中转改写后的说法。
+// 中转常把 type 改写掉，所以不要求 invalid_request_error（对照 magpie thinking_back.go）。
+var thinkingModePassBackRefusal = regexp.MustCompile("(?i)`?(?:content\\[\\]\\.thinking|reasoning_content|reasoning_text)`? in the thinking mode must be passed back")
+
+// reasoningFieldDemand 是用其他措辞说推理字段缺失或必需，如 Command Code 的
+// "Missing required parameter: 'messages[1].reasoning_content'"。字段名必须出现在句中，
+// 因此 "Missing required parameter: 'messages'" 这类通用缺参不会命中。
+var reasoningFieldDemand = regexp.MustCompile(`(?i)\breasoning_(?:content|text)\b[^"]{0,40}\b(?:is (?:missing|required)|must be (?:passed|provided|included))|\b(?:missing|required)\b[^"]{0,80}\breasoning_(?:content|text)\b`)
+
 func isMissingReasoningReplayError(status int, body string) bool {
-	if status != 400 {
+	if status != http.StatusBadRequest {
 		return false
 	}
-	lower := strings.ToLower(body)
-	return strings.Contains(lower, "invalid_request_error") &&
-		(strings.Contains(lower, "reasoning_text") || strings.Contains(lower, "reasoning_content")) &&
-		strings.Contains(lower, "must be passed back")
+	return thinkingModePassBackRefusal.MatchString(body) || reasoningFieldDemand.MatchString(body)
+}
+
+// convertRequestRequiringReasoningReplay 在上游明确拒绝"缺失推理回放"后重建请求：
+// 按每个工具调用轮（及工具结果之后的回复）都回传推理构建，用于 host/模型名看不出 DeepSeek 的中转。
+func convertRequestRequiringReasoningReplay(pre *Preflight, model *store.Model, history map[string]converter.ReasoningTrace) ([]byte, string, error) {
+	if pre == nil || pre.Conv == nil {
+		return nil, "", fmt.Errorf("推理回放重建缺少 Kiro 会话")
+	}
+	conv := *pre.Conv
+	conv.ReasoningReplayRequired = true
+	replayPre := *pre
+	replayPre.Conv = &conv
+	return convertRequestWithProtocol(&replayPre, model, history, false)
 }
 
 func isResponsesDeveloperRoleRejected(status int, body string) bool {

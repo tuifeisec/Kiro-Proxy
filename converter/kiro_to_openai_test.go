@@ -34,7 +34,7 @@ Here is the last user message:
 		CurrentContent: "当前问题\n\n<EnvironmentContext>\n<ACTIVE-EDITOR-FILE>\n<file name=\"main.go\" />\n</ACTIVE-EDITOR-FILE>\n</EnvironmentContext>",
 	}
 
-	body, err := KiroToOpenAI(conv, "", "")
+	body, err := KiroToOpenAI(conv, "", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}
@@ -90,7 +90,7 @@ tool round context`,
 		},
 		CurrentToolResults: []ParsedToolResult{{ToolUseID: "call-1", Content: "tool output"}},
 	}
-	body, err := KiroToOpenAI(conv, "gpt-5.5", "")
+	body, err := KiroToOpenAI(conv, "gpt-5.5", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestOpenAI_GPT56AddsCacheControls(t *testing.T) {
 		History:        []ParsedHistoryEntry{{IsSystem: true, UserContent: "stable system prompt"}},
 		CurrentContent: "current question",
 	}
-	body, err := KiroToOpenAI(conv, "gpt-5.6", "")
+	body, err := KiroToOpenAI(conv, "gpt-5.6", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestOpenAI_GPT56AddsCacheControls(t *testing.T) {
 
 func TestOpenAI_OlderModelOmitsGPT56CacheControls(t *testing.T) {
 	conv := &ParsedConversation{ModelID: "gpt-5.5", SystemText: "stable", CurrentContent: "question"}
-	body, err := KiroToOpenAI(conv, "gpt-5.5", "")
+	body, err := KiroToOpenAI(conv, "gpt-5.5", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatalf("转换失败: %v", err)
 	}

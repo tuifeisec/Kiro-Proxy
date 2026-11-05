@@ -133,7 +133,7 @@ func TestOpenAIResponsesToolCacheIdentitySeparatesLegacyCacheNamespace(t *testin
 			if warmPath == "legacy-responses" {
 				warmBody, err = KiroToResponses(legacy, "gpt-5.6", "")
 			} else {
-				warmBody, err = KiroToOpenAI(legacy, "gpt-5.6", "")
+				warmBody, err = KiroToOpenAI(legacy, "gpt-5.6", "", OpenAIRequestOptions{})
 			}
 			if err != nil {
 				t.Fatalf("旧路径预热工具转换缓存失败：%v", err)

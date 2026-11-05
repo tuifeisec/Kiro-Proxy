@@ -1222,7 +1222,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 	if forceReasoningChat && resp != nil {
 		markUpstreamResponse(resp, "chat", nil)
 	}
-	if !forceReasoningChat && model.Provider == "openai" && resp.StatusCode == http.StatusBadRequest && (hasToolTurns || responsesRequest) {
+	if !forceReasoningChat && (model.Provider == "openai" || model.Provider == "anthropic") && resp.StatusCode == http.StatusBadRequest && (hasToolTurns || responsesRequest) {
 		activeResponses := responsesRequest
 		reasoningRetried := false
 		developerRoleRetried := false
@@ -1235,7 +1235,31 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 			}
 			bodyText := string(body)
 			switch {
-			case hasToolTurns && !reasoningRetried && isMissingReasoningReplayError(resp.StatusCode, bodyText):
+			case model.Provider == "anthropic" && hasToolTurns && !reasoningRetried && isMissingReasoningReplayError(resp.StatusCode, bodyText):
+				replayBody, replayURL, convertErr := convertRequestRequiringReasoningReplay(pre, model, reasoningHistory)
+				if convertErr != nil {
+					return nil, contResult, fmt.Errorf("构建 Anthropic 推理回放兼容请求失败: %w", convertErr)
+				}
+				if bytes.Equal(replayBody, upstreamBody) {
+					logger.Warn("forwarder", "Anthropic 上游要求回传 thinking，但每个工具调用轮已带 thinking，不再重放")
+					resp.Body = io.NopCloser(bytes.NewReader(body))
+					resp.ContentLength = int64(len(body))
+					return resp, contResult, nil
+				}
+				fallbackBudget, budgetAvailable := remainingProtocolRetryBudget(retryBudget, conversionStarted)
+				if !budgetAvailable {
+					resp.Body = io.NopCloser(bytes.NewReader(body))
+					resp.ContentLength = int64(len(body))
+					return resp, contResult, nil
+				}
+				logger.Warn("forwarder", "Anthropic 上游要求回传 thinking，为工具调用轮补齐 thinking 块后重放一次")
+				resp, err = f.sendCandidateRequest(ctx, replayURL, replayBody, model, logger, sessionID, pre.usage, fallbackBudget)
+				if err != nil {
+					return nil, contResult, err
+				}
+				upstreamBody = replayBody
+				reasoningRetried = true
+			case model.Provider == "openai" && hasToolTurns && !reasoningRetried && isMissingReasoningReplayError(resp.StatusCode, bodyText):
 				wireField := reasoningWireFieldForError(resp.Header, bodyText)
 				chatHistory := reasoningCompatibilityHistory(pre.Conv, reasoningHistory, wireField)
 				chatBody, chatURL, convertErr := convertRequestWithProtocol(pre, model, chatHistory, responsesRequest)

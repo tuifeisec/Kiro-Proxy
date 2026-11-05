@@ -38,8 +38,7 @@ type AnthropicStreamConverter struct {
 
 	// 工具调用状态：key = content block index
 	toolBlocks  map[int]*anthropicToolBlock
-	thinking    strings.Builder
-	signature   strings.Builder
+	reasoning   anthropicReasoningCollector
 	toolCallIDs []string
 
 	modelID                                                    string
@@ -142,12 +141,15 @@ func (c *AnthropicStreamConverter) ReasoningTrace() ReasoningTrace {
 	<-c.done
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.outcome != StreamOutcomeCompleted || c.thinking.Len() == 0 || c.signature.Len() == 0 || len(c.toolCallIDs) == 0 {
+	if c.outcome != StreamOutcomeCompleted || len(c.toolCallIDs) == 0 {
+		return ReasoningTrace{}
+	}
+	blocks := c.reasoning.snapshot()
+	if len(blocks) == 0 {
 		return ReasoningTrace{}
 	}
 	return ReasoningTrace{
-		Present: true,
-		Text:    c.thinking.String(), Signature: c.signature.String(),
+		Present: true, Blocks: blocks,
 		Protocol: "anthropic", ToolCallIDs: append([]string(nil), c.toolCallIDs...),
 	}
 }
@@ -312,12 +314,28 @@ func (c *AnthropicStreamConverter) handleContentBlockStart(event map[string]json
 	idx := extractIndex(event)
 
 	var block struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		Type      string `json:"type"`
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Thinking  string `json:"thinking"`
+		Signature string `json:"signature"`
+		Data      string `json:"data"`
 	}
 	if blockRaw, ok := event["content_block"]; ok {
 		json.Unmarshal(blockRaw, &block)
+	}
+
+	switch block.Type {
+	case ReasoningBlockThinking:
+		c.mu.Lock()
+		started := c.reasoning.start(idx, ReasoningBlockThinking)
+		started.text.WriteString(block.Thinking)
+		started.signature.WriteString(block.Signature)
+		c.mu.Unlock()
+	case ReasoningBlockRedactedThinking:
+		c.mu.Lock()
+		c.reasoning.start(idx, ReasoningBlockRedactedThinking).data = block.Data
+		c.mu.Unlock()
 	}
 
 	if block.Type == "tool_use" {
@@ -364,13 +382,13 @@ func (c *AnthropicStreamConverter) handleContentBlockDelta(event map[string]json
 	case "thinking_delta":
 		if delta.Thinking != "" {
 			c.mu.Lock()
-			c.thinking.WriteString(delta.Thinking)
+			c.reasoning.thinkingAt(idx).text.WriteString(delta.Thinking)
 			c.mu.Unlock()
 		}
 	case "signature_delta":
 		if delta.Signature != "" {
 			c.mu.Lock()
-			c.signature.WriteString(delta.Signature)
+			c.reasoning.thinkingAt(idx).signature.WriteString(delta.Signature)
 			c.mu.Unlock()
 		}
 	}

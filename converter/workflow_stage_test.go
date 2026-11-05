@@ -227,11 +227,11 @@ func TestWorkflowMetadataDoesNotAffectProviderBodiesOrCacheKey(t *testing.T) {
 		t.Fatal("workflow metadata changed the Responses provider body")
 	}
 
-	plainOpenAI, err := KiroToOpenAI(plain, "gpt-5.5", "")
+	plainOpenAI, err := KiroToOpenAI(plain, "gpt-5.5", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatalf("convert plain OpenAI request: %v", err)
 	}
-	metadataOpenAI, err := KiroToOpenAI(withMetadata, "gpt-5.5", "")
+	metadataOpenAI, err := KiroToOpenAI(withMetadata, "gpt-5.5", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatalf("convert metadata OpenAI request: %v", err)
 	}

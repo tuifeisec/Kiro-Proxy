@@ -159,6 +159,10 @@ type ParsedConversation struct {
 	Temperature     *float64
 	TopP            *float64
 	ReasoningEffort string
+
+	// ReasoningReplayRequired 由代理在上游明确拒绝"缺失推理回放"后置位：
+	// host/模型名看不出 DeepSeek（中转或改名）时，也按每个工具调用轮都回传推理来构建请求。
+	ReasoningReplayRequired bool
 }
 
 const (
@@ -191,6 +195,9 @@ type ReasoningTrace struct {
 	WireField   string
 	Protocol    string
 	ToolCallIDs []string
+	// Blocks 按上游原顺序保存 Anthropic 的 thinking/redacted_thinking 块，每块各自带签名；
+	// 为空表示旧数据或其他协议，此时 Text+Signature 视为单个 thinking 块。
+	Blocks []ReasoningBlock
 }
 
 type ParsedToolResult struct {
@@ -314,8 +321,9 @@ type AnthropicMessage struct {
 type AnthropicBlock struct {
 	Type         string                `json:"type"`
 	Text         string                `json:"text,omitempty"`
-	Thinking     string                `json:"thinking,omitempty"`
+	Thinking     *string               `json:"thinking,omitempty"` // 指针：签名回放时 thinking 可为空串但字段必须存在
 	Signature    string                `json:"signature,omitempty"`
+	Data         string                `json:"data,omitempty"` // redacted_thinking 的加密数据
 	ID           string                `json:"id,omitempty"`
 	Name         string                `json:"name,omitempty"`
 	Input        interface{}           `json:"input,omitempty"`

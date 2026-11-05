@@ -33,7 +33,7 @@ func TestOpenAIAndAnthropicPreserveMixedToolResults(t *testing.T) {
 		CurrentToolResults: []ParsedToolResult{mixedProviderToolResult()},
 	}
 
-	openAIBody, err := KiroToOpenAI(conv, "gpt-5.6", "")
+	openAIBody, err := KiroToOpenAI(conv, "gpt-5.6", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatalf("convert OpenAI request: %v", err)
 	}

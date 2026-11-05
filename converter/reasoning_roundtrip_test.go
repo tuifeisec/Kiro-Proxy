@@ -210,10 +210,10 @@ data: {"type":"message_stop"}
 	sc := NewAnthropicStreamConverter(io.NopCloser(strings.NewReader(sse)), "claude", 1000, 0, 0, 0, 0, 1)
 	_, _ = io.ReadAll(sc)
 	trace := sc.ReasoningTrace()
-	if trace.Text != "inspect" || trace.Signature != "signed" {
+	if len(trace.Blocks) != 1 || trace.Blocks[0].Text != "inspect" || trace.Blocks[0].Signature != "signed" {
 		t.Fatalf("captured trace = %+v", trace)
 	}
-	msg := buildAnthropicAssistantMsg("", []ParsedToolUse{{ToolUseID: "call_1", Name: "read_file", Input: json.RawMessage(`{}`)}}, &trace)
+	msg := buildAnthropicAssistantMsg("", []ParsedToolUse{{ToolUseID: "call_1", Name: "read_file", Input: json.RawMessage(`{}`)}}, anthropicReasoningBlocks(&trace, false, true))
 	body, _ := json.Marshal(msg)
 	thinkingAt := strings.Index(string(body), `"type":"thinking"`)
 	toolAt := strings.Index(string(body), `"type":"tool_use"`)
@@ -227,7 +227,7 @@ func TestReasoningFieldsAreAbsentWithoutSidecar(t *testing.T) {
 		HasAssistant: true,
 		ToolUses:     []ParsedToolUse{{ToolUseID: "call_1", Name: "read_file", Input: json.RawMessage(`{}`)}},
 	}}}
-	chat, _ := KiroToOpenAI(conv, "gpt-5.5", "")
+	chat, _ := KiroToOpenAI(conv, "gpt-5.5", "", OpenAIRequestOptions{})
 	responses, _ := KiroToResponses(conv, "gpt-5.5", "")
 	anthropic, _ := KiroToAnthropic(conv, "claude", "", AnthropicRequestOptions{})
 	for name, body := range map[string][]byte{"chat": chat, "responses": responses, "anthropic": anthropic} {

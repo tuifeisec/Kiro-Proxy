@@ -119,9 +119,9 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 	upstreamHost := converter.UpstreamHostOf(upstreamURL)
 	convertChat := func() ([]byte, error) {
 		if isOpenAIChatUpstream(m, upstreamURL) {
-			return converter.KiroToOpenAIChatUpstream(conv, m.ModelID, reasoningEffort)
+			return converter.KiroToOpenAIChatUpstream(conv, m.ModelID, reasoningEffort, converter.OpenAIRequestOptions{UpstreamHost: upstreamHost})
 		}
-		return converter.KiroToOpenAI(conv, m.ModelID, reasoningEffort)
+		return converter.KiroToOpenAI(conv, m.ModelID, reasoningEffort, converter.OpenAIRequestOptions{UpstreamHost: upstreamHost})
 	}
 
 	// Kiro 协议：根据 provider + endpoint 选择转换器

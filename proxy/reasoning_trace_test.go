@@ -57,21 +57,44 @@ func TestResponsesToChatURLOnlyRewritesPath(t *testing.T) {
 	}
 }
 
-func TestMissingReasoningReplayErrorIsNarrow(t *testing.T) {
-	matching := `{"error":{"type":"invalid_request_error","message":"The reasoning_text in the thinking mode must be passed back to the API"}}`
-	if !isMissingReasoningReplayError(400, matching) {
-		t.Fatal("expected missing reasoning error to match")
+func TestMissingReasoningReplayErrorMatchesRelayWording(t *testing.T) {
+	// 正样本出自 magpie（只读参照）：thinking_back_test.go 记录的 api.deepseek.com 2026-11-02 原文与
+	// Discord 用户经中转改写后的报错；reasoning_back_fallback_test.go 记录的 Command Code / Kimi 说法。
+	positives := []string{
+		`{"error":{"message":"The ` + "`content[].thinking`" + ` in the thinking mode must be passed back to the API. (request_id: cae816b6-d668-4a55-935d-99d1b8ad3686)","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}`,
+		`{"error":{"message":"The ` + "`reasoning_content`" + ` in the thinking mode must be passed back to the API. (request_id: 6360375a-b044-4a13-b51e-548de94677ea)","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}`,
+		`{"code":null,"message":"My Claude: The ` + "`content[].thinking`" + ` in the thinking mode must be passed back to the API.","param":null,"type":"invalid_request_error"}`,
+		`{"error":{"message":"The reasoning_content in the thinking mode must be passed back to the API."}}`,
+		`{"error":{"message":"Missing required parameter: 'messages[1].reasoning_content'.","type":"invalid_request_error","param":"messages[1].reasoning_content","code":"missing_required_parameter"}}`,
+		"{\"error\":{\"message\":\"Missing `reasoning_content` field in the assistant message at message index 1.\",\"type\":\"invalid_request_error\"}}",
+		`{"error":{"message":"thinking is enabled but reasoning_content is missing in assistant tool call message at index 2","type":"invalid_request_error"}}`,
+		// 中转去掉 type 后只剩消息文本，原实现要求 invalid_request_error 而漏判
+		`{"message":"The reasoning_content in the thinking mode must be passed back to the API."}`,
+		// Responses→Chat 兼容路径既有样本
+		`{"error":{"type":"invalid_request_error","message":"The reasoning_text in the thinking mode must be passed back to the API"}}`,
+		`{"error":{"type":"invalid_request_error","message":"reasoning_content must be passed back"}}`,
 	}
-	for _, tc := range []struct {
+	for _, body := range positives {
+		if !isMissingReasoningReplayError(400, body) {
+			t.Errorf("expected match: %s", body)
+		}
+	}
+	negatives := []struct {
 		status int
 		body   string
 	}{
-		{500, matching},
+		{500, positives[0]},
+		{200, positives[4]},
 		{400, `{"error":{"type":"invalid_request_error","message":"bad model"}}`},
 		{400, `{"error":{"message":"reasoning_text is optional"}}`},
-	} {
+		{400, `{"error":{"message":"Missing required parameter: 'messages'.","type":"invalid_request_error","param":"messages","code":"missing_required_parameter"}}`},
+		{400, `{"error":{"message":"Missing required parameter: 'model'.","type":"invalid_request_error"}}`},
+		{400, `{"error":{"message":"messages[1].content: field required"}}`},
+		{400, `{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid signature in thinking block"}}`},
+	}
+	for _, tc := range negatives {
 		if isMissingReasoningReplayError(tc.status, tc.body) {
-			t.Fatalf("unexpected match: status=%d body=%s", tc.status, tc.body)
+			t.Errorf("unexpected match: status=%d body=%s", tc.status, tc.body)
 		}
 	}
 }
@@ -90,19 +113,20 @@ func TestReasoningWireFieldForError(t *testing.T) {
 	}
 }
 
-func TestReasoningCompatibilityHistoryAddsExplicitEmptyField(t *testing.T) {
+func TestReasoningCompatibilityHistoryAddsPlaceholderField(t *testing.T) {
 	conv := &converter.ParsedConversation{History: []converter.ParsedHistoryEntry{{
 		HasAssistant: true,
 		ToolUses:     []converter.ParsedToolUse{{ToolUseID: "call_old", Name: "read_file", Input: json.RawMessage(`{}`)}},
 	}}}
 	history := reasoningCompatibilityHistory(conv, nil, "reasoning_content")
 	compatible := converter.WithReasoningHistory(conv, history)
-	body, err := converter.KiroToOpenAI(compatible, "deepseek", "high")
+	// 非 DeepSeek 模型名：只验证补位来自兼容历史，而不是转换器的首发补齐
+	body, err := converter.KiroToOpenAI(compatible, "relay-model", "high", converter.OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"reasoning_content":""`) {
-		t.Fatalf("explicit empty reasoning field missing: %s", body)
+	if !strings.Contains(string(body), `"reasoning_content":" "`) {
+		t.Fatalf("reasoning placeholder missing: %s", body)
 	}
 }
 
@@ -117,11 +141,11 @@ func TestLearnedChatCompatibilityFillsMissingToolTurn(t *testing.T) {
 		},
 	}
 	completed := reasoningHistoryFillMissing(conv, history, reasoningChatWireField(history))
-	body, err := converter.KiroToOpenAI(converter.WithReasoningHistory(conv, completed), "deepseek", "high")
+	body, err := converter.KiroToOpenAI(converter.WithReasoningHistory(conv, completed), "relay-model", "high", converter.OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"reasoning_content":"inspect"`) || !strings.Contains(string(body), `"reasoning_content":""`) {
+	if !strings.Contains(string(body), `"reasoning_content":"inspect"`) || !strings.Contains(string(body), `"reasoning_content":" "`) {
 		t.Fatalf("learned chat history was not completed: %s", body)
 	}
 	preserved := reasoningHistoryFillMissing(conv, map[string]converter.ReasoningTrace{
@@ -134,7 +158,7 @@ func TestLearnedChatCompatibilityFillsMissingToolTurn(t *testing.T) {
 	}
 }
 
-func TestReasoningStateScopeIncludesModelEndpointAndEffort(t *testing.T) {
+func TestReasoningStateScopeIncludesModelEndpointButNotEffort(t *testing.T) {
 	pre := &Preflight{Protocol: "kiro", Conv: &converter.ParsedConversation{ConversationID: "conv-1"}}
 	base := &store.Model{ID: "config-1", ModelID: "deepseek", Provider: "openai", BaseURL: "https://one.test/v1", Endpoint: "/responses", ReasoningEffort: "high"}
 	first := reasoningStateKeyFor(pre, base)
@@ -145,11 +169,27 @@ func TestReasoningStateScopeIncludesModelEndpointAndEffort(t *testing.T) {
 		{ID: "config-2", ModelID: base.ModelID, Provider: base.Provider, BaseURL: base.BaseURL, Endpoint: base.Endpoint, ReasoningEffort: base.ReasoningEffort},
 		{ID: base.ID, ModelID: base.ModelID, Provider: base.Provider, BaseURL: "https://two.test/v1", Endpoint: base.Endpoint, ReasoningEffort: base.ReasoningEffort},
 		{ID: base.ID, ModelID: base.ModelID, Provider: base.Provider, BaseURL: base.BaseURL, Endpoint: "/chat/completions", ReasoningEffort: base.ReasoningEffort},
-		{ID: base.ID, ModelID: base.ModelID, Provider: base.Provider, BaseURL: base.BaseURL, Endpoint: base.Endpoint, ReasoningEffort: "low"},
 	}
 	for _, variant := range variants {
 		if got := reasoningStateKeyFor(pre, variant); got == first {
 			t.Fatalf("state scope collision for %+v", variant)
+		}
+	}
+	// 模型默认档位、请求档位、分组档位、Auto 固定档位变化都不能让同一会话的推理历史失联
+	lowModel := *base
+	lowModel.ReasoningEffort = "low"
+	auto := "medium"
+	for name, scoped := range map[string]struct {
+		pre   *Preflight
+		model *store.Model
+	}{
+		"model default":   {pre, &lowModel},
+		"request effort":  {&Preflight{Protocol: "kiro", Conv: &converter.ParsedConversation{ConversationID: "conv-1", ReasoningEffort: "max"}}, base},
+		"group effort":    {&Preflight{Protocol: "kiro", GroupReasoningEffort: "low", Conv: &converter.ParsedConversation{ConversationID: "conv-1"}}, base},
+		"auto duty fixed": {&Preflight{Protocol: "kiro", SourceModel: "auto", AutoReasoningEffort: &auto, Conv: &converter.ParsedConversation{ConversationID: "conv-1"}}, base},
+	} {
+		if got := reasoningStateKeyFor(scoped.pre, scoped.model); got != first {
+			t.Fatalf("%s changed reasoning state key", name)
 		}
 	}
 }
@@ -382,8 +422,8 @@ func TestForwardCandidateRetriesDirectChatMissingReasoningOnce(t *testing.T) {
 			_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"reasoning_content must be passed back"}}`)
 			return
 		}
-		if !strings.Contains(string(body), `"reasoning_content":""`) {
-			t.Errorf("direct chat retry did not add empty reasoning field: %s", body)
+		if !strings.Contains(string(body), `"reasoning_content":" "`) {
+			t.Errorf("direct chat retry did not add reasoning placeholder: %s", body)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
@@ -408,7 +448,7 @@ func TestForwardCandidateRetriesDirectChatMissingReasoningOnce(t *testing.T) {
 		}},
 	}}
 	pre.usage = newRequestUsageRecorder(db, pre.StartTime, nil, "/", "kiro")
-	model := &store.Model{ID: "config-chat", Provider: "openai", BaseURL: server.URL + "/v1", Endpoint: "/chat/completions", ModelID: "deepseek", APIKey: "test"}
+	model := &store.Model{ID: "config-chat", Provider: "openai", BaseURL: server.URL + "/v1", Endpoint: "/chat/completions", ModelID: "relay-model", APIKey: "test"}
 
 	resp, contResult, err := forwarder.forwardCandidate(context.Background(), pre, model, logger, 0)
 	if err != nil {

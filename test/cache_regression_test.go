@@ -76,7 +76,7 @@ func TestOpenAICachePrefixCurveWithMockProvider(t *testing.T) {
 			RawTools:       tools,
 			ToolsHash:      "stable-tools",
 		}
-		body, err := converter.KiroToOpenAI(conversation, "cache-test-model", "")
+		body, err := converter.KiroToOpenAI(conversation, "cache-test-model", "", converter.OpenAIRequestOptions{})
 		if err != nil {
 			t.Fatalf("第 %d 轮生成请求: %v", turn, err)
 		}
@@ -482,7 +482,7 @@ func TestEnvironmentContextHasSameCurrentAndHistoryShape(t *testing.T) {
 		build func(*converter.ParsedConversation) ([]byte, error)
 	}{
 		{name: "openai", field: "messages", build: func(conv *converter.ParsedConversation) ([]byte, error) {
-			return converter.KiroToOpenAI(conv, "gpt-test", "")
+			return converter.KiroToOpenAI(conv, "gpt-test", "", converter.OpenAIRequestOptions{})
 		}},
 		{name: "responses", field: "input", build: func(conv *converter.ParsedConversation) ([]byte, error) {
 			return converter.KiroToResponses(conv, "gpt-test", "")

@@ -9,7 +9,6 @@ import (
 	"kiro-proxy/store"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -123,14 +122,15 @@ func (f *Forwarder) wrapKiroStream(ctx context.Context, resp *http.Response, pre
 				previousCompleted()
 			}
 			trace := source.ReasoningTrace()
-			if strings.TrimSpace(trace.Text) == "" || len(trace.ToolCallIDs) == 0 {
+			// 文本非空、有签名、有 redacted 数据三者之一即保存：adaptive 可能只返回签名不返回文本
+			if len(trace.ToolCallIDs) == 0 || !trace.HasReplayContent() {
 				return
 			}
 			if err := f.saveReasoningTrace(pre, m, trace); err != nil {
 				logger.Error("forwarder", fmt.Sprintf("保存推理回放状态失败: %v", err))
 				return
 			}
-			logger.Info("forwarder", fmt.Sprintf("推理回放状态已保存: protocol=%s tool_calls=%d", trace.Protocol, len(trace.ToolCallIDs)))
+			logger.Info("forwarder", fmt.Sprintf("推理回放状态已保存: protocol=%s tool_calls=%d blocks=%d", trace.Protocol, len(trace.ToolCallIDs), len(trace.Blocks)))
 		}
 	}
 	observationDone := make(chan struct{})

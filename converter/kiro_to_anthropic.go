@@ -12,7 +12,8 @@ func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffo
 	}
 
 	staticSystem, dynamicSystemTail := optimizeSystemForCache(conv.SystemText)
-	messages := buildAnthropicMessagesCacheOptimized(conv, dynamicSystemTail)
+	replayRequired := conv.ReasoningReplayRequired || UpstreamRequiresReasoningReplay(opts.UpstreamHost, model)
+	messages := buildAnthropicMessagesCacheOptimized(conv, dynamicSystemTail, replayRequired)
 
 	req := AnthropicRequest{
 		Model:     model,
@@ -71,19 +72,22 @@ func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffo
 }
 
 func buildAnthropicMessages(conv *ParsedConversation) []AnthropicMessage {
-	return buildAnthropicMessagesCacheOptimized(conv, "")
+	return buildAnthropicMessagesCacheOptimized(conv, "", false)
 }
 
 // buildAnthropicMessagesCacheOptimized 构造 Anthropic messages。
 // dynamicSystemTail 是从 system prompt 中拆出的动态尾部，应放到最后一轮用户消息中，
 // 避免污染 Anthropic 可缓存的 system/tools 前缀。
-func buildAnthropicMessagesCacheOptimized(conv *ParsedConversation, dynamicSystemTail string) []AnthropicMessage {
+// replayRequired 时，工具调用轮与工具结果之后的回复缺 thinking 会补占位（见 anthropicReasoningBlocks）。
+func buildAnthropicMessagesCacheOptimized(conv *ParsedConversation, dynamicSystemTail string, replayRequired bool) []AnthropicMessage {
 	msgs := make([]AnthropicMessage, 0, len(conv.History)*2+2)
+	afterToolResults := false
 
 	for _, entry := range conv.History {
 		if entry.IsSystem {
 			continue // 系统提示已放到 system 字段
 		}
+		afterToolResults = followsToolResults(afterToolResults, entry)
 
 		// 用户消息（含工具结果）
 		if m := buildAnthropicUserMsg(entry.UserContent, entry.ToolResults, entry.Images); m != nil {
@@ -92,7 +96,8 @@ func buildAnthropicMessagesCacheOptimized(conv *ParsedConversation, dynamicSyste
 
 		// 助手消息
 		if entry.HasAssistant {
-			if m := buildAnthropicAssistantMsg(entry.AssistantContent, entry.ToolUses, entry.Reasoning); m != nil {
+			reasoning := anthropicReasoningBlocks(entry.Reasoning, replayRequired, len(entry.ToolUses) > 0 || afterToolResults)
+			if m := buildAnthropicAssistantMsg(entry.AssistantContent, entry.ToolUses, reasoning); m != nil {
 				msgs = append(msgs, *m)
 			}
 		}
@@ -218,21 +223,21 @@ func buildAnthropicCurrentMsgOptimized(conv *ParsedConversation, dynamicSystemTa
 	)
 }
 
-func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse, reasoning *ReasoningTrace) *AnthropicMessage {
-	if len(toolUses) == 0 {
+// buildAnthropicAssistantMsg 组装 assistant 消息；reasoning 是 anthropicReasoningBlocks 的结果，
+// 必须放在 text/tool_use 之前。
+func buildAnthropicAssistantMsg(content string, toolUses []ParsedToolUse, reasoning []AnthropicBlock) *AnthropicMessage {
+	if len(toolUses) == 0 && len(reasoning) == 0 {
 		if content == "" {
 			return &AnthropicMessage{Role: "assistant", Content: " "}
 		}
 		return &AnthropicMessage{Role: "assistant", Content: content}
 	}
 
-	blocks := make([]AnthropicBlock, 0, len(toolUses)+2)
-	if reasoning != nil && reasoning.Text != "" && reasoning.Signature != "" {
-		blocks = append(blocks, AnthropicBlock{
-			Type:      "thinking",
-			Thinking:  reasoning.Text,
-			Signature: reasoning.Signature,
-		})
+	blocks := make([]AnthropicBlock, 0, len(reasoning)+len(toolUses)+1)
+	blocks = append(blocks, reasoning...)
+	if content == "" && len(toolUses) == 0 {
+		// 只有补齐的 thinking 时保留与纯文本回复一致的空格正文，避免 assistant 只剩推理块
+		content = " "
 	}
 	if content != "" {
 		blocks = append(blocks, AnthropicBlock{Type: "text", Text: content})

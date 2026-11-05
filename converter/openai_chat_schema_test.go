@@ -52,14 +52,14 @@ func TestOpenAIChatSchemaRemovesImpossibleAnyOfBranches(t *testing.T) {
 func TestKiroToOpenAIChatNormalizesOnlyOutboundChatTools(t *testing.T) {
 	raw := []json.RawMessage{json.RawMessage(`{"toolSpecification":{"name":"execute_pwsh","description":"Run a command","inputSchema":{"json":{"type":"object","properties":{"cwd":{"anyOf":[{"not":{}},{"type":"string"}]}}}}}}`)}
 	conv := &ParsedConversation{ModelID: "deepseek", CurrentContent: "test", RawTools: raw, ToolsHash: hashTools(raw)}
-	chatBody, err := KiroToOpenAIChatUpstream(conv, "", "")
+	chatBody, err := KiroToOpenAIChatUpstream(conv, "", "", OpenAIRequestOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(chatBody), `"not":{}`) {
 		t.Fatalf("Chat still emits impossible branch: %s", chatBody)
 	}
-	plainBody, err := KiroToOpenAI(conv, "", "")
+	plainBody, err := KiroToOpenAI(conv, "", "", OpenAIRequestOptions{})
 	if err != nil || !strings.Contains(string(plainBody), `"not":{}`) {
 		t.Fatalf("ungated converter changed: err=%v body=%s", err, plainBody)
 	}
