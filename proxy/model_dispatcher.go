@@ -39,6 +39,8 @@ const (
 	modelFailureUpstream   modelFailureClass = "upstream"
 	modelFailureTransport  modelFailureClass = "transport"
 	modelFailureCapability modelFailureClass = "capability"
+	// 请求形态被拒（格式类 400/422），健康中性。
+	modelFailureFormat modelFailureClass = "format"
 )
 
 type modelCircuitState struct {

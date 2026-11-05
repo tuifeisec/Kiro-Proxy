@@ -108,6 +108,15 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 		bindUsageReasoningEffort(usage, pre, model)
 	}
 	usage.setRoute(route)
+	compatProtocol, err := rawResponsesCompatProtocol(model)
+	if err != nil {
+		return nil, fmt.Errorf("resolve raw Responses upstream protocol: %w", err)
+	}
+	compat := newCompatSession(f.caps, model, compatProtocol, upstreamURL, logger, usage)
+	upstreamBody, err = compat.applyLearned(upstreamBody)
+	if err != nil {
+		return nil, err
+	}
 	limit := 0
 	if route.CandidateLimits != nil {
 		limit = route.CandidateLimits[model.ID]
@@ -123,7 +132,20 @@ func (f *Forwarder) ForwardRawResponses(req *http.Request, pre *Preflight, route
 	} else if pre.ConversationID != "" {
 		sessionID = pre.ConversationID
 	}
+	sendStarted := time.Now()
 	resp, err := f.sendRawResponsesWithRetryBudget(req.Context(), upstreamURL, upstreamBody, model, logger, sessionID, usage, singleModelFirstByteTimeout)
+	if err == nil {
+		resp, err = compat.retry(resp, upstreamBody, compatSender{
+			send: func(updated []byte) (*http.Response, error) {
+				budget, _ := remainingProtocolRetryBudget(singleModelFirstByteTimeout, sendStarted)
+				return f.sendRawResponsesWithRetryBudget(req.Context(), upstreamURL, updated, model, logger, sessionID, usage, budget)
+			},
+			budget: func() bool {
+				_, available := remainingProtocolRetryBudget(singleModelFirstByteTimeout, sendStarted)
+				return available
+			},
+		})
+	}
 	if err != nil {
 		lease.release()
 		safeErr := redactRawResponsesEndpointError(err, upstreamURL)
@@ -299,9 +321,28 @@ func normalizeRawResponsesToolParametersRoot(root map[string]json.RawMessage, ch
 	return true, nil
 }
 
-// A group candidate sends once; the shared scheduler owns member/status
-// failover and its outer header deadline. The single-model sender is unchanged.
+// A group candidate sends once, plus at most one format-compat retry per kind;
+// the shared scheduler owns member/status failover and its outer header deadline.
 func (f *Forwarder) sendRawGroupCandidate(ctx context.Context, endpoint string, body []byte, model *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
+	protocol, err := rawResponsesCompatProtocol(model)
+	if err != nil {
+		return nil, err
+	}
+	compat := newCompatSession(f.caps, model, protocol, endpoint, logger, usage)
+	body, err = compat.applyLearned(body)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := f.sendRawGroupCandidateOnce(ctx, endpoint, body, model, logger, sessionID, usage)
+	if err != nil {
+		return nil, err
+	}
+	return compat.retry(resp, body, compatSender{send: func(updated []byte) (*http.Response, error) {
+		return f.sendRawGroupCandidateOnce(ctx, endpoint, updated, model, logger, sessionID, usage)
+	}})
+}
+
+func (f *Forwarder) sendRawGroupCandidateOnce(ctx context.Context, endpoint string, body []byte, model *store.Model, logger *TrafficLogger, sessionID string, usage *requestUsageRecorder) (*http.Response, error) {
 	operation := newUpstreamRequestOperation()
 	attempt := &upstreamAttemptState{}
 	var identity *upstreamUserAgentTrace

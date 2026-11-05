@@ -248,6 +248,7 @@ type Forwarder struct {
 	upstream      *upstreamBucketHealth
 	avoidance     *modelAvoidanceStore
 	imageCaps     *modelImageCapabilityStore
+	caps          *modelCapabilityStore
 	prefixAudit   *prefixAuditTracker
 	// rawPreparationNow is fixed at construction; nil uses time.Now.
 	rawPreparationNow func() time.Time
@@ -275,6 +276,7 @@ func NewForwarder(stats *store.Stats, db *store.DB, managers ...*codex.Credentia
 		upstream:    newUpstreamBucketHealth(),
 		avoidance:   newModelAvoidanceStore(),
 		imageCaps:   newModelImageCapabilityStore(),
+		caps:        newModelCapabilityStore(),
 		prefixAudit: newPrefixAuditTracker(),
 	}
 	_, _ = f.clientForProxy("")
@@ -884,14 +886,23 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				bodyDetail = preserveResponseBody(resp)
 				capabilityMismatch = providerHasImage && isModelCapabilityMismatch(resp.StatusCode, bodyDetail)
 			}
-			if shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch {
+			formatEvidence, formatMismatch := "", false
+			if !capabilityMismatch && !shouldFailoverModelStatus(resp.StatusCode) {
+				formatEvidence, formatMismatch = formatIncompatibleResponse(resp)
+			}
+			if shouldFailoverModelStatus(resp.StatusCode) || capabilityMismatch || formatMismatch {
 				if !rawResponses && bodyDetail == "" {
 					bodyDetail = preserveResponseBody(resp)
 				}
 				failureClass := modelFailureForStatus(resp.StatusCode)
-				if capabilityMismatch {
+				if capabilityMismatch || formatMismatch {
+					// 能力或请求形态不匹配不是成员故障：健康中性，只在本会话内避开该成员。
 					failureClass = modelFailureCapability
-					f.imageCaps.observe(model, modelImageUnsupported, time.Now())
+					if formatMismatch {
+						failureClass = modelFailureFormat
+					} else {
+						f.imageCaps.observe(model, modelImageUnsupported, time.Now())
+					}
 					f.health.neutral(model)
 					f.upstream.neutral(model, time.Now())
 				} else {
@@ -902,7 +913,7 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 					f.health.failure(model, failureClass, retryAfter, time.Now())
 				}
 				f.affinity.clear(route.Group.ID, conversationID, model.ID)
-				if capabilityMismatch {
+				if capabilityMismatch || formatMismatch {
 					markConversationAvoidance(f.avoidance, route.Group.ID, conversationID, model.ID, time.Now())
 				} else {
 					markAvoidanceScopes(f.avoidance, scopes, model.ID, time.Now())
@@ -917,6 +928,8 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				if pre != nil && pre.usage != nil {
 					if capabilityMismatch {
 						pre.usage.setFailoverReason("capability_mismatch")
+					} else if formatMismatch {
+						pre.usage.setFailoverReason("format_incompatible")
 					} else {
 						pre.usage.setFailoverReason(fmt.Sprintf("http_%d", resp.StatusCode))
 					}
@@ -924,6 +937,9 @@ func (f *Forwarder) forwardModelGroup(req *http.Request, pre *Preflight, route *
 				metadata := map[string]interface{}{
 					"stage": stageIndex, "stage_group": stage.GroupName,
 					"failure_class": string(failureClass), "candidate": candidateIndex,
+				}
+				if formatMismatch {
+					metadata["format_evidence"] = formatEvidence
 				}
 				if resp.Request != nil && resp.Request.URL != nil && isOpenAIChatUpstream(model, resp.Request.URL.String()) {
 					metadata["trace_id"] = openAIChatTraceID(resp.Request.Context())
@@ -1148,13 +1164,22 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 		return nil, nil, fmt.Errorf("转换失败: %w", err)
 	}
 	ctx = withUpstreamContentProtocol(ctx, upstreamContentProtocolForCandidate(pre, model, forceReasoningChat))
+	compat := f.newKiroCompatSession(pre, model, upstreamURL, logger, forceReasoningChat)
+	upstreamBody, err = compat.applyLearned(upstreamBody)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var contResult *converter.ResponsesContinuationResult
 	continuationStateKey := ""
 	if pre != nil {
 		continuationStateKey = responsesContinuationStateKeyFor(pre, model, resolveReasoningEffort(pre, model))
 	}
-	if pre != nil && pre.Conv != nil && !forceReasoningChat && model.EnableContinuation && useResponsesAPI(pre, model) && !pre.Conv.IsClassifier && continuationStateKey != "" {
+	useContinuation := pre != nil && pre.Conv != nil && !forceReasoningChat && model.EnableContinuation && useResponsesAPI(pre, model) && !pre.Conv.IsClassifier && continuationStateKey != ""
+	if useContinuation && compat.continuationDisabled() {
+		useContinuation = false
+	}
+	if useContinuation {
 		sessionStarted := time.Now()
 		prevSession, generation, sessionErr := f.db.BeginResponsesSession(continuationStateKey)
 		if sessionErr != nil {
@@ -1208,6 +1233,7 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 				resp.ContentLength = int64(len(body))
 				return resp, contResult, nil
 			}
+			compat.noteContinuationRefusal(resp.StatusCode, body, upstreamBody)
 			upstreamBody = contResult.FallbackBody
 			contResult.UsedContinuation = false
 			resp, err = f.sendCandidateRequest(ctx, upstreamURL, upstreamBody, model, logger, sessionID, pre.usage, fallbackBudget)
@@ -1219,13 +1245,25 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 			resp.ContentLength = int64(len(body))
 		}
 	}
+	resp, err = compat.retry(resp, upstreamBody, compatSender{
+		send: func(updated []byte) (*http.Response, error) {
+			fallbackBudget, _ := remainingProtocolRetryBudget(retryBudget, conversionStarted)
+			return f.sendCandidateRequest(ctx, upstreamURL, updated, model, logger, sessionID, pre.usage, fallbackBudget)
+		},
+		budget: func() bool {
+			_, available := remainingProtocolRetryBudget(retryBudget, conversionStarted)
+			return available
+		},
+	})
+	if err != nil {
+		return nil, contResult, err
+	}
 	if forceReasoningChat && resp != nil {
 		markUpstreamResponse(resp, "chat", nil)
 	}
 	if !forceReasoningChat && (model.Provider == "openai" || model.Provider == "anthropic") && resp.StatusCode == http.StatusBadRequest && (hasToolTurns || responsesRequest) {
 		activeResponses := responsesRequest
 		reasoningRetried := false
-		developerRoleRetried := false
 		const maxCompatibilityRetries = 2
 
 		for compatibilityRetries := 0; compatibilityRetries < maxCompatibilityRetries && resp.StatusCode == http.StatusBadRequest; compatibilityRetries++ {
@@ -1288,29 +1326,6 @@ func (f *Forwarder) forwardCandidate(ctx context.Context, pre *Preflight, model 
 				} else {
 					markUpstreamResponse(resp, "chat", nil)
 				}
-			case activeResponses && !developerRoleRetried && isResponsesDeveloperRoleRejected(resp.StatusCode, bodyText):
-				compatibilityBody, changed, convertErr := responsesWithSystemRole(upstreamBody)
-				if convertErr != nil {
-					return nil, contResult, fmt.Errorf("构建 Responses system role 兼容请求失败: %w", convertErr)
-				}
-				if !changed {
-					resp.Body = io.NopCloser(bytes.NewReader(body))
-					resp.ContentLength = int64(len(body))
-					return resp, contResult, nil
-				}
-				fallbackBudget, budgetAvailable := remainingProtocolRetryBudget(retryBudget, conversionStarted)
-				if !budgetAvailable {
-					resp.Body = io.NopCloser(bytes.NewReader(body))
-					resp.ContentLength = int64(len(body))
-					return resp, contResult, nil
-				}
-				logger.Warn("forwarder", "Responses 上游拒绝 developer role，使用 system role 重放一次")
-				resp, err = f.sendCandidateRequest(ctx, upstreamURL, compatibilityBody, model, logger, sessionID, pre.usage, fallbackBudget)
-				if err != nil {
-					return nil, contResult, err
-				}
-				upstreamBody = compatibilityBody
-				developerRoleRetried = true
 			default:
 				resp.Body = io.NopCloser(bytes.NewReader(body))
 				resp.ContentLength = int64(len(body))
