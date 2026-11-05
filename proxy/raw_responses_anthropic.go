@@ -169,7 +169,9 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 		switch strings.ToLower(strings.TrimSpace(reasoning.Effort)) {
 		case "":
 		case "low", "medium", "high":
-			request["thinking"] = map[string]interface{}{"type": "enabled", "budget_tokens": map[string]int{"low": 1024, "medium": 4096, "high": 8192}[strings.ToLower(reasoning.Effort)]}
+			effort := strings.ToLower(strings.TrimSpace(reasoning.Effort))
+			request["thinking"] = map[string]string{"type": "adaptive"}
+			request["output_config"] = map[string]string{"effort": effort}
 		case "none":
 			request["thinking"] = map[string]string{"type": "disabled"}
 		default:
