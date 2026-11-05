@@ -9,14 +9,14 @@
 //
 // 设计要点：
 //   - 单 goroutine 读 SSE、写 pipe
-//   - functionCall 生成确定性 toolUseId（Gemini 不提供 call id）
+//   - functionCall 的 toolUseId 由名称 + 每条流随机前缀 + 序号生成（Gemini 不保证提供 call id）
+//   - thought=true 的思考摘要不进正文；它与 functionCall 上的 thoughtSignature 一起保存，供工具轮回放
 //   - 结尾补 metadata + contextUsage + metering 三帧
 
 package converter
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -42,8 +42,10 @@ type GeminiStreamConverter struct {
 	writeFailed  bool
 	done         chan struct{}
 
-	// 工具调用计数器（用于生成确定性 ID）
-	toolCallIndex int
+	// 工具调用计数器与每条流的随机前缀（用于生成跨轮次不重复的 ID）
+	toolCallIndex  int
+	toolCallPrefix string
+	reasoning      geminiReasoningCapture
 
 	modelID                                                    string
 	maxTokens                                                  int
@@ -71,6 +73,7 @@ func NewGeminiStreamConverter(source io.ReadCloser, modelID string, maxTokens in
 		source:           source,
 		outcome:          StreamOutcomePending,
 		done:             make(chan struct{}),
+		toolCallPrefix:   newGeminiToolCallPrefix(),
 		modelID:          modelID,
 		maxTokens:        maxTokens,
 		inputPrice:       inputPrice,
@@ -271,6 +274,12 @@ func (c *GeminiStreamConverter) handleData(data string) {
 	parts := candidate.Content.Parts
 
 	for _, part := range parts {
+		// 思考摘要只进入推理回放状态，不混入正文
+		if part.Thought {
+			c.recordThought(part.Text)
+			continue
+		}
+
 		// 文本内容
 		if part.Text != "" {
 			c.mu.Lock()
@@ -285,7 +294,8 @@ func (c *GeminiStreamConverter) handleData(data string) {
 			c.toolUsed = true
 			c.mu.Unlock()
 			c.toolCallIndex++
-			callID := fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, c.toolCallIndex)
+			callID := geminiToolCallID(c.toolCallPrefix, part.FunctionCall.Name, c.toolCallIndex)
+			c.recordToolCall(callID, part.ThoughtSignature, c.toolCallIndex)
 
 			c.write(ToolUseStartFrame(callID, part.FunctionCall.Name))
 
@@ -342,8 +352,10 @@ type geminiContentChunk struct {
 }
 
 type geminiPartChunk struct {
-	Text         string               `json:"text"`
-	FunctionCall *geminiFuncCallChunk `json:"functionCall"`
+	Text             string               `json:"text"`
+	Thought          bool                 `json:"thought"`
+	ThoughtSignature string               `json:"thoughtSignature"`
+	FunctionCall     *geminiFuncCallChunk `json:"functionCall"`
 }
 
 type geminiFuncCallChunk struct {

@@ -48,7 +48,7 @@ func reasoningProtocol(pre *Preflight, model *store.Model) string {
 		return "responses"
 	}
 	if model.Provider == "gemini" {
-		return ""
+		return "gemini"
 	}
 	return "chat"
 }

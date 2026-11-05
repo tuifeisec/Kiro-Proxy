@@ -133,7 +133,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 	case m.Provider == "anthropic":
 		body, err = converter.KiroToAnthropic(conv, m.ModelID, reasoningEffort, converter.AnthropicRequestOptions{UpstreamHost: upstreamHost, ThinkingStyle: m.ThinkingStyle})
 	case m.Provider == "gemini":
-		body, err = converter.KiroToGemini(conv, m.ModelID, reasoningEffort)
+		body, err = converter.KiroToGemini(conv, m.ModelID, reasoningEffort, converter.GeminiRequestOptions{ThinkingStyle: m.ThinkingStyle})
 		if !m.DisableAutoSuffix {
 			// Gemini URL: 替换 {model} 占位符，追加 ?alt=sse
 			upstreamURL = strings.Replace(upstreamURL, "{model}", m.ModelID, 1)

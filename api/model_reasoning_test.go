@@ -68,8 +68,9 @@ func TestModelReasoningCapabilityAPIRejectsInvalidConfig(t *testing.T) {
 		{"default outside declared tiers", func(m *store.Model) {
 			m.SupportedReasoningEfforts, m.ReasoningEffort = []string{"low", "medium"}, "high"
 		}, "默认思考档位"},
-		{"default outside provider table", func(m *store.Model) {
+		{"default outside declared gemini tiers", func(m *store.Model) {
 			m.Provider, m.Endpoint, m.ReasoningEffort = "gemini", "/v1beta/models/{model}:streamGenerateContent", "none"
+			m.SupportedReasoningEfforts = []string{"low", "high"}
 		}, "默认思考档位"},
 		{"thinking style not for provider", func(m *store.Model) { m.ThinkingStyle = "budget" }, "思考形态"},
 		{"gemini rejects adaptive", func(m *store.Model) {

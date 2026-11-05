@@ -20,7 +20,7 @@ func TestGeminiMixedToolResultUsesStructuredEnvelope(t *testing.T) {
 		}},
 	}
 
-	body, err := KiroToGemini(conv, "gemini-2.5-pro", "")
+	body, err := KiroToGemini(conv, "gemini-2.5-pro", "", GeminiRequestOptions{})
 	if err != nil {
 		t.Fatalf("convert Gemini request: %v", err)
 	}

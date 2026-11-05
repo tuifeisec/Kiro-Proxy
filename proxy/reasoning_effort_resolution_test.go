@@ -45,7 +45,7 @@ func TestResolveReasoningEffortDecisionPriorityAndNearestFit(t *testing.T) {
 		{"request wins and is kept", reasoningTestPre("high", "low"), reasoningTestModel("openai", "medium"), "high", "high", reasoningEffortSourceRequest},
 		{"group xhigh fits declared anthropic high", reasoningTestPre("", "xhigh"), reasoningTestModel("anthropic", "", "none", "low", "medium", "high"), "xhigh", "high", reasoningEffortSourceGroup},
 		{"request max fits declared tiers", reasoningTestPre("max", ""), reasoningTestModel("openai", "", "low", "medium"), "max", "medium", reasoningEffortSourceRequest},
-		{"request none fits gemini low", reasoningTestPre("none", ""), reasoningTestModel("gemini", ""), "none", "low", reasoningEffortSourceRequest},
+		{"request none fits declared gemini low", reasoningTestPre("none", ""), reasoningTestModel("gemini", "", "low", "medium", "high"), "none", "low", reasoningEffortSourceRequest},
 		{"model default", reasoningTestPre("", ""), reasoningTestModel("openai", "low"), "low", "low", reasoningEffortSourceModel},
 		{"nothing configured sends nothing", reasoningTestPre("", ""), reasoningTestModel("openai", ""), "", "", ""},
 		{"auto fixed overrides request and group", auto, reasoningTestModel("anthropic", "low", "none", "low", "medium", "high"), "xhigh", "high", reasoningEffortSourceAuto},
@@ -73,7 +73,8 @@ func TestResolveReasoningEffortClassifierUsesLowestEffectiveTier(t *testing.T) {
 	}{
 		{reasoningTestModel("openai", "high"), "none"},
 		{reasoningTestModel("anthropic", "high"), "none"},
-		{reasoningTestModel("gemini", "high"), "low"},
+		{reasoningTestModel("gemini", "high"), "none"},
+		{reasoningTestModel("gemini", "high", "low", "medium", "high"), "low"},
 		{reasoningTestModel("openai", "high", "medium", "high"), "medium"},
 		{reasoningTestModel("openai", ""), ""},
 	}
@@ -97,7 +98,7 @@ func TestResolveReasoningEffortClassifierUsesLowestEffectiveTier(t *testing.T) {
 func TestResolveReasoningEffortDecisionReportsUnusableConfig(t *testing.T) {
 	cases := map[string]*store.Model{
 		"only none declared":     reasoningTestModel("openai", "", "none"),
-		"stored invalid tier":    reasoningTestModel("gemini", "", "max"),
+		"stored invalid tier":    reasoningTestModel("gemini", "", "ultra"),
 		"stored invalid default": reasoningTestModel("openai", "turbo"),
 	}
 	for name, model := range cases {
@@ -126,7 +127,7 @@ func TestConvertRequestUsesWireEffortAndHonorsDisabledField(t *testing.T) {
 		absent   []string
 	}{
 		{"anthropic xhigh maps to declared high budget", reasoningTestModel("anthropic", "", "none", "low", "medium", "high"), "xhigh", `"thinking":{"type":"enabled","budget_tokens":8192}`, nil},
-		{"gemini none maps to low budget", reasoningTestModel("gemini", ""), "none", `"thinkingConfig":{"thinkingBudget":1024}`, nil},
+		{"gemini none fits declared low budget", reasoningTestModel("gemini", "", "low", "medium", "high"), "none", `"thinkingConfig":{"thinkingBudget":1024,"includeThoughts":true}`, nil},
 		{"openai chat declared tiers", reasoningTestModel("openai", "", "low", "medium"), "max", `"reasoning_effort":"medium"`, nil},
 		{"codex declared tiers", reasoningTestModel("codex", "", "high"), "low", `"effort":"high"`, nil},
 	}

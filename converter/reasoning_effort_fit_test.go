@@ -60,8 +60,8 @@ func TestNormalizeSupportedReasoningEffortsSortsDedupesAndValidates(t *testing.T
 	if _, err := NormalizeSupportedReasoningEfforts("anthropic", []string{"ultra"}); err == nil {
 		t.Fatal("anthropic must reject an unknown tier")
 	}
-	if _, err := NormalizeSupportedReasoningEfforts("gemini", []string{"none"}); err == nil {
-		t.Fatal("gemini must reject none")
+	if _, err := NormalizeSupportedReasoningEfforts("gemini", []string{"minimal"}); err == nil {
+		t.Fatal("gemini must reject a tier outside the shared order")
 	}
 	if _, err := NormalizeSupportedReasoningEfforts("openai", []string{""}); err == nil {
 		t.Fatal("empty tier must be rejected")
@@ -78,7 +78,7 @@ func TestModelReasoningEffortsFallsBackToProviderTable(t *testing.T) {
 		"codex":     {"none", "low", "medium", "high", "xhigh", "max"},
 		"":          {"none", "low", "medium", "high", "xhigh", "max"},
 		"anthropic": {"none", "low", "medium", "high", "xhigh", "max"},
-		"gemini":    {"low", "medium", "high"},
+		"gemini":    {"none", "low", "medium", "high", "xhigh", "max"},
 	}
 	for provider, want := range cases {
 		got, err := ModelReasoningEfforts(provider, nil)
@@ -90,7 +90,7 @@ func TestModelReasoningEffortsFallsBackToProviderTable(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(declared, []string{"low", "high"}) {
 		t.Fatalf("declared effective = %v (%v)", declared, err)
 	}
-	if _, err := ModelReasoningEfforts("gemini", []string{"max"}); err == nil {
+	if _, err := ModelReasoningEfforts("gemini", []string{"ultra"}); err == nil {
 		t.Fatal("stored declaration outside the provider table must surface an error")
 	}
 }
@@ -105,11 +105,38 @@ func TestProviderReasoningTablesMatchConverterMappings(t *testing.T) {
 		}
 	}
 	for _, effort := range ProviderReasoningEfforts("gemini") {
-		if geminiThinkingFromEffort(effort) == nil {
-			t.Fatalf("gemini table tier %q has no thinking mapping", effort)
+		for _, model := range []string{"gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-pro", "gemini-3-flash"} {
+			if config, err := ResolveGeminiThinking(model, effort, GeminiRequestOptions{}); err != nil || config == nil {
+				t.Fatalf("gemini table tier %q has no thinking mapping for %s: %v", effort, model, err)
+			}
 		}
 	}
 	if err := ValidateProviderReasoningEffort("openai", "max"); err != nil {
 		t.Fatalf("openai max must be expressible: %v", err)
+	}
+}
+
+func TestModelWireReasoningEffortFitsDeclaredTiers(t *testing.T) {
+	cases := []struct {
+		name     string
+		declared []string
+		disabled bool
+		want     string
+		wire     string
+		wantErr  bool
+	}{
+		{"provider table keeps tier", nil, false, "xhigh", "xhigh", false},
+		{"declared tiers fit nearest stronger", []string{"low", "high"}, false, "medium", "high", false},
+		{"only none cannot carry a request", []string{"none"}, false, "xhigh", "", true},
+		{"disabled field sends nothing", []string{"none"}, true, "xhigh", "", false},
+		{"empty request sends nothing", nil, false, "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wire, err := ModelWireReasoningEffort("anthropic", tc.declared, tc.disabled, tc.want)
+			if (err != nil) != tc.wantErr || wire != tc.wire {
+				t.Fatalf("wire=%q err=%v, want wire=%q err=%v", wire, err, tc.wire, tc.wantErr)
+			}
+		})
 	}
 }

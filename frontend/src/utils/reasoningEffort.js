@@ -18,7 +18,7 @@ const PROVIDER_REASONING_EFFORTS = {
   openai: OPENAI_EFFORTS,
   codex: OPENAI_EFFORTS,
   anthropic: OPENAI_EFFORTS,
-  gemini: ['low', 'medium', 'high'],
+  gemini: OPENAI_EFFORTS,
 }
 
 // 思考形态覆盖：空=自动；仅 anthropic 与 gemini 可显式选择。

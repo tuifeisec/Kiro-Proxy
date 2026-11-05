@@ -1,13 +1,11 @@
 package converter
 
 import (
-	"strings"
-
 	json "github.com/goccy/go-json"
 )
 
 // KiroToGemini 将解析好的会话转换为 Gemini generateContent 请求体
-func KiroToGemini(conv *ParsedConversation, targetModel string, reasoningEffort string) ([]byte, error) {
+func KiroToGemini(conv *ParsedConversation, targetModel string, reasoningEffort string, opts GeminiRequestOptions) ([]byte, error) {
 	req := GeminiRequest{}
 
 	// 系统提示 → systemInstruction（静态部分，利于隐式缓存）
@@ -44,10 +42,11 @@ func KiroToGemini(conv *ParsedConversation, targetModel string, reasoningEffort 
 		genConfig.TopP = conv.TopP
 		hasConfig = true
 	}
-	if err := ValidateProviderReasoningEffort("gemini", reasoningEffort); err != nil {
+	thinking, err := ResolveGeminiThinking(targetModel, reasoningEffort, opts)
+	if err != nil {
 		return nil, err
 	}
-	if thinking := geminiThinkingFromEffort(reasoningEffort); thinking != nil {
+	if thinking != nil {
 		genConfig.ThinkingConfig = thinking
 		hasConfig = true
 	}
@@ -100,7 +99,7 @@ func buildGeminiContents(conv *ParsedConversation, dynamicSystemTail string) []G
 
 		// 助手消息
 		if entry.HasAssistant {
-			if m := buildGeminiModelContent(entry.AssistantContent, entry.ToolUses); m != nil {
+			if m := buildGeminiModelContent(entry.AssistantContent, entry.ToolUses, entry.Reasoning); m != nil {
 				raw = append(raw, *m)
 			}
 		}
@@ -197,12 +196,13 @@ func buildGeminiUserContent(content string, images []KiroImage) GeminiContent {
 	return GeminiContent{Role: "user", Parts: parts}
 }
 
-func buildGeminiModelContent(content string, toolUses []ParsedToolUse) *GeminiContent {
+func buildGeminiModelContent(content string, toolUses []ParsedToolUse, reasoning *ReasoningTrace) *GeminiContent {
 	parts := make([]GeminiPart, 0, 1+len(toolUses))
 	if content != "" {
 		parts = append(parts, GeminiPart{Text: content})
 	}
-	for _, tu := range toolUses {
+	signatures := geminiCallSignatures(reasoning, len(toolUses))
+	for i, tu := range toolUses {
 		var args interface{}
 		if len(tu.Input) > 0 {
 			_ = json.Unmarshal(tu.Input, &args)
@@ -212,6 +212,7 @@ func buildGeminiModelContent(content string, toolUses []ParsedToolUse) *GeminiCo
 				Name: tu.Name,
 				Args: args,
 			},
+			ThoughtSignature: signatures[i],
 		})
 	}
 	if len(parts) == 0 {
@@ -236,17 +237,4 @@ func toGeminiTools(rawTools []json.RawMessage) []GeminiFuncDecl {
 		})
 	}
 	return result
-}
-
-func geminiThinkingFromEffort(effort string) *GeminiThinkingConfig {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "low":
-		return &GeminiThinkingConfig{ThinkingBudget: 1024}
-	case "medium":
-		return &GeminiThinkingConfig{ThinkingBudget: 4096}
-	case "high":
-		return &GeminiThinkingConfig{ThinkingBudget: 8192}
-	default:
-		return nil
-	}
 }

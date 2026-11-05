@@ -33,7 +33,8 @@ var (
 		ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax,
 	}
 	geminiReasoningEfforts = []string{
-		ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh,
+		ReasoningEffortNone, ReasoningEffortLow, ReasoningEffortMedium,
+		ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax,
 	}
 )
 
@@ -129,6 +130,28 @@ func FitReasoningEffort(want string, allowed []string) (string, error) {
 		return "", fmt.Errorf("思考档位 %q 无法映射到模型支持的档位 [%s]", want, strings.Join(allowed, ","))
 	}
 	return best, nil
+}
+
+// ModelWireReasoningEffort 返回期望档位在该模型上实际下发的档位：按模型有效档位
+// 就近映射并确认本地转换器可表达。期望为空或模型禁用推理字段时返回空（不发送）。
+// 代理转发与 Auto 配置校验共用它，保证"配置能保存"与"运行时能下发"一致。
+func ModelWireReasoningEffort(provider string, declared []string, fieldDisabled bool, want string) (string, error) {
+	want, err := NormalizeReasoningEffort(want)
+	if err != nil || want == "" || fieldDisabled {
+		return "", err
+	}
+	allowed, err := ModelReasoningEfforts(provider, declared)
+	if err != nil {
+		return "", err
+	}
+	wire, err := FitReasoningEffort(want, allowed)
+	if err != nil {
+		return "", err
+	}
+	if err := ValidateProviderReasoningEffort(provider, wire); err != nil {
+		return "", err
+	}
+	return wire, nil
 }
 
 // ValidateProviderReasoningEffort 仅检查本地转换器能否表达该档位，

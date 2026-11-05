@@ -12,7 +12,7 @@ test('provider default tables match the backend converter table', () => {
   assert.deepEqual(providerReasoningEfforts('openai'), ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
   assert.deepEqual(providerReasoningEfforts('codex'), ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
   assert.deepEqual(providerReasoningEfforts('anthropic'), ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
-  assert.deepEqual(providerReasoningEfforts('gemini'), ['low', 'medium', 'high'])
+  assert.deepEqual(providerReasoningEfforts('gemini'), ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
   assert.deepEqual(providerReasoningEfforts(''), providerReasoningEfforts('openai'))
 })
 
@@ -20,7 +20,7 @@ test('declared tiers are sorted, deduplicated and limited to the provider table'
   assert.deepEqual(sortReasoningEfforts(['max', 'LOW', 'high', 'low']), ['low', 'high', 'max'])
   assert.deepEqual(modelReasoningEfforts({ provider: 'openai', supported_reasoning_efforts: ['high', 'low'] }), ['low', 'high'])
   assert.deepEqual(modelReasoningEfforts({ provider: 'anthropic', supported_reasoning_efforts: [] }), ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
-  assert.deepEqual(modelReasoningEfforts({ provider: 'gemini', supported_reasoning_efforts: null }), ['low', 'medium', 'high'])
+  assert.deepEqual(modelReasoningEfforts({ provider: 'gemini', supported_reasoning_efforts: null }), ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
   assert.deepEqual(modelEffortOptions({ provider: 'openai', supported_reasoning_efforts: ['medium'] }), ['', 'medium'])
 })
 

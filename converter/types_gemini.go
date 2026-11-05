@@ -15,10 +15,12 @@ type GeminiContent struct {
 }
 
 type GeminiPart struct {
-	Text             string                `json:"text,omitempty"`
-	FunctionCall     *GeminiFunctionCall   `json:"functionCall,omitempty"`
-	FunctionResponse *GeminiFunctionResp   `json:"functionResponse,omitempty"`
-	InlineData       *GeminiInlineData     `json:"inlineData,omitempty"`
+	Text             string              `json:"text,omitempty"`
+	FunctionCall     *GeminiFunctionCall `json:"functionCall,omitempty"`
+	FunctionResponse *GeminiFunctionResp `json:"functionResponse,omitempty"`
+	InlineData       *GeminiInlineData   `json:"inlineData,omitempty"`
+	// ThoughtSignature 与 functionCall 同级，回放上游签发的思考签名。
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
 type GeminiFunctionCall struct {
@@ -53,6 +55,10 @@ type GeminiGenConfig struct {
 	ThinkingConfig  *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
 }
 
+// GeminiThinkingConfig 是 generationConfig.thinkingConfig。
+// ThinkingBudget 用指针，才能把 0（Flash 关闭思考）显式发出。
 type GeminiThinkingConfig struct {
-	ThinkingBudget int `json:"thinkingBudget,omitempty"`
+	ThinkingBudget  *int   `json:"thinkingBudget,omitempty"`
+	ThinkingLevel   string `json:"thinkingLevel,omitempty"`
+	IncludeThoughts bool   `json:"includeThoughts,omitempty"`
 }

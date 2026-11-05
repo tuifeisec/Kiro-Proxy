@@ -78,7 +78,7 @@ func ValidateAutoRoutingConfig(config store.AutoRoutingConfig, models []store.Mo
 			return fmt.Errorf("%s: %w", name, err)
 		}
 		for _, model := range candidates {
-			if err := converter.ValidateProviderReasoningEffort(model.Provider, normalized); err != nil {
+			if _, err := converter.ModelWireReasoningEffort(model.Provider, model.SupportedReasoningEfforts, model.DisableReasoningField, normalized); err != nil {
 				return fmt.Errorf("%s for model %q provider %q: %w", name, model.ID, model.Provider, err)
 			}
 		}
@@ -289,7 +289,7 @@ func (r *Router) resolveDutyAutoLocked(conv *converter.ParsedConversation, selec
 		}
 	}
 	for _, candidate := range route.Candidates {
-		if err := converter.ValidateProviderReasoningEffort(candidate.Provider, selection.Effort); err != nil {
+		if _, err := converter.ModelWireReasoningEffort(candidate.Provider, candidate.SupportedReasoningEfforts, candidate.DisableReasoningField, selection.Effort); err != nil {
 			return nil, fmt.Errorf("auto target %q candidate %q cannot express reasoning_effort %q: %w", selection.ModelID, candidate.ID, selection.Effort, err)
 		}
 	}

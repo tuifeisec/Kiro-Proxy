@@ -168,8 +168,8 @@ func TestAutoGroupDefaultsMetadataAndFallbackProviderValidation(t *testing.T) {
 	if metadata == nil || metadata.ContextWindow != 32000 || metadata.MaxTokens != 2000 || metadata.ImageInputMode != store.ImageInputUnsupported {
 		t.Fatalf("group-only metadata omitted fallback: %#v", metadata)
 	}
-	// Anthropic 已可表达全部档位，改用本地转换器仍不能表达 xhigh 的 Gemini 验证回退组成员同样被校验
-	r.models[2].Provider = "gemini"
+	// 回退组成员同样按就近映射校验：只声明 none 的成员无法承载 xhigh
+	r.models[2].SupportedReasoningEfforts = []string{"none"}
 	r.autoConfig.DutyModels["implementation"] = store.AutoDutyTarget{ModelID: "gpt", ReasoningEffort: "xhigh"}
 	if err := ValidateAutoRoutingConfig(r.autoConfig, r.models, r.groups); err == nil || !strings.Contains(err.Error(), "backup") {
 		t.Fatalf("fallback provider was not checked: %v", err)

@@ -81,12 +81,9 @@ func resolveReasoningEffortDecisionWithRequest(pre *Preflight, model *store.Mode
 	if decision.FieldDisabled || requested == "" {
 		return decision, nil
 	}
-	wire, err := converter.FitReasoningEffort(requested, allowed)
+	wire, err := converter.ModelWireReasoningEffort(model.Provider, model.SupportedReasoningEfforts, false, requested)
 	if err != nil {
 		return decision, fmt.Errorf("模型 %s: %w", statsModelID(model), err)
-	}
-	if err := converter.ValidateProviderReasoningEffort(model.Provider, wire); err != nil {
-		return decision, err
 	}
 	decision.Wire = wire
 	return decision, nil

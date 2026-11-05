@@ -164,16 +164,16 @@ func TestSettingsPutInvalidV2DoesNotWriteAnySetting(t *testing.T) {
 
 func TestSettingsPutRejectsEffortUnsupportedByLocalProviderConverter(t *testing.T) {
 	_, server, _ := newAutoRoutingAPITestServer(t)
-	model := apiAutoRoutingModel("gemini-model", "upstream-gemini")
-	// Anthropic 已可表达全部档位，改用本地转换器仍不能表达 max 的 Gemini
-	model.Provider = "gemini"
+	// 各 provider 转换器已能表达全部档位；按就近映射后仍无法下发的配置（只声明 none 却要求 max）必须被拒绝
+	model := apiAutoRoutingModel("none-only-model", "upstream-none-only")
+	model.SupportedReasoningEfforts = []string{"none"}
 	if err := server.db.CreateModel(&model); err != nil {
 		t.Fatal(err)
 	}
 	status, response := putAutoRoutingSettings(t, server.Handler(), map[string]string{
 		store.AutoRoutingSetting: apiAutoRoutingV2Raw(model.ID, "max"),
 	})
-	if status != http.StatusBadRequest || !strings.Contains(response["error"], `provider "gemini"`) {
+	if status != http.StatusBadRequest || !strings.Contains(response["error"], `provider "openai"`) {
 		t.Fatalf("unsupported provider effort status=%d response=%v", status, response)
 	}
 }
