@@ -236,6 +236,9 @@ type OpenAIRequest struct {
 	PromptCacheKey  string              `json:"prompt_cache_key,omitempty"`
 	PromptCacheOpts *PromptCacheOptions `json:"prompt_cache_options,omitempty"`
 	User            string              `json:"user,omitempty"`
+
+	// MaxCompletionTokens 与 MaxTokens 二选一，由 ChatTokenLimitField 按上游 host 决定。
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 }
 
 type OpenAIReasoning struct {

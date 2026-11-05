@@ -9,6 +9,7 @@ import (
 	stdjson "encoding/json"
 	"fmt"
 	"io"
+	"kiro-proxy/converter"
 	"kiro-proxy/store"
 	"net/http"
 	"sort"
@@ -163,10 +164,10 @@ func ensureResponsesPromptCacheKeyRoot(root map[string]json.RawMessage, model st
 }
 
 func responsesToChatFallback(body []byte, model string) ([]byte, *fallbackResponseState, error) {
-	return responsesToChatFallbackWithPrevious(body, model, nil)
+	return responsesToChatFallbackWithPrevious(body, model, nil, "")
 }
 
-func responsesToChatFallbackWithPrevious(body []byte, model string, previous []map[string]interface{}) ([]byte, *fallbackResponseState, error) {
+func responsesToChatFallbackWithPrevious(body []byte, model string, previous []map[string]interface{}, upstreamHost string) ([]byte, *fallbackResponseState, error) {
 	var cacheErr error
 	body, _, cacheErr = ensureResponsesPromptCacheKey(body, model)
 	if cacheErr != nil {
@@ -176,7 +177,7 @@ func responsesToChatFallbackWithPrevious(body []byte, model string, previous []m
 	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, nil, fmt.Errorf("invalid Responses request: %w", err)
 	}
-	chat, state, err := responsesToChatFallbackRootWithPrevious(root, model, previous)
+	chat, state, err := responsesToChatFallbackRootWithPrevious(root, model, previous, upstreamHost)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -187,7 +188,8 @@ func responsesToChatFallbackWithPrevious(body []byte, model string, previous []m
 	return result, state, nil
 }
 
-func responsesToChatFallbackRootWithPrevious(root map[string]json.RawMessage, model string, previous []map[string]interface{}) (map[string]json.RawMessage, *fallbackResponseState, error) {
+// upstreamHost 决定 max_output_tokens 映射到哪个 Chat 字段（见 converter.ChatTokenLimitField）。
+func responsesToChatFallbackRootWithPrevious(root map[string]json.RawMessage, model string, previous []map[string]interface{}, upstreamHost string) (map[string]json.RawMessage, *fallbackResponseState, error) {
 	chat := make(map[string]json.RawMessage, len(root)+2)
 	for _, name := range []string{
 		"model", "stream", "temperature", "top_p", "user", "frequency_penalty",
@@ -234,7 +236,7 @@ func responsesToChatFallbackRootWithPrevious(root map[string]json.RawMessage, mo
 	chat["messages"] = messageBytes
 
 	if raw := root["max_output_tokens"]; len(raw) > 0 {
-		chat["max_completion_tokens"] = raw
+		chat[converter.ChatTokenLimitField(upstreamHost)] = raw
 	}
 	if raw := root["text"]; len(raw) > 0 {
 		if responseFormat := responsesTextToChatFormat(raw); len(responseFormat) > 0 {

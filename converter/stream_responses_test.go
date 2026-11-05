@@ -115,13 +115,13 @@ event: response.output_item.added
 data: {"type":"response.output_item.added","item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}
 
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","item_id":"msg_1","delta":"浣犲ソ"}
+data: {"type":"response.output_text.delta","item_id":"msg_1","delta":"你好"}
 
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","item_id":"msg_1","delta":"锛屼笘鐣?}
+data: {"type":"response.output_text.delta","item_id":"msg_1","delta":"，世界"}
 
 event: response.output_text.done
-data: {"type":"response.output_text.done","item_id":"msg_1","text":"浣犲ソ锛屼笘鐣?}
+data: {"type":"response.output_text.done","item_id":"msg_1","text":"你好，世界"}
 
 event: response.completed
 data: {"type":"response.completed","response":{"usage":{"input_tokens":1087,"output_tokens":5,"input_tokens_details":{"cached_tokens":11}}}}

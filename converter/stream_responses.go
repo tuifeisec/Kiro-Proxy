@@ -18,6 +18,7 @@ package converter
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"strconv"
@@ -58,6 +59,10 @@ type ResponsesStreamConverter struct {
 	reasoningID            string
 	reasoningStatus        string
 	reasoningEncrypted     string
+	thinkReasoning         strings.Builder  // 正文开头 <think> 块拆出的思考
+	thinkSplit             thinkTagSplitter // 只在 process goroutine 内访问
+	// failureDetail 是具体失败原因（受 mu 保护）；空时使用终态的通用说明
+	failureDetail string
 
 	modelID                                                    string
 	maxTokens                                                  int
@@ -153,6 +158,10 @@ func (c *ResponsesStreamConverter) ReasoningTrace() ReasoningTrace {
 		text = c.reasoningSummary.String()
 		wireField = "reasoning_summary_text"
 	}
+	if text == "" {
+		text = c.thinkReasoning.String()
+		wireField = ThinkTagWireField
+	}
 	if strings.TrimSpace(text) == "" {
 		return ReasoningTrace{}
 	}
@@ -179,7 +188,10 @@ func (c *ResponsesStreamConverter) Outcome() StreamOutcome {
 }
 
 func (c *ResponsesStreamConverter) Error() error {
-	return streamOutcomeError(c.Outcome())
+	outcome := c.Outcome()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return streamOutcomeErrorWithDetail(outcome, c.failureDetail)
 }
 
 func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
@@ -234,13 +246,16 @@ func (c *ResponsesStreamConverter) process(source io.ReadCloser) {
 		c.outcome = streamOutcomeFromReadError(readErr)
 	}
 	outcome := c.outcome
+	failureDetail := c.failureDetail
 	c.mu.Unlock()
 	if outcome != StreamOutcomeCompleted {
 		if outcome != StreamOutcomeClientCanceled {
-			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureText(outcome, failureDetail)))
 		}
 		return
 	}
+	// 消息项没有 done 事件就完成的流在这里交还 <think> 拆分的缓冲
+	c.flushThinkSplit()
 
 	// 结尾帧：与 OpenAI chat 路径保持一致（Kiro IDE 依赖这些帧判定完成）
 	c.mu.Lock()
@@ -273,9 +288,11 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		var envelope struct {
 			Type string `json:"type"`
 		}
-		if json.Unmarshal([]byte(data), &envelope) == nil {
-			eventType = envelope.Type
+		if err := json.Unmarshal([]byte(data), &envelope); err != nil {
+			c.failUnparseable(data, err)
+			return
 		}
+		eventType = envelope.Type
 	}
 	switch eventType {
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
@@ -285,7 +302,11 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			ContentIndex int    `json:"content_index"`
 			SummaryIndex int    `json:"summary_index"`
 		}
-		if json.Unmarshal([]byte(data), &ev) != nil || ev.Delta == "" {
+		if !c.decodeEvent(data, &ev) {
+			return
+		}
+		c.writeThinkSplit(c.thinkSplit.markIndependentReasoning())
+		if ev.Delta == "" {
 			return
 		}
 		c.mu.Lock()
@@ -305,7 +326,7 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			ContentIndex int    `json:"content_index"`
 			SummaryIndex int    `json:"summary_index"`
 		}
-		if json.Unmarshal([]byte(data), &ev) != nil || ev.Text == "" {
+		if !c.decodeEvent(data, &ev) || ev.Text == "" {
 			return
 		}
 		c.mu.Lock()
@@ -322,11 +343,11 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		var ev struct {
 			Delta string `json:"delta"`
 		}
-		if json.Unmarshal([]byte(data), &ev) == nil && ev.Delta != "" {
+		if c.decodeEvent(data, &ev) && ev.Delta != "" {
 			c.mu.Lock()
 			c.outputChars += len(ev.Delta)
 			c.mu.Unlock()
-			c.write(AssistantResponseFrame(ev.Delta, c.modelID))
+			c.writeThinkSplit(c.thinkSplit.feed(ev.Delta))
 		}
 
 	case "response.output_item.added":
@@ -340,10 +361,11 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 				Arguments string `json:"arguments"`
 			} `json:"item"`
 		}
-		if json.Unmarshal([]byte(data), &ev) != nil {
+		if !c.decodeEvent(data, &ev) {
 			return
 		}
 		if ev.Item.Type == "reasoning" {
+			c.writeThinkSplit(c.thinkSplit.markIndependentReasoning())
 			c.mu.Lock()
 			if ev.Item.ID != "" {
 				c.reasoningID = ev.Item.ID
@@ -357,6 +379,8 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		if ev.Item.Type != "function_call" {
 			return
 		}
+		// 工具调用开始意味着正文结束，先交还 <think> 拆分的缓冲以保持帧顺序
+		c.flushThinkSplit()
 		st := &respToolState{callID: ev.Item.CallID, name: ev.Item.Name}
 		if ev.Item.ID != "" {
 			c.toolsByItem[ev.Item.ID] = st
@@ -382,7 +406,7 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			ItemID string `json:"item_id"`
 			CallID string `json:"call_id"`
 		}
-		if json.Unmarshal([]byte(data), &ev) != nil || ev.Delta == "" {
+		if !c.decodeEvent(data, &ev) || ev.Delta == "" {
 			return
 		}
 		st := c.findTool(ev.ItemID, ev.CallID)
@@ -414,7 +438,12 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 				} `json:"summary"`
 			} `json:"item"`
 		}
-		if json.Unmarshal([]byte(data), &ev) != nil {
+		if !c.decodeEvent(data, &ev) {
+			return
+		}
+		if ev.Item.Type == "message" {
+			// 一个消息项结束：开头的 <think> 若仍未闭合，到此为止
+			c.flushThinkSplit()
 			return
 		}
 		if ev.Item.Type == "reasoning" {
@@ -485,7 +514,7 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 				} `json:"usage"`
 			} `json:"response"`
 		}
-		if json.Unmarshal([]byte(data), &ev) == nil {
+		if c.decodeEvent(data, &ev) {
 			c.mu.Lock()
 			if eventType == "response.completed" {
 				if c.outcome == StreamOutcomePending {
@@ -533,6 +562,12 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		}
 		c.mu.Unlock()
 		log.Printf("[stream_responses] 上游错误: %s", data)
+
+	default:
+		// 未知事件类型照常忽略，但不是 JSON 的事件说明流已损坏
+		if !json.Valid([]byte(data)) {
+			c.failUnparseable(data, fmt.Errorf("事件 %q 的 data 不是合法 JSON", eventType))
+		}
 	}
 }
 

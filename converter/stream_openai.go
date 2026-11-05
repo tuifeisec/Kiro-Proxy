@@ -44,6 +44,8 @@ type OpenAIStreamConverter struct {
 	writeFailed  bool
 	doneReceived bool
 	done         chan struct{}
+	// failureDetail 是具体失败原因（受 mu 保护）；空时使用终态的通用说明
+	failureDetail string
 
 	// 工具调用状态跟踪
 	// key = tool_calls[].index，value = {id, name}
@@ -51,6 +53,10 @@ type OpenAIStreamConverter struct {
 	reasoning   strings.Builder
 	wireField   string
 	toolCallIDs []string
+
+	// 正文开头 <think> 拆分与 delta 形态诊断（只在 process goroutine 内访问）
+	thinkSplit         thinkTagSplitter
+	diagnosedDeltaKind map[string]bool
 
 	// 配置
 	modelID          string // 原始 Kiro modelId，写入 assistantResponseEvent
@@ -125,7 +131,10 @@ func (c *OpenAIStreamConverter) Succeeded() bool {
 }
 
 func (c *OpenAIStreamConverter) Error() error {
-	return streamOutcomeError(c.Outcome())
+	outcome := c.Outcome()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return streamOutcomeErrorWithDetail(outcome, c.failureDetail)
 }
 
 // Usage 等待流结束后返回 token 用量（阻塞直到 done）
@@ -216,13 +225,16 @@ func (c *OpenAIStreamConverter) process(source io.ReadCloser) {
 		c.outcome = streamOutcomeFromReadError(readErr)
 	}
 	outcome := c.outcome
+	failureDetail := c.failureDetail
 	c.mu.Unlock()
 	if outcome != StreamOutcomeCompleted {
 		if outcome != StreamOutcomeClientCanceled {
-			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureMessage(outcome)))
+			c.write(ExceptionFrame("upstream_stream_interrupted", streamFailureText(outcome, failureDetail)))
 		}
 		return
 	}
+	// [DONE] 前没有 finish_reason 的流在这里交还 <think> 拆分的缓冲
+	c.flushThinkSplit()
 
 	// 流结束：写入 Kiro 必需的结尾帧
 	c.mu.Lock()
@@ -269,9 +281,11 @@ func (c *OpenAIStreamConverter) handleData(data string) {
 
 	var chunk openAIChunk
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		c.failUnparseable(data, err)
 		return
 	}
-	if chunk.Error != nil {
+	// 部分兼容上游每帧都带 "error": null，它不是错误
+	if !isJSONAbsent(chunk.Error) {
 		c.mu.Lock()
 		if c.outcome == StreamOutcomePending {
 			c.outcome = StreamOutcomeUpstreamProtocolFailure
@@ -320,6 +334,11 @@ func (c *OpenAIStreamConverter) handleData(data string) {
 
 	choice := chunk.Choices[0]
 	delta := choice.Delta
+	text, err := delta.decodeText()
+	if err != nil {
+		c.failUnparseable(data, err)
+		return
+	}
 	finishReason := choice.FinishReason
 	if finishReason != "" {
 		c.mu.Lock()
@@ -329,26 +348,15 @@ func (c *OpenAIStreamConverter) handleData(data string) {
 		c.mu.Unlock()
 	}
 
-	// 文本内容
-	if delta.Content != "" {
-		c.mu.Lock()
-		c.outputChars += len(delta.Content)
-		c.mu.Unlock()
-		c.write(AssistantResponseFrame(delta.Content, c.modelID))
-	}
+	c.handleDeltaText(text)
 
-	if text, field := delta.reasoningDelta(); text != "" {
-		c.mu.Lock()
-		c.reasoning.WriteString(text)
-		if c.wireField == "" {
-			c.wireField = field
-		}
-		c.mu.Unlock()
-	}
-
-	// 工具调用增量
+	// 工具调用增量：正文到此结束，先交还 <think> 拆分的缓冲以保持帧顺序
 	if len(delta.ToolCalls) > 0 {
+		c.flushThinkSplit()
 		c.handleToolCalls(delta.ToolCalls)
+	}
+	if finishReason != "" {
+		c.flushThinkSplit()
 	}
 
 	// 工具调用结束
@@ -440,27 +448,6 @@ type openAIChunk struct {
 type openAIChoice struct {
 	Delta        openAIDelta `json:"delta"`
 	FinishReason string      `json:"finish_reason"`
-}
-
-type openAIDelta struct {
-	Content          string                `json:"content"`
-	ReasoningContent string                `json:"reasoning_content"`
-	ReasoningText    string                `json:"reasoning_text"`
-	Reasoning        string                `json:"reasoning"`
-	ToolCalls        []openAIToolCallDelta `json:"tool_calls"`
-}
-
-func (d openAIDelta) reasoningDelta() (string, string) {
-	if d.ReasoningContent != "" {
-		return d.ReasoningContent, "reasoning_content"
-	}
-	if d.ReasoningText != "" {
-		return d.ReasoningText, "reasoning_text"
-	}
-	if d.Reasoning != "" {
-		return d.Reasoning, "reasoning"
-	}
-	return "", ""
 }
 
 type openAIToolCallDelta struct {

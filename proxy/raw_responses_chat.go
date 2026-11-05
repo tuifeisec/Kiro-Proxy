@@ -66,7 +66,7 @@ func prepareRawResponsesChatBody(body []byte, model *store.Model) ([]byte, error
 	if model == nil {
 		return nil, fmt.Errorf("raw Responses model is missing")
 	}
-	converted, _, err := responsesToChatFallback(body, model.ModelID)
+	converted, _, err := responsesToChatFallbackWithPrevious(body, model.ModelID, nil, chatUpstreamHost(model))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func prepareRawResponsesChatRoot(source map[string]json.RawMessage, model *store
 	if _, _, err := ensureResponsesPromptCacheKeyRoot(source, model.ModelID); err != nil {
 		return nil, err
 	}
-	chat, _, err := responsesToChatFallbackRootWithPrevious(source, model.ModelID, nil)
+	chat, _, err := responsesToChatFallbackRootWithPrevious(source, model.ModelID, nil, chatUpstreamHost(model))
 	if err != nil {
 		return nil, err
 	}

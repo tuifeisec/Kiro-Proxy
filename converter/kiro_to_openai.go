@@ -34,14 +34,10 @@ func kiroToOpenAI(conv *ParsedConversation, targetModel string, reasoningEffort 
 		},
 	}
 
-	if conv.MaxTokens > 0 {
-		req.MaxTokens = conv.MaxTokens
-	}
 	if reasoningEffort = strings.TrimSpace(reasoningEffort); reasoningEffort != "" {
 		req.ReasoningEffort = reasoningEffort
 	}
-	req.Temperature = conv.Temperature
-	req.TopP = conv.TopP
+	applyOpenAIChatGenerationFields(&req, conv, model, opts.UpstreamHost)
 	if supportsPromptCacheBreakpoints(model) {
 		req.PromptCacheOpts = openAIPromptCacheOptions()
 		markOpenAIStablePrefixBreakpoint(req.Messages)

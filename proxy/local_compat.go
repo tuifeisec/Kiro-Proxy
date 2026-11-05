@@ -704,7 +704,7 @@ func (s *Server) prepareLocalCompatCandidate(body []byte, api localCompatAPI, mo
 		if err != nil {
 			return nil, err
 		}
-		prepared.upstreamBody, prepared.fallbackState, err = responsesToChatFallbackWithPrevious(prepared.upstreamBody, model.ModelID, previousMessages)
+		prepared.upstreamBody, prepared.fallbackState, err = responsesToChatFallbackWithPrevious(prepared.upstreamBody, model.ModelID, previousMessages, chatUpstreamHost(model))
 		if err != nil {
 			return nil, err
 		}
