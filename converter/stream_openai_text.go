@@ -52,6 +52,7 @@ func (c *OpenAIStreamConverter) appendReasoning(text, field string) {
 		c.wireField = field
 	}
 	c.mu.Unlock()
+	c.write(ReasoningContentFrame(text))
 }
 
 // failUnparseable 让容错后仍无法解析的事件终止流，错误经 ExceptionFrame 与 Error() 传给 Kiro 和请求详情。

@@ -39,6 +39,7 @@ func (c *GeminiStreamConverter) recordThought(text string) {
 	c.mu.Lock()
 	c.reasoning.thinking.WriteString(text)
 	c.mu.Unlock()
+	c.write(ReasoningContentFrame(text))
 }
 
 // recordToolCall 记录工具调用 ID 与其 thoughtSignature。Gemini 只在一步的第一个

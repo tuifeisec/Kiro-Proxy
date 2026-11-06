@@ -35,11 +35,32 @@ func (c *ResponsesStreamConverter) flushThinkSplit() {
 	c.writeThinkSplit(c.thinkSplit.finish())
 }
 
+// showReasoning 把推理增量展示给 Kiro。上游可能同时给出推理原文与推理摘要，
+// 两者内容重叠：只展示先出现的一种，与 ReasoningTrace 优先原文、其次摘要的取舍一致。
+func (c *ResponsesStreamConverter) showReasoning(isText bool, delta string) {
+	kind := reasoningShownSummary
+	if isText {
+		kind = reasoningShownText
+	}
+	if c.reasoningShownKind == "" {
+		c.reasoningShownKind = kind
+	}
+	if c.reasoningShownKind == kind {
+		c.write(ReasoningContentFrame(delta))
+	}
+}
+
+const (
+	reasoningShownText    = "text"
+	reasoningShownSummary = "summary"
+)
+
 func (c *ResponsesStreamConverter) writeThinkSplit(out thinkSplit) {
 	if out.Reasoning != "" {
 		c.mu.Lock()
 		c.thinkReasoning.WriteString(out.Reasoning)
 		c.mu.Unlock()
+		c.write(ReasoningContentFrame(out.Reasoning))
 	}
 	if out.Unclosed {
 		c.mu.Lock()

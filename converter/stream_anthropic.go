@@ -332,6 +332,7 @@ func (c *AnthropicStreamConverter) handleContentBlockStart(event map[string]json
 		started.text.WriteString(block.Thinking)
 		started.signature.WriteString(block.Signature)
 		c.mu.Unlock()
+		c.write(ReasoningContentFrame(block.Thinking))
 	case ReasoningBlockRedactedThinking:
 		c.mu.Lock()
 		c.reasoning.start(idx, ReasoningBlockRedactedThinking).data = block.Data
@@ -384,6 +385,7 @@ func (c *AnthropicStreamConverter) handleContentBlockDelta(event map[string]json
 			c.mu.Lock()
 			c.reasoning.thinkingAt(idx).text.WriteString(delta.Thinking)
 			c.mu.Unlock()
+			c.write(ReasoningContentFrame(delta.Thinking))
 		}
 	case "signature_delta":
 		if delta.Signature != "" {

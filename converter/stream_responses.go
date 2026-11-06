@@ -61,6 +61,7 @@ type ResponsesStreamConverter struct {
 	reasoningEncrypted     string
 	thinkReasoning         strings.Builder  // 正文开头 <think> 块拆出的思考
 	thinkSplit             thinkTagSplitter // 只在 process goroutine 内访问
+	reasoningShownKind     string           // 展示给 Kiro 的推理来源（text / summary），只在 process goroutine 内访问
 	// failureDetail 是具体失败原因（受 mu 保护）；空时使用终态的通用说明
 	failureDetail string
 
@@ -318,6 +319,7 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 			c.reasoningSummary.WriteString(ev.Delta)
 		}
 		c.mu.Unlock()
+		c.showReasoning(eventType == "response.reasoning_text.delta", ev.Delta)
 
 	case "response.reasoning_text.done", "response.reasoning_summary_text.done":
 		var ev struct {
@@ -329,15 +331,22 @@ func (c *ResponsesStreamConverter) handleEvent(eventType, data string) {
 		if !c.decodeEvent(data, &ev) || ev.Text == "" {
 			return
 		}
+		isText := eventType == "response.reasoning_text.done"
+		show := false
 		c.mu.Lock()
-		if eventType == "response.reasoning_text.done" {
+		if isText {
 			if !c.reasoningTextDeltas[ev.ItemID+":"+strconv.Itoa(ev.ContentIndex)] {
 				c.reasoningText.WriteString(ev.Text)
+				show = true
 			}
 		} else if !c.reasoningSummaryDeltas[ev.ItemID+":"+strconv.Itoa(ev.SummaryIndex)] {
 			c.reasoningSummary.WriteString(ev.Text)
+			show = true
 		}
 		c.mu.Unlock()
+		if show {
+			c.showReasoning(isText, ev.Text)
+		}
 
 	case "response.output_text.delta":
 		var ev struct {
