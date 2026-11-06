@@ -18,15 +18,12 @@ func KiroToAnthropic(conv *ParsedConversation, targetModel string, reasoningEffo
 	req := AnthropicRequest{
 		Model:     model,
 		Messages:  messages,
-		MaxTokens: 16384,
+		MaxTokens: AnthropicMaxTokens(conv.MaxTokens, opts.MaxTokens),
 		Stream:    true,
 		// 顶层 cache_control：Anthropic 自动将 breakpoint 滚动到最后一个可缓存 block。
 		// 多轮对话时每次只有最后一轮是新增的，之前所有历史自动从缓存读取。
 		// 与 system/tools 上的显式 breakpoint 兼容（占用 4 个 slot 中的 1 个）。
 		CacheControl: &CacheControl{Type: "ephemeral"},
-	}
-	if conv.MaxTokens > 0 {
-		req.MaxTokens = conv.MaxTokens
 	}
 	thinking, err := BuildAnthropicThinking(AnthropicThinkingInput{
 		ModelID:       model,

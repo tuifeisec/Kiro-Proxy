@@ -99,6 +99,9 @@ type KiroImageSource struct {
 	Bytes string `json:"bytes"` // base64
 }
 
+// KiroInferenceConfig 按协议定义保留解析。抓包确认 Kiro 不发送 inferenceConfig（含
+// reasoningConfig 与 maxTokens）：思考档位只出现在 additionalModelRequestFields.reasoning.effort，
+// 因此 ReasoningConfig 不参与档位解析；MaxTokens 缺省时由模型配置决定上游 max_tokens。
 type KiroInferenceConfig struct {
 	MaxTokens       int                  `json:"maxTokens,omitempty"`
 	Temperature     *float64             `json:"temperature,omitempty"`

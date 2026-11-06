@@ -10,6 +10,25 @@ import (
 	json "github.com/goccy/go-json"
 )
 
+// Kiro 的 raw Responses 请求不带 max_output_tokens（抓包确认），max_tokens 取模型配置的最大输出。
+func TestPrepareRawResponsesAnthropicUsesConfiguredMaxTokens(t *testing.T) {
+	model := rawAnthropicThinkingModel("https://api.anthropic.com", "claude-sonnet-4-5", "")
+	model.MaxTokens = 64000
+	prepared, err := prepareRawResponsesAnthropicBody([]byte(`{"model":"local","input":"hello","reasoning":{"effort":"max"}}`), nil, model)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	root := decodeRawAnthropicRoot(t, prepared)
+	assertRawAnthropicField(t, root, "max_tokens", "64000")
+	assertRawAnthropicField(t, root, "thinking", `{"type":"enabled","budget_tokens":32000}`)
+
+	prepared, err = prepareRawResponsesAnthropicBody([]byte(`{"model":"local","input":"hello","reasoning":{"effort":"high"},"max_output_tokens":5000}`), nil, model)
+	if err != nil {
+		t.Fatalf("prepare with max_output_tokens: %v", err)
+	}
+	assertRawAnthropicField(t, decodeRawAnthropicRoot(t, prepared), "max_tokens", "5000")
+}
+
 func rawAnthropicThinkingModel(serverURL, modelID, style string) *store.Model {
 	model := rawResponsesTestModel(serverURL, "anthropic", "/messages")
 	model.ModelID = modelID
@@ -98,22 +117,25 @@ func TestPrepareRawResponsesAnthropicThinkingRejectsUnbuildableEffort(t *testing
 // TestAnthropicThinkingMatchesAcrossKiroAndRawPaths guards the original bug:
 // the two paths built opposite thinking shapes for the same model.
 func TestAnthropicThinkingMatchesAcrossKiroAndRawPaths(t *testing.T) {
-	for _, modelID := range []string{"claude-sonnet-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-5-5", "claude-opus-5-5"} {
-		for _, effort := range []string{"none", "low", "medium", "high", "xhigh", "max"} {
-			model := rawAnthropicThinkingModel("https://api.anthropic.com", modelID, "")
-			raw, err := prepareRawResponsesAnthropicBody([]byte(`{"model":"local","input":"hello","reasoning":{"effort":"`+effort+`"}}`), nil, model)
-			if err != nil {
-				t.Fatalf("%s/%s raw: %v", modelID, effort, err)
-			}
-			kiro, err := converter.KiroToAnthropic(&converter.ParsedConversation{ModelID: modelID, CurrentContent: "hello"}, modelID, effort,
-				converter.AnthropicRequestOptions{UpstreamHost: "api.anthropic.com"})
-			if err != nil {
-				t.Fatalf("%s/%s kiro: %v", modelID, effort, err)
-			}
-			rawRoot, kiroRoot := decodeRawAnthropicRoot(t, raw), decodeRawAnthropicRoot(t, kiro)
-			for _, field := range []string{"thinking", "output_config", "max_tokens"} {
-				if string(rawRoot[field]) != string(kiroRoot[field]) {
-					t.Fatalf("%s/%s %s differs: raw=%s kiro=%s", modelID, effort, field, rawRoot[field], kiroRoot[field])
+	for _, configuredMax := range []int{0, 64000} {
+		for _, modelID := range []string{"claude-sonnet-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-5-5", "claude-opus-5-5"} {
+			for _, effort := range []string{"none", "low", "medium", "high", "xhigh", "max"} {
+				model := rawAnthropicThinkingModel("https://api.anthropic.com", modelID, "")
+				model.MaxTokens = configuredMax
+				raw, err := prepareRawResponsesAnthropicBody([]byte(`{"model":"local","input":"hello","reasoning":{"effort":"`+effort+`"}}`), nil, model)
+				if err != nil {
+					t.Fatalf("%s/%s raw: %v", modelID, effort, err)
+				}
+				kiro, err := converter.KiroToAnthropic(&converter.ParsedConversation{ModelID: modelID, CurrentContent: "hello"}, modelID, effort,
+					converter.AnthropicRequestOptions{UpstreamHost: "api.anthropic.com", MaxTokens: configuredMax})
+				if err != nil {
+					t.Fatalf("%s/%s kiro: %v", modelID, effort, err)
+				}
+				rawRoot, kiroRoot := decodeRawAnthropicRoot(t, raw), decodeRawAnthropicRoot(t, kiro)
+				for _, field := range []string{"thinking", "output_config", "max_tokens"} {
+					if string(rawRoot[field]) != string(kiroRoot[field]) {
+						t.Fatalf("max=%d %s/%s %s differs: raw=%s kiro=%s", configuredMax, modelID, effort, field, rawRoot[field], kiroRoot[field])
+					}
 				}
 			}
 		}

@@ -131,7 +131,7 @@ func convertRequestWithProtocol(pre *Preflight, m *store.Model, reasoningHistory
 		upstreamURL = responsesToChatURL(upstreamURL)
 		body, err = convertChat()
 	case m.Provider == "anthropic":
-		body, err = converter.KiroToAnthropic(conv, m.ModelID, reasoningEffort, converter.AnthropicRequestOptions{UpstreamHost: upstreamHost, ThinkingStyle: m.ThinkingStyle})
+		body, err = converter.KiroToAnthropic(conv, m.ModelID, reasoningEffort, converter.AnthropicRequestOptions{UpstreamHost: upstreamHost, ThinkingStyle: m.ThinkingStyle, MaxTokens: m.MaxTokens})
 	case m.Provider == "gemini":
 		body, err = converter.KiroToGemini(conv, m.ModelID, reasoningEffort, converter.GeminiRequestOptions{ThinkingStyle: m.ThinkingStyle})
 		if !m.DisableAutoSuffix {

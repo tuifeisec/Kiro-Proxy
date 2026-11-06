@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"kiro-proxy/converter"
 	"kiro-proxy/store"
 
 	json "github.com/goccy/go-json"
@@ -163,7 +164,7 @@ func prepareRawResponsesAnthropicBody(body []byte, pre *Preflight, model *store.
 	if len(anthropicMessages) == 0 {
 		return nil, fmt.Errorf("raw Responses request contains no Anthropic messages")
 	}
-	request := map[string]interface{}{"model": model.ModelID, "messages": anthropicMessages, "max_tokens": 16384, "stream": rawBoolField(root, "stream", false)}
+	request := map[string]interface{}{"model": model.ModelID, "messages": anthropicMessages, "max_tokens": converter.AnthropicMaxTokens(0, model.MaxTokens), "stream": rawBoolField(root, "stream", false)}
 	if system != "" {
 		request["system"] = system
 	}
